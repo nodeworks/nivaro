@@ -1398,14 +1398,19 @@ describe('a registered deployment the Hub upgrades through GitLab', () => {
         headers: asAdmin,
         payload
       })
-    const on = await patch({ driver_id: 4, settings: { gitlab: { source_branch: 'release' } } })
+    const gitlab = { source_branch: 'release', target_branch: 'shared-one' }
+    const on = await patch({ driver_id: 4, settings: { gitlab } })
     expect(on.statusCode).toBe(200)
     expect(on.json().data).toMatchObject({
       driver_id: 4,
-      settings: { gitlab: { source_branch: 'release', deploy_job: null } }
+      settings: { gitlab: { ...gitlab, deploy_job: null } }
     })
     expect((await patch({ driver_id: 3 })).json().code).toBe('DRIVER_NOT_GITLAB')
     expect((await patch({ settings: {} })).json().code).toBe('BAD_GITLAB')
+    // Review L5: a driver a shared deployment names cannot be deleted.
+    const del = await app.inject({ method: 'DELETE', url: '/api/hub/drivers/4', headers: asAdmin })
+    expect(del.statusCode).toBe(409)
+    expect(del.json().code).toBe('DRIVER_IN_USE')
     const off = await patch({ driver_id: null, settings: {} })
     expect(off.statusCode).toBe(200)
     expect(off.json().data).toMatchObject({ driver_id: null, settings: {} })

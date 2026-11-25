@@ -14,12 +14,16 @@ import {
   describeAgentError
 } from '../docker/agent-client.js'
 import type { AgentHealth, StackSpec, StackStatus } from '../docker/agent-types.js'
-import { type DockerDriverRow, driverCtx, getDriver } from '../drivers.js'
+import { type DockerDriverRow, driverCtx, getDriver, repositoryIdentity } from '../drivers.js'
 import { deleteBranch } from '../gitlab-write.js'
 import { readServedField, type ServedField } from '../promote-gather.js'
 import { withoutFreshHeartbeat } from '../promote-heal.js'
 import {
   appPromoteRedis,
+  type BranchHold,
+  type BranchLock,
+  defaultBranchLock,
+  holdBranches,
   LOCK_RENEW_MS,
   lockHolderRefusal,
   type PromoteLock,
@@ -150,6 +154,8 @@ export interface SharedRunDeps extends Partial<SharedPlanDeps> {
   renewMs?: number
   /** GitLab runs: the write and wait calls of the pipeline step (promote-run's seam). */
   gitlabWrite?: ExecuteDeps['gitlab']
+  /** GitLab runs: the per-branch lock (default the Hub's Redis one). */
+  branchLock?: BranchLock
   /** Heal of a GitLab run: deletes its temporary branches (default gitlab-write deleteBranch). */
   deleteBranch?: typeof deleteBranch
 }
@@ -452,6 +458,8 @@ export async function startSharedUpgrade(
   }
   const envTokens = new Map<number, string>()
   let handedOff = false
+  /** GitLab: the deploy branch, held for the whole run (review H1, one writer per branch). */
+  let branches: BranchHold | null = null
   /** Set once the run row exists: a start that breaks after it closes it (review minor 7). */
   let written: { id: number; prior: SharedStatus } | null = null
   /** Set once the job run exists: a start that breaks after it fails it too (round 2 N-5). */
@@ -468,6 +476,19 @@ export async function startSharedUpgrade(
       }
       envTokens.set(a.env_id, t)
     }
+    if (facts.gitlab)
+      try {
+        branches = await holdBranches(
+          deps.branchLock ?? defaultBranchLock(),
+          [facts.gitlab.ref],
+          'shared',
+          deps.renewMs ?? LOCK_RENEW_MS
+        )
+      } catch (err) {
+        if (err instanceof PromotionError && err.code === 'BRANCH_BUSY')
+          throw new SharedUpgradeError(err.code, err.message)
+        throw err
+      }
 
     const at = new Date((deps.now ?? Date.now)())
     const priorStatus = facts.shared.status
@@ -484,7 +505,8 @@ export async function startSharedUpgrade(
       version: plan.version,
       from_version: plan.from_version,
       status: 'running',
-      step: 'render',
+      // Review L3: the run's first step by its runner.
+      step: facts.gitlab ? 'push' : 'render',
       plan: JSON.stringify(stored),
       started_by: by || null,
       started_at: at,
@@ -554,6 +576,7 @@ export async function startSharedUpgrade(
       envLock,
       sharedToken,
       envTokens,
+      branches,
       by
     }
     const p = runInBackgroundPool(() => runUpgrade(ctx, deps)).catch((err) =>
@@ -573,6 +596,7 @@ export async function startSharedUpgrade(
       if (written) await abandonStart(written.id, sharedId, written.prior).catch(() => undefined)
       if (startedRun) await startedRun.fail(new Error(START_FAILED)).catch(() => undefined)
       for (const [envId, t] of envTokens) await envLock.release(envId, t)
+      await branches?.release()
       await sharedLock.release(sharedId, sharedToken)
     }
   }
@@ -614,6 +638,8 @@ interface RunCtx {
   envLock: PromoteLock
   sharedToken: string
   envTokens: Map<number, string>
+  /** GitLab runs: the deploy branch lock (null: a Docker run). */
+  branches: BranchHold | null
   by: string
 }
 
@@ -651,6 +677,10 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
           : await c.envLock.renew(envId, t)
         if (!held) lockLost = true
       }
+      if (c.branches?.lost()) lockLost = true
+      // Review H2: a run that lost a lock no longer vouches for its row — the heal and the next
+      // plan see it as dead (and it stops at its next check, the deploy waits included).
+      if (lockLost) return
       await db(SHARED_DEPLOYS)
         .where({ id: deployId, status: 'running' })
         .update({ heartbeat_at: new Date(now()) })
@@ -666,7 +696,8 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
     await db(SHARED_DEPLOYS).where({ id: deployId, status: 'running' }).update({ step: name })
   }
   const checkpoint = async () => {
-    if (lockLost) throw new Stop('interrupted', 'LOCK_LOST', 'The run lost its lock; plan again.')
+    if (lockLost || c.branches?.lost())
+      throw new Stop('interrupted', 'LOCK_LOST', 'The run lost its lock; plan again.')
     if (await cancelRequested(deployId))
       throw new Stop(
         'cancelled',
@@ -768,6 +799,18 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
         : `1. push nivaro ${version} to ${step0.targetBranch} through GitLab`
     )
     await checkpoint()
+    // Review M2: steps 3–5 read the deployment link; one that does not answer now would only fail
+    // after the deploy. Asked before anything is written in GitLab.
+    try {
+      await (deps.status ?? ((x: SharedDeployment) => deploymentClient(x).status()))(shared)
+    } catch (err) {
+      if (!(err instanceof DeploymentLinkError)) throw err
+      throw new Stop(
+        'failed',
+        'LINK_UNREACHABLE',
+        "The deployment's link does not answer the Hub — nothing was written in GitLab. Check its link address and token, then plan again."
+      )
+    }
     const gitCtx = async (driverId: number): Promise<GitCtx> => {
       const d = await getDriver(driverId)
       if (d?.kind !== 'gitlab')
@@ -789,8 +832,11 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
           now,
           ...(deps.gitlabWrite ? { gitlab: deps.gitlabWrite } : {}),
           ...(deps.readServedField ? { readServedField: deps.readServedField } : {}),
-          stopRequested: () => cancelRequested(deployId),
-          lockLost: () => lockLost,
+          // Review H2: a lost lock stops the GitLab step as a cancel does — before a manual job is
+          // played and during every deploy wait — and ends it interrupted (below).
+          stopRequested: async () =>
+            lockLost || !!c.branches?.lost() || (await cancelRequested(deployId)),
+          lockLost: () => lockLost || !!c.branches?.lost(),
           // A held commit whose deploy job already passed is rerun when the deployment does not
           // answer this version (a promotion's P30 rule).
           currentVersion: async () => {
@@ -822,14 +868,14 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
       }
     )
     if (out.status === 'success') return
+    if (lockLost || c.branches?.lost() || out.status === 'interrupted')
+      throw new Stop('interrupted', 'LOCK_LOST', 'The run lost its lock; plan again.')
     if (out.status === 'cancelled')
       throw new Stop(
         'cancelled',
         'CANCELLED',
         'Cancelled. Whatever GitLab already merged or deployed stays; the pins are unchanged.'
       )
-    if (out.status === 'interrupted')
-      throw new Stop('interrupted', 'LOCK_LOST', 'The run lost its lock; plan again.')
     throw new Stop(
       'failed',
       out.code ?? 'DEPLOY_FAILED',
@@ -1034,6 +1080,7 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
   } finally {
     clearInterval(timer)
     for (const [envId, t] of c.envTokens) await c.envLock.release(envId, t).catch(() => undefined)
+    await c.branches?.release().catch(() => undefined)
     await c.sharedLock.release(sharedId, c.sharedToken).catch(() => undefined)
     await clearCancel(deployId)
   }
@@ -1262,21 +1309,29 @@ async function dropGitlabBranches(
   deps: SharedRunDeps
 ): Promise<void> {
   let driverId: number | null = null
+  let identity: string | null = null
   try {
     const p = JSON.parse(String(rawPlan ?? '{}')) as {
-      plan?: { runner?: unknown; kind?: unknown; gitlab?: { driver_id?: unknown } | null }
+      plan?: {
+        runner?: unknown
+        kind?: unknown
+        gitlab?: { driver_id?: unknown; identity?: unknown } | null
+      }
     }
     if (p.plan?.runner !== 'gitlab' || p.plan.kind === 'rollback') return
     const d = p.plan.gitlab?.driver_id
     driverId = typeof d === 'number' && Number.isInteger(d) ? d : null
+    identity = typeof p.plan.gitlab?.identity === 'string' ? p.plan.gitlab.identity : null
   } catch {
     return
   }
-  if (driverId == null) return
+  // Review L2: only on the repository the run used (a driver edited since points elsewhere).
+  if (driverId == null || !identity) return
   try {
     const d = await getDriver(driverId)
     if (d?.kind !== 'gitlab') return
     const ctx = (deps.gitCtx ?? driverCtx)(d)
+    if (repositoryIdentity(ctx.base, ctx.project) !== identity) return
     const temp = `hub/promote-${deployId}-${SHARED_GITLAB_POSITION}`
     for (const b of [temp, `${temp}-src`])
       await (deps.deleteBranch ?? deleteBranch)(ctx, b).catch(() => undefined)

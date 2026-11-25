@@ -3,11 +3,17 @@ import type { GitCtx } from '../../gitlab-client.js'
 import { DriverMisconfiguredError, driverCtx, type GitlabDriverRow, getDriver } from '../drivers.js'
 import * as gitlab from '../gitlab-write.js'
 import { driverIdentity, RERUNNABLE_JOB, sourceSubjectRe } from '../promote-gather.js'
-import { PromotionError } from '../promote-lock.js'
+import {
+  type BranchLock,
+  type BranchRef,
+  defaultBranchLock,
+  PromotionError
+} from '../promote-lock.js'
 import { pinContent } from '../promote-plan.js'
 import type { PromotionStep } from '../promote-types.js'
 import { hubImage, pinText, imageDigest as registryDigest } from '../registry.js'
 import { HubSecretError } from '../secrets.js'
+import { branchRefOf, gitlabBranchUsers } from './branch-users.js'
 import { type SharedDeployment, sharedGitlab } from './store.js'
 
 /**
@@ -23,6 +29,14 @@ import { type SharedDeployment, sharedGitlab } from './store.js'
  * This file gathers what the plan needs from GitLab (reads only) and names the one step the run
  * executes. A same-version run follows a promotion's PIN_CHANGED rules: the pin of the version
  * that runs is never created or rewritten, and nothing new to deploy is ALREADY_RUNS.
+ *
+ * One writer per branch (review H1): the deploy branch is the deployment's own (required, never
+ * the driver's default), BRANCH_IN_USE while an environment's component or another shared
+ * deployment deploys it, BRANCH_BUSY while a run holds its branch lock (the run takes it, as
+ * promotions and moves do), PIPELINE_RUNNING while a pipeline on it is not over (review M1: a
+ * cancelled run's deploy job may still roll). "The version that runs" is what the deployment
+ * link answers, not the stored pin (review M3), and the pin on the deploy branch is part of the
+ * plan (and its hash).
  *
  * Never a token in a line, a blocker or an answer: GitLab refusals carry the client's own sentence
  * (gitlab-write.ts), any other error a plain one.
@@ -45,6 +59,8 @@ export interface SharedGitlabPlan {
   driver: string
   /** The GitLab project path the driver deploys. */
   project: string
+  /** repositoryIdentity of the driver when planned (heal checks it before deleting branches). */
+  identity: string
   source_branch: string
   target_branch: string
   pin_file: string | null
@@ -56,6 +72,8 @@ export interface SharedGitlabPlan {
   build_pipeline_id: number | null
   /** The pin file the upgrade commits (null on a rollback). */
   pin: string | null
+  /** The pin file on the deploy branch now (null: none, or a rollback); bound by plan_hash. */
+  pin_on_target: string | null
 }
 
 export interface GitlabReadOps {
@@ -63,6 +81,7 @@ export interface GitlabReadOps {
   commitExistsOn: typeof gitlab.commitExistsOn
   readFile: typeof gitlab.readFile
   jobNamed: typeof gitlab.jobNamed
+  activePipelines: typeof gitlab.activePipelines
 }
 
 export interface GitlabPlanDeps {
@@ -70,6 +89,8 @@ export interface GitlabPlanDeps {
   gitCtx?: (driver: GitlabDriverRow) => GitCtx
   gitlabRead?: Partial<GitlabReadOps>
   imageDigest?: (image: string, tag: string) => Promise<string | 'present' | null>
+  /** The per-branch lock (promote-lock.ts); default the Hub's Redis one. */
+  branchLock?: BranchLock
 }
 
 export interface GitlabGathered {
@@ -77,6 +98,8 @@ export interface GitlabGathered {
   /** The one step the run executes; null when a blocker stops the plan before it. */
   step: PromotionStep | null
   summary: SharedGitlabPlan | null
+  /** The repository branch the run locks and deploys. */
+  ref: BranchRef | null
 }
 
 type Block = (code: string, text: string) => void
@@ -139,19 +162,22 @@ const short = (sha: string) => sha.slice(0, 8)
 
 /**
  * Reads what an upgrade (or rollback) of a GitLab-run shared deployment needs and blocks what
- * stops it: NO_DRIVER, GITLAB_UNREACHABLE, NO_SOURCE_COMMIT, VERSION_UNKNOWN, PIN_CHANGED,
- * ALREADY_RUNS (upgrade); NOT_DEPLOYED_BEFORE, ROLLBACK_NOT_RECORDED, ROLLBACK_NO_BUILD (rollback).
- * Only called for a version that is x.y.z on a deployment sharedGitlab() names.
+ * stops it: NO_DRIVER, GITLAB_UNREACHABLE, BRANCH_IN_USE, BRANCH_BUSY, LOCK_UNAVAILABLE,
+ * PIPELINE_RUNNING (both kinds); NO_SOURCE_COMMIT, VERSION_UNKNOWN, PIN_CHANGED, ALREADY_RUNS
+ * (upgrade); NOT_DEPLOYED_BEFORE, ROLLBACK_NOT_RECORDED, ROLLBACK_NO_BUILD (rollback). `running`
+ * is the version the deployment answers now (its link), else its stored pin. Only called for a
+ * version that is x.y.z on a deployment sharedGitlab() names.
  */
 export async function gatherGitlabUpgrade(
   shared: SharedDeployment,
   version: string,
   kind: 'upgrade' | 'rollback',
   block: Block,
-  deps: GitlabPlanDeps = {}
+  deps: GitlabPlanDeps = {},
+  running: string | null = shared.version_pin
 ): Promise<GitlabGathered> {
   const cfg = sharedGitlab(shared)
-  const none: GitlabGathered = { driver: null, step: null, summary: null }
+  const none: GitlabGathered = { driver: null, step: null, summary: null, ref: null }
   if (!cfg) return none
   const found = await getDriver(shared.driver_id)
   if (found?.kind !== 'gitlab') {
@@ -164,15 +190,18 @@ export async function gatherGitlabUpgrade(
     commitExistsOn: gitlab.commitExistsOn,
     readFile: gitlab.readFile,
     jobNamed: gitlab.jobNamed,
+    activePipelines: gitlab.activePipelines,
     ...deps.gitlabRead
   }
-  const targetBranch = cfg.target_branch ?? driver.config.branch
+  const targetBranch = cfg.target_branch
   const pinFile = cfg.pin_file ?? driver.config.pin_file
   const deployJob = cfg.deploy_job ?? driver.config.deploy_job
+  const ref = branchRefOf(driver, targetBranch)
   const summary: SharedGitlabPlan = {
     driver_id: driver.id,
     driver: driver.name,
     project: driver.config.project,
+    identity: driverIdentity(driver),
     source_branch: cfg.source_branch,
     target_branch: targetBranch,
     pin_file: kind === 'rollback' ? null : pinFile,
@@ -180,7 +209,8 @@ export async function gatherGitlabUpgrade(
     deploy_job: deployJob,
     commit: null,
     build_pipeline_id: null,
-    pin: null
+    pin: null,
+    pin_on_target: null
   }
   const base = {
     position: SHARED_GITLAB_POSITION,
@@ -197,6 +227,27 @@ export async function gatherGitlabUpgrade(
     want: version
   }
 
+  // One writer per branch (H1): nothing else deploys it, and no run holds it now.
+  const users = await gitlabBranchUsers(ref, { exceptSharedId: shared.id })
+  if (users.length)
+    block(
+      'BRANCH_IN_USE',
+      `${targetBranch} of ${driver.config.project} is also deployed by ${users.slice(0, 3).join(', ')} — give this deployment a deploy branch of its own.`
+    )
+  try {
+    const holder = await (deps.branchLock ?? defaultBranchLock()).holder(ref)
+    if (holder)
+      block(
+        'BRANCH_BUSY',
+        `${targetBranch} is being deployed by ${holder === 'promotion' ? 'a promotion' : holder === 'move' ? 'a move' : 'a shared deployment upgrade'} — wait for it to end.`
+      )
+  } catch {
+    block(
+      'LOCK_UNAVAILABLE',
+      `The Hub cannot reach Redis to tell who deploys ${targetBranch} — try again shortly.`
+    )
+  }
+
   let ctx: GitCtx
   try {
     ctx = (deps.gitCtx ?? driverCtx)(driver)
@@ -205,7 +256,24 @@ export async function gatherGitlabUpgrade(
       'GITLAB_UNREACHABLE',
       `The GitLab driver ${driver.name} cannot be used: ${readFailure(err)}.`
     )
-    return { driver, step: null, summary }
+    return { driver, step: null, summary, ref }
+  }
+
+  // M1: a pipeline on the deploy branch that is not over may still be deploying (a cancelled
+  // run's job, the project's own push): never start another deploy beside it.
+  try {
+    const active = await ops.activePipelines(ctx, targetBranch)
+    if (active.length)
+      block(
+        'PIPELINE_RUNNING',
+        `${targetBranch} has a pipeline that is not over yet (${active
+          .slice(0, 3)
+          .map((p) => `${p.id} ${p.status}`)
+          .join(', ')}) — wait for it to end, then plan again.`
+      )
+  } catch (err) {
+    block('GITLAB_UNREACHABLE', `GitLab did not answer the Hub: ${readFailure(err)}.`)
+    return { driver, step: null, summary, ref }
   }
 
   if (kind === 'rollback') {
@@ -215,14 +283,14 @@ export async function gatherGitlabUpgrade(
         'NOT_DEPLOYED_BEFORE',
         `The Hub never deployed ${version} on this deployment successfully — nothing to roll back to.`
       )
-      return { driver, step: null, summary }
+      return { driver, step: null, summary, ref }
     }
     if (!rec.sha || rec.pipeline_id == null) {
       block(
         'ROLLBACK_NOT_RECORDED',
         `The Hub did not record which pipeline deployed ${version} here, so it cannot redeploy that build.`
       )
-      return { driver, step: null, summary }
+      return { driver, step: null, summary, ref }
     }
     summary.commit = rec.sha
     summary.build_pipeline_id = rec.pipeline_id
@@ -256,6 +324,7 @@ export async function gatherGitlabUpgrade(
     return {
       driver,
       summary,
+      ref,
       step: {
         ...base,
         sourceSha: rec.sha,
@@ -266,19 +335,21 @@ export async function gatherGitlabUpgrade(
     }
   }
 
-  // Upgrade: the release commit, the image digests for the pin, and (same version) the pin there.
+  // Upgrade: the release commit, the image digests for the pin, and the pin there now (M3: bound
+  // into the plan, and judged against the version the deployment answers).
   let src: { sha: string; subject: string } | null = null
   let held = false
-  let onTarget: string | null | undefined
-  const sameVersion = version === shared.version_pin
+  let onTarget: string | null = null
+  const sameVersion = version === running
   try {
     src = await ops.latestCommitMatching(ctx, cfg.source_branch, sourceSubjectRe(version))
     if (src) held = await ops.commitExistsOn(ctx, src.sha, targetBranch)
-    if (sameVersion) onTarget = await ops.readFile(ctx, pinFile, targetBranch)
+    onTarget = await ops.readFile(ctx, pinFile, targetBranch)
   } catch (err) {
     block('GITLAB_UNREACHABLE', `GitLab did not answer the Hub: ${readFailure(err)}.`)
-    return { driver, step: null, summary }
+    return { driver, step: null, summary, ref }
   }
+  summary.pin_on_target = onTarget
   if (!src)
     block(
       'NO_SOURCE_COMMIT',
@@ -303,7 +374,7 @@ export async function gatherGitlabUpgrade(
   summary.pin = pin
 
   if (sameVersion && src) {
-    const there = pinContent(onTarget ?? null)
+    const there = pinContent(onTarget)
     if (there === null)
       block(
         'PIN_CHANGED',
@@ -324,6 +395,7 @@ export async function gatherGitlabUpgrade(
   return {
     driver,
     summary,
+    ref,
     step: src
       ? {
           ...base,

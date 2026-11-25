@@ -25,6 +25,7 @@ import {
   getDriver,
   getPlacement,
   type HubPlacementRow,
+  repositoryIdentity,
   STACK_NAME_RE
 } from '../drivers.js'
 import type {
@@ -33,7 +34,13 @@ import type {
 } from '../gitlab-write.js'
 import { sourceSubjectRe } from '../promote-gather.js'
 import { driverGitCtx } from '../promote-heal.js'
-import { PromotionError } from '../promote-lock.js'
+import {
+  type BranchHold,
+  type BranchLock,
+  defaultBranchLock,
+  holdBranches,
+  PromotionError
+} from '../promote-lock.js'
 import { deployComponentAt } from '../promote-run.js'
 import type { PromotionStep } from '../promote-types.js'
 import { hubImage, imageDigest, pinText } from '../registry.js'
@@ -221,6 +228,8 @@ export interface MoveOpsDeps {
   deployComponent?: typeof deployComponentAt
   /** The GitLab calls of the target deploy (tests replace them; the move sends no variables). */
   gitlabWrite?: Partial<{ runDeployJob: typeof gitlabRunDeployJob; playJob: typeof gitlabPlayJob }>
+  /** One writer per GitLab branch (promote-lock.ts); default the Hub's Redis lock. */
+  branchLock?: BranchLock
 }
 
 type Side =
@@ -731,6 +740,23 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         verifyUrl: null,
         verifyField: c.verify_field
       } as PromotionStep
+      // One writer per GitLab branch (review H1): held for this component's deploy.
+      let branches: BranchHold
+      try {
+        branches = await holdBranches(
+          deps.branchLock ?? defaultBranchLock(),
+          [
+            {
+              identity: repositoryIdentity(driver.config.api, driver.config.project),
+              branch: step.targetBranch
+            }
+          ],
+          'move'
+        )
+      } catch (err) {
+        if (err instanceof PromotionError) throw new MoveStepError(err.code, err.message)
+        throw err
+      }
       const out = await (deps.deployComponent ?? deployComponentAt)(
         step,
         version,
@@ -744,7 +770,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         {
           deps: { ...(write ? { gitlab: write } : {}), ...(stopRequested ? { stopRequested } : {}) }
         }
-      )
+      ).finally(() => branches.release())
       if (out.status === 'cancelled')
         throw new MoveStepError(
           'ABORTED',

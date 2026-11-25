@@ -413,6 +413,7 @@ const NVR_ALLOW: Record<string, string> = {
     'per-app schema state; the key carries the tenant id (nvr:tenancy:schema:<tenantId>:<version>, ruling R18)',
   'services/hub/promote-lock.ts :: nvr:hub:promote-cancel:': HUB,
   'services/hub/promote-lock.ts :: nvr:hub:shared:': HUB,
+  'services/hub/promote-lock.ts :: nvr:hub:branch:': HUB,
   'services/hub/status.ts :: nvr:hub:status:': HUB,
   'services/hub-signin/link-client.ts :: nvr:hub-signin-push:': OFF,
   'services/hub-signin/link-client.ts :: nvr:hub-switcher:': OFF,
