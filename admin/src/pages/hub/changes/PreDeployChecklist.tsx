@@ -39,6 +39,7 @@ export function PreDeployChecklist({
   target,
   action,
   version,
+  kind,
   runId,
   onState,
   className
@@ -46,6 +47,8 @@ export function PreDeployChecklist({
   target?: ChecklistTarget
   action?: ChecklistAction
   version?: string | null
+  /** A rollback: the Hub says whether it is a real one (no checklist) or a forward deploy. */
+  kind?: 'rollback' | null
   /** An existing checklist (a waiting schedule's) instead of a start's. */
   runId?: number
   onState?: (s: ChecklistState) => void
@@ -58,7 +61,8 @@ export function PreDeployChecklist({
       : changeKeys.checklist(
           target ?? { kind: 'environment', envId: 0 },
           action ?? 'promote',
-          version ?? null
+          version ?? null,
+          kind ?? null
         )
   const enabled = runId != null || (!!target && !!action && (action === 'move' || !!version))
   const q = useQuery({
@@ -66,7 +70,12 @@ export function PreDeployChecklist({
     queryFn: () =>
       runId != null
         ? fetchRun(runId)
-        : fetchChecklist(target as ChecklistTarget, action as ChecklistAction, version ?? null),
+        : fetchChecklist(
+            target as ChecklistTarget,
+            action as ChecklistAction,
+            version ?? null,
+            kind ?? null
+          ),
     enabled,
     staleTime: 15_000
   })
@@ -117,7 +126,8 @@ export function PreDeployChecklist({
     )
   if (!view || view.entries.length === 0) return null
   const used = view.run && view.run.status !== 'open'
-  const left = view.entries.filter((e) => e.required && !e.tick).length
+  // `left` counts every app's open required items (a non-admin sees only their app's).
+  const left = view.left ?? view.entries.filter((e) => e.required && !e.tick).length
   return (
     <section
       aria-label='Pre-deploy checklist'

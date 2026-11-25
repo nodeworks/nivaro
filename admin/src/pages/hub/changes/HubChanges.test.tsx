@@ -33,6 +33,8 @@ proto.releasePointerCapture ??= vi.fn()
 const { default: HubChanges } = await import('./HubChanges')
 const { PreDeployChecklist } = await import('./PreDeployChecklist')
 const { eventsOn, viewRange } = await import('./ChangeCalendar')
+const { OutsideWindowOverride } = await import('./WindowGate')
+const { DeployWindowNotice } = await import('./DeployWindowNotice')
 
 const today = new Date()
 const at = (h: number) => {
@@ -339,5 +341,67 @@ describe('pre-deploy checklist block', () => {
     await waitFor(() =>
       expect(onState).toHaveBeenLastCalledWith({ required: true, ready: false, runId: 90 })
     )
+  })
+})
+
+describe('deploy window gates', () => {
+  it('an admin starts outside the window only with a typed reason; owners never see it', async () => {
+    const onReason = vi.fn()
+    const { unmount } = wrap(<OutsideWindowOverride what='move' onReason={onReason} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Start outside the window…' }))
+    const box = screen.getByLabelText('Why this move cannot wait for the window')
+    fireEvent.change(box, { target: { value: 'short' } })
+    expect(onReason).toHaveBeenLastCalledWith(null)
+    fireEvent.change(box, { target: { value: 'The database host fails over tonight' } })
+    expect(onReason).toHaveBeenLastCalledWith('The database host fails over tonight')
+    fireEvent.click(screen.getByRole('button', { name: 'Keep to the window' }))
+    expect(onReason).toHaveBeenLastCalledWith(null)
+    unmount()
+    h.admin = false
+    wrap(<OutsideWindowOverride what='move' onReason={onReason} />)
+    expect(screen.queryByRole('button', { name: 'Start outside the window…' })).toBeNull()
+  })
+
+  it('a window that cannot be read says so and offers no queue', () => {
+    wrap(
+      <DeployWindowNotice
+        envId={11}
+        envKey='production'
+        version='0.3.215'
+        confirm='production'
+        opensAt={null}
+        invalid
+        message='Promotions are refused: the deploy window “Broken” its time zone “Mars/Base” is not known. An administrator fixes it.'
+        onOutsideReason={() => undefined}
+      />
+    )
+    expect(screen.getByText(/cannot|not known/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Queue for the next window' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Start outside the window…' })).toBeTruthy()
+  })
+
+  it('a real rollback has no checklist', async () => {
+    h.get.mockResolvedValue({
+      data: {
+        data: { ...view(), exempt: true, required: false, entries: [], missing: [], ready: true }
+      }
+    })
+    const onState = vi.fn()
+    const { container } = wrap(
+      <PreDeployChecklist
+        target={{ kind: 'environment', envId: 11 }}
+        action='promote'
+        version='0.3.214'
+        kind='rollback'
+        onState={onState}
+      />
+    )
+    await waitFor(() =>
+      expect(onState).toHaveBeenLastCalledWith({ required: false, ready: true, runId: null })
+    )
+    expect(container.textContent).toBe('')
+    expect(h.get).toHaveBeenCalledWith('/hub/environments/11/checklist', {
+      params: { action: 'promote', version: '0.3.214', kind: 'rollback' }
+    })
   })
 })

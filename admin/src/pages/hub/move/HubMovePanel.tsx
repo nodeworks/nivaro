@@ -31,6 +31,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
+import { EnvWindowGate } from '../changes/WindowGate'
 import { RunnerError } from '../HubPromotePanel'
 import { type HubEnvironment, hubKeys } from '../hub-api'
 import { CopyButton, dangerArmed, dangerGhost, Field, ghostButton } from '../hub-parts'
@@ -566,6 +567,8 @@ function MoveForm({
   const offerOverride = pullCodes.length > 0
   // The overridable blocker stops nothing once its box is ticked; every other blocker does.
   const blocking = (p?.blockers ?? []).filter((b) => !(override && isPullOverride(b.code)))
+  /** An administrator's emergency start outside the app's deploy window: the typed reason. */
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
   /** The production pre-deploy checklist of this move (Hub change operations). */
   const [preDeploy, setPreDeploy] = useState<ChecklistState>({
     required: false,
@@ -595,7 +598,8 @@ function MoveForm({
         confirm: confirm.trim(),
         checklist: Object.fromEntries((p?.checklist ?? []).map((c) => [c.id, !!checked[c.id]])),
         ...(offerOverride && override ? { overrides: pullCodes } : {}),
-        ...(preDeploy.runId != null ? { checklist_run_id: preDeploy.runId } : {})
+        ...(preDeploy.runId != null ? { checklist_run_id: preDeploy.runId } : {}),
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
       }),
     onSuccess: (r) => {
       // The move owns the placement it starts on: it is never removed by this form.
@@ -784,6 +788,8 @@ function MoveForm({
           </label>
         </div>
       )}
+
+      {target && <EnvWindowGate envId={env.id} what='move' onReason={setOutsideReason} />}
 
       {target && (
         <PreDeployChecklist

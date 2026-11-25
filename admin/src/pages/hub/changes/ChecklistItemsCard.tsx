@@ -33,7 +33,9 @@ import {
 const ACTION_WORDS: Record<ChecklistAction, string> = {
   promote: 'Promotions',
   move: 'Moves',
-  upgrade: 'Shared upgrades'
+  upgrade: 'Shared upgrades',
+  config_promote: 'Config promotions',
+  extension_promote: 'Extension promotions'
 }
 
 function ItemForm({
@@ -165,7 +167,7 @@ function ItemForm({
             Needed for
           </legend>
           <div className='flex flex-wrap gap-1.5'>
-            {(['promote', 'move', 'upgrade'] as ChecklistAction[]).map((a) => {
+            {(Object.keys(ACTION_WORDS) as ChecklistAction[]).map((a) => {
               const on = actions.includes(a)
               return (
                 <button

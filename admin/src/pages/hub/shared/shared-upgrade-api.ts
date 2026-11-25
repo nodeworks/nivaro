@@ -175,6 +175,8 @@ export const startSharedUpgrade = (
     downgrade?: true
     /** The ticked pre-deploy checklist (an upgrade carrying production apps with one). */
     checklist_run_id?: number
+    /** An administrator's emergency start outside the deploy windows: why. */
+    outside_window_reason?: string
   }
 ) =>
   api

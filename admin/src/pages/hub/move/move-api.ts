@@ -297,6 +297,8 @@ export const startMove = (
     overrides?: string[]
     /** The ticked pre-deploy checklist (a production move with one). */
     checklist_run_id?: number
+    /** An administrator's emergency start outside the deploy window: why. */
+    outside_window_reason?: string
   }
 ) =>
   api.post(`/hub/environments/${envId}/move`, body).then((r) => {

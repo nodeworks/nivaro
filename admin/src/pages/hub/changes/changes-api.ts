@@ -63,6 +63,8 @@ export interface DeployWindow {
   time_zone: string
   enabled: boolean
   words?: string
+  /** Why the stored window cannot be read (it refuses until fixed); null = fine. */
+  invalid?: string | null
 }
 
 export interface ChangeEnv {
@@ -78,11 +80,17 @@ export interface ChangeEnv {
     closes_at: string | null
     opens_at: string | null
     name: string | null
+    invalid?: boolean
   }
 }
 
 export type TickBy = 'admin' | 'owner' | 'people'
-export type ChecklistAction = 'promote' | 'move' | 'upgrade'
+export type ChecklistAction =
+  | 'promote'
+  | 'move'
+  | 'upgrade'
+  | 'config_promote'
+  | 'extension_promote'
 
 export interface ChecklistItem {
   id: number
@@ -148,6 +156,10 @@ export interface ChecklistEntry {
 export interface ChecklistView {
   production: boolean
   required: boolean
+  /** A real rollback (to an older version than runs): no checklist. */
+  exempt?: boolean
+  /** Required items still open, all of them (a non-admin sees only their app's entries). */
+  left?: number
   entries: ChecklistEntry[]
   run: {
     id: number
@@ -188,9 +200,16 @@ export const changeKeys: {
   checklist: (
     target: ChecklistTarget,
     action: ChecklistAction,
-    version: string | null
-  ) => Tagged<readonly ['hub-changes', 'checklist', string, string, string | null], ChecklistView>
+    version: string | null,
+    kind?: 'rollback' | null
+  ) => Tagged<
+    readonly ['hub-changes', 'checklist', string, string, string | null, string],
+    ChecklistView
+  >
   run: (id: number) => Tagged<readonly ['hub-changes', 'run', number], ChecklistView>
+  sharedWindow: (
+    sharedId: number
+  ) => Tagged<readonly ['hub-changes', 'shared-window', number], SharedWindow>
 } = {
   all: ['hub-changes'] as const,
   overview: () =>
@@ -212,16 +231,30 @@ export const changeKeys: {
       'window',
       envId
     ] as const),
-  checklist: (target: ChecklistTarget, action: ChecklistAction, version: string | null) =>
-    tag<readonly ['hub-changes', 'checklist', string, string, string | null], ChecklistView>([
+  checklist: (target, action, version, kind) =>
+    tag<
+      readonly ['hub-changes', 'checklist', string, string, string | null, string],
+      ChecklistView
+    >([
       'hub-changes',
       'checklist',
       target.kind === 'shared' ? `shared:${target.sharedId}` : `env:${target.envId}`,
       action,
-      version
+      version,
+      kind ?? 'forward'
     ] as const),
   run: (id: number) =>
-    tag<readonly ['hub-changes', 'run', number], ChecklistView>(['hub-changes', 'run', id] as const)
+    tag<readonly ['hub-changes', 'run', number], ChecklistView>([
+      'hub-changes',
+      'run',
+      id
+    ] as const),
+  sharedWindow: (sharedId: number) =>
+    tag<readonly ['hub-changes', 'shared-window', number], SharedWindow>([
+      'hub-changes',
+      'shared-window',
+      sharedId
+    ] as const)
 }
 
 export interface EnvWindow {
@@ -231,6 +264,14 @@ export interface EnvWindow {
   closes_at: string | null
   opens_at: string | null
   windows: Array<{ id: number; name: string; words: string }>
+  invalid?: Array<{ id: number; name: string; why: string }>
+}
+
+export interface SharedWindow {
+  open: boolean
+  code: string | null
+  message: string | null
+  opens_at: string | null
 }
 
 const data = <T>(p: Promise<{ data: { data: T } }>) => p.then((r) => r.data.data)
@@ -308,15 +349,20 @@ export const archiveItem = (id: number) =>
 export const fetchChecklist = (
   target: ChecklistTarget,
   action: ChecklistAction,
-  version: string | null
+  version: string | null,
+  kind?: 'rollback' | null
 ) =>
   data<ChecklistView>(
     target.kind === 'shared'
-      ? api.get(`/hub/shared/${target.sharedId}/checklist`, { params: { version } })
+      ? api.get(`/hub/shared/${target.sharedId}/checklist`, {
+          params: { version, ...(kind ? { kind } : {}) }
+        })
       : api.get(`/hub/environments/${target.envId}/checklist`, {
-          params: { action, ...(version ? { version } : {}) }
+          params: { action, ...(version ? { version } : {}), ...(kind ? { kind } : {}) }
         })
   )
+export const fetchSharedWindow = (sharedId: number) =>
+  data<SharedWindow>(api.get(`/hub/shared/${sharedId}/deploy-window`))
 export const openChecklist = (
   target: ChecklistTarget,
   action: ChecklistAction,

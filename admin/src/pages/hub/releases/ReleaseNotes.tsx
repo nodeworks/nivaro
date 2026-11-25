@@ -271,7 +271,8 @@ export function FreezeBanner({
   kind,
   envKey,
   version,
-  confirm
+  confirm,
+  onOutsideReason
 }: {
   envId: number
   kind: 'promote' | 'rollback'
@@ -279,6 +280,8 @@ export function FreezeBanner({
   envKey?: string
   version?: string
   confirm?: string
+  /** An administrator's emergency start outside the window: the typed reason, or null. */
+  onOutsideReason?: (reason: string | null) => void
 }) {
   const q = useQuery({
     queryKey: releaseKeys.freeze(envId),
@@ -287,15 +290,17 @@ export function FreezeBanner({
   })
   if (!q.data) return null
   // A closed deploy window never stops a rollback (the same exemption as a freeze).
-  if (q.data.code === 'OUTSIDE_WINDOW')
+  if (q.data.code === 'OUTSIDE_WINDOW' || q.data.code === 'WINDOW_INVALID')
     return kind === 'rollback' ? null : (
       <DeployWindowNotice
         envId={envId}
         envKey={envKey}
         version={version}
         confirm={confirm}
-        opensAt={q.data.freeze.ends_at}
+        opensAt={q.data.next_opening ?? null}
+        invalid={q.data.code === 'WINDOW_INVALID'}
         message={q.data.message}
+        onOutsideReason={onOutsideReason}
       />
     )
   return (

@@ -313,10 +313,13 @@ function WindowForm({
         </label>
       </div>
       <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
-        Outside every window that applies, the Hub refuses promotions and Apply now; a scheduled
-        promotion or a release train waits for the next opening. A rollback to an older version than
-        the one running is always allowed — a “rollback” to the same or a newer version counts as a
-        promotion.
+        Outside every window that applies, the Hub refuses promotions, Apply now and moves of the
+        app; a scheduled promotion or a release train waits for the next opening (a schedule nothing
+        opens for within 14 days is missed). Production-only windows win over windows for every
+        environment; a one-off window only adds an opening. Shared deployment upgrades follow the
+        Hub-wide windows. A rollback to an older version than the one running is always allowed; an
+        administrator may start outside a window in an emergency, with a reason (freezes and
+        checklists still apply).
       </p>
       <div className='flex gap-2'>
         <Button
@@ -378,17 +381,21 @@ export function DeployWindowsCard({ data, isAdmin }: { data: ChangesOverview; is
                 key={e.id}
                 className={cn(
                   'rounded-full border px-2 py-px text-[11px] font-medium',
-                  e.window.open
-                    ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200'
-                    : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
+                  e.window.invalid
+                    ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'
+                    : e.window.open
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/60 dark:bg-emerald-950/40 dark:text-emerald-200'
+                      : 'border-slate-200 bg-slate-50 text-slate-600 dark:border-border dark:bg-muted/40 dark:text-slate-300'
                 )}
               >
                 {app} · {e.key}:{' '}
-                {e.window.open
-                  ? `open until ${e.window.closes_at ? formatDateTime(e.window.closes_at) : '—'}`
-                  : e.window.opens_at
-                    ? `opens ${formatDateTime(e.window.opens_at)}`
-                    : 'closed'}
+                {e.window.invalid
+                  ? 'refused (a window cannot be read)'
+                  : e.window.open
+                    ? `open until ${e.window.closes_at ? formatDateTime(e.window.closes_at) : '—'}`
+                    : e.window.opens_at
+                      ? `opens ${formatDateTime(e.window.opens_at)}`
+                      : 'closed'}
               </li>
             )
           })}
@@ -409,16 +416,30 @@ export function DeployWindowsCard({ data, isAdmin }: { data: ChangesOverview; is
                     {appKeyOf(data, w.app_id)} ·{' '}
                     {w.env_scope === 'production' ? 'production' : 'every environment'}
                   </span>
+                  {w.invalid && (
+                    <span className='rounded-full border border-red-200 bg-red-50 px-2 py-px text-[11px] font-medium text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200'>
+                      Cannot be read
+                    </span>
+                  )}
                   {!w.enabled && (
                     <span className='rounded-full border border-slate-200 px-2 py-px text-[11px] text-slate-500 dark:border-border dark:text-muted-foreground'>
                       Off
                     </span>
                   )}
                 </div>
-                <div className='text-[11px] text-slate-600 dark:text-slate-300'>
-                  {w.recurrence === 'none'
-                    ? `${w.starts_at ? formatDateTime(w.starts_at) : '?'} → ${w.ends_at ? formatDateTime(w.ends_at) : '?'}`
-                    : w.words}
+                <div
+                  className={cn(
+                    'text-[11px]',
+                    w.invalid
+                      ? 'text-red-700 dark:text-red-300'
+                      : 'text-slate-600 dark:text-slate-300'
+                  )}
+                >
+                  {w.invalid
+                    ? `It ${w.invalid}, so the Hub refuses the starts it governs until it is fixed or deleted.`
+                    : w.recurrence === 'none'
+                      ? `${w.starts_at ? formatDateTime(w.starts_at) : '?'} → ${w.ends_at ? formatDateTime(w.ends_at) : '?'}`
+                      : w.words}
                 </div>
               </div>
               {isAdmin && (

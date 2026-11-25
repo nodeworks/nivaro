@@ -190,9 +190,14 @@ function PromoteForm({
     if (planHash) shownHash.current = planHash
   }, [planHash])
 
-  /** The production pre-deploy checklist of this promotion (rollbacks never need one). */
+  /**
+   * The production pre-deploy checklist of this start: a promotion, or a rollback the Hub judges
+   * a forward deploy (to the same or a newer version than runs). A real rollback needs none.
+   */
   const [checklist, setChecklist] = useState<ChecklistState>(NO_CHECKLIST)
-  const checklistBlocks = kind === 'promote' && checklist.required && !checklist.ready
+  const checklistBlocks = checklist.required && !checklist.ready
+  /** An administrator's emergency start outside the deploy window: the typed reason. */
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
 
   const start = useMutation({
     mutationFn: () =>
@@ -202,9 +207,8 @@ function PromoteForm({
         confirm: confirm.trim(),
         // The plan on screen: the Hub starts only if it would still do exactly this.
         plan_hash: plan.data?.plan_hash ?? '',
-        ...(kind === 'promote' && checklist.runId != null
-          ? { checklist_run_id: checklist.runId }
-          : {})
+        ...(checklist.runId != null ? { checklist_run_id: checklist.runId } : {}),
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: hubKeys.promotions(env.id) })
@@ -319,6 +323,7 @@ function PromoteForm({
         envKey={env.key}
         version={version}
         confirm={confirm}
+        onOutsideReason={setOutsideReason}
       />
       {plan.data ? (
         <PlanPreview plan={plan.data} blockers={blockers} />
@@ -333,11 +338,13 @@ function PromoteForm({
 
       <ReleaseNotesPreview envId={env.id} kind={kind} version={version} />
 
-      {kind === 'promote' && version && (
+      {version && (
         <PreDeployChecklist
+          key={kind}
           target={{ kind: 'environment', envId: env.id }}
           action='promote'
           version={version}
+          kind={kind === 'rollback' ? 'rollback' : null}
           onState={setChecklist}
         />
       )}

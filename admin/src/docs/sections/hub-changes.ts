@@ -29,7 +29,7 @@ export const hubChangesDocs: DocSection = {
     { type: 'h2', id: 'hub-changes-windows', text: 'Deploy windows' },
     {
       type: 'p',
-      text: 'A deploy window says when an app may be promoted: weekly ranges (for example weekdays 7 AM–5 PM) read on the clock of the time zone you pick, daylight saving included, or one extra window with a start and an end. A range that ends at or before it starts runs past midnight. A window covers production environments only (the usual choice) or every environment of the app.'
+      text: 'A deploy window says when an app may be changed: weekly ranges (for example weekdays 7 AM–5 PM) read on the clock of the time zone you pick, daylight saving included, or one extra window with a start and an end. A range that ends at or before it starts runs past midnight. On a daylight-saving change, a window never opens early and never closes late: a start that falls in the hour the clocks skip opens when the clocks jump (02:30 in New York on the March change opens at 3:30 AM), an end in it closes before; a time that happens twice in November counts its first occurrence. A window covers production environments only (the usual choice) or every environment of the app.'
     },
     {
       type: 'table',
@@ -37,11 +37,15 @@ export const hubChangesDocs: DocSection = {
       rows: [
         [
           'Which windows count',
-          'An app’s own windows that fit the environment. When the app has none that fit, the Hub-wide windows (Applies to: every app without its own). None at all: any time. A one-off window that has ended counts no more; a window switched off is kept but not judged.'
+          'For a production environment: the production-only windows — the app’s own when it has any, else the Hub-wide ones; only when there are none, the windows for every environment. For any other environment: the windows for every environment, the app’s own else the Hub-wide ones. So an app window “for every environment” never lifts a Hub-wide production rule. No weekly window at all: any time. A one-off window only adds an opening to an app weekly windows govern; on its own it restricts nothing. A window switched off is kept but not judged.'
         ],
         [
           'What they stop',
-          'Promotions and Apply now outside every window that counts answer “Outside the deploy window” (409 OUTSIDE_WINDOW) with the next opening. Moves and shared deployment upgrades are judged by freezes and checklists, not windows.'
+          'Promotions, Apply now (a secret rotation included) and moves outside every window that counts answer “Outside the deploy window” (409 OUTSIDE_WINDOW) with the next opening. A shared deployment upgrade follows the Hub-wide windows and every placed app’s freezes (the frozen app is named); an app’s own closed window is a warning in the upgrade plan, not a block.'
+        ],
+        [
+          'A broken window',
+          'A stored window whose ranges or time zone cannot be read refuses the starts it governs (409 WINDOW_INVALID) until an administrator fixes or deletes it; the Changes tab marks it “Cannot be read”.'
         ],
         [
           'Freezes win',
@@ -49,22 +53,26 @@ export const hubChangesDocs: DocSection = {
         ],
         [
           'Rollbacks',
-          'A rollback to a version older than the one the environment runs now always goes through, window or not. A “rollback” to the same version, a newer one, or while the running version is unknown is a forward deploy and is judged exactly like a promotion.'
+          'A rollback to a version older than the one the environment runs now always goes through, window or not. What runs is the app’s live answer; when production is down and does not answer, it is the Hub’s own record of its last successful deploy (so an outage rollback, the automatic one included, is never held). A “rollback” to the same version, a newer one, or with the running version unknown to both is a forward deploy and is judged exactly like a promotion. For a shared deployment, what runs is its link’s answer, else its last successful run — never the stored pin alone.'
         ],
         [
           'Schedules and trains',
-          'A scheduled promotion due outside its window waits for the next opening (or fails, when it was set to fail inside a freeze); a release train step waits before it starts. Neither uses up a try.'
+          'A scheduled promotion due outside its window waits for the next opening (or fails, when it was set to fail inside a freeze); a release train step waits before it starts. Neither uses up a try. A schedule that no window opens for within 14 days, or that meets a broken window, is marked missed and its people are told — it never deploys by surprise later.'
         ],
         [
           'Queue it',
           'When the Promote panel says the window is closed, an administrator who typed the environment key can queue the promotion: it becomes a scheduled promotion a minute into the next opening (Releases → Scheduled), which still waits for a freeze.'
+        ],
+        [
+          'Start outside the window',
+          'An emergency: a Hub administrator on their own session can start a promotion, Apply now, a move or a shared upgrade while the window is closed, with a typed reason (at least 10 characters). It skips the windows only — never a freeze or the checklist. The Hub writes an activity row with the reason and tells the app’s owners.'
         ]
       ]
     },
     { type: 'h2', id: 'hub-changes-checklists', text: 'Pre-deploy checklists' },
     {
       type: 'p',
-      text: 'Checklist items belong to an app: a text, optional help, required or optional, who may tick it, and which starts it is for (promotions, moves, shared upgrades). An item applies to every production environment of the app, or to one. Production is decided by the Hub’s production rule (the environment’s flag, its key, what the app reports, its place in the chain). Development and staging never need a checklist.'
+      text: 'Checklist items belong to an app: a text, optional help, required or optional, who may tick it, and which starts it is for (promotions, moves, shared upgrades; config and extension promotions once those land). An item applies to every production environment of the app, or to one. Production is decided by the Hub’s production rule (the environment’s flag, its key, what the app reports, its place in the chain). Development and staging never need a checklist.'
     },
     {
       type: 'table',
@@ -80,15 +88,19 @@ export const hubChangesDocs: DocSection = {
     },
     {
       type: 'p',
+      text: 'A tick is a person’s own word: checklists are opened, ticked and set aside only on the person’s own session — never through View-as, an API key, a connected app or MCP, or the phone (403 TICK_OWN_SESSION).'
+    },
+    {
+      type: 'p',
       text: 'The checklist shows in the Promote, Move and shared Upgrade panels. Ticking the first item opens a checklist for that one start (that environment or deployment, that action, that version); each tick records who, when and an optional note. Start stays off until every required item is ticked. The checklist is used by the run it starts and stored with it — the next start needs a new one. A start that is refused after the checklist was taken (a lock, GitLab not answering) gives it back with its ticks.'
     },
     {
       type: 'p',
-      text: 'A shared deployment upgrade gathers the items of every production app placed on it. A scheduled promotion or a release-train step that reaches production opens its own checklist once, tells the people who may tick it (Hub administrators, the app’s owners and anyone named), and waits under **Waiting for a checklist** on the Changes tab. A scheduled promotion is still missed 6 hours after it was due if nobody ticks it, so nothing deploys by surprise.'
+      text: 'A shared deployment upgrade gathers the items of every production app placed on it; an app owner sees only their own app’s items on it, and only an administrator sets it aside. A scheduled promotion or a release-train step that reaches production opens its own checklist once, tells the people who may tick it (Hub administrators, the app’s owners and anyone named), and waits under **Waiting for a checklist** on the Changes tab. A scheduled promotion is still missed 6 hours after it was due if nobody ticks it, so nothing deploys by surprise.'
     },
     {
       type: 'note',
-      text: 'A real rollback (to an older version than the one running) and Apply now never wait on a checklist: going back must never wait on a list. A “rollback” to the same, a newer or an unknown running version is a forward deploy and needs the checklist like a promotion; for a shared deployment, only a rollback below the version the deployment runs is exempt.'
+      text: 'A real rollback (to an older version than the one running) and Apply now never wait on a checklist: going back must never wait on a list. A “rollback” to the same, a newer or an unknown running version is a forward deploy: the Promote and Upgrade panels then show its checklist, and it needs the ticks like a promotion.'
     },
     { type: 'h2', id: 'hub-changes-api', text: 'API' },
     {
@@ -108,6 +120,10 @@ export const hubChangesDocs: DocSection = {
           'Open or closed now, and the next opening.'
         ],
         [
+          'GET /api/hub/shared/:id/deploy-window',
+          'Whether the Hub-wide windows allow an upgrade now.'
+        ],
+        [
           'POST /api/hub/environments/:envId/promote/queue',
           'Queue a promotion for the next window (admin).'
         ],
@@ -119,6 +135,10 @@ export const hubChangesDocs: DocSection = {
         [
           'POST …/checklist-runs, POST /api/hub/checklist-runs/:id/tick',
           'Open a checklist; tick or untick an item (`key` = item@environment). Send its id as `checklist_run_id` with the promote, move or upgrade start.'
+        ],
+        [
+          '`outside_window_reason` on a start',
+          'Promote, stack apply, secret rotate, move, shared upgrade: an administrator’s emergency start outside the windows.'
         ]
       ]
     }

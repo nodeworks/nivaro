@@ -604,6 +604,8 @@ export const startPromotion = (
     plan_hash: string
     /** The ticked pre-deploy checklist (a production promotion with one). */
     checklist_run_id?: number
+    /** An administrator's emergency start outside the deploy window: why. */
+    outside_window_reason?: string
   }
 ) =>
   api
