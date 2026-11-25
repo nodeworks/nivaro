@@ -30,11 +30,13 @@ describe('hub registry', () => {
       'Drivers',
       'Targets',
       'Databases',
+      'Backups & data',
       'Sign-in'
     ])
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
     expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
+    expect(hubForPath('/hub/data')?.tab.label).toBe('Backups & data')
   })
 
   it('has unique tab paths across every hub', () => {
