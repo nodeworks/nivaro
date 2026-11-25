@@ -12,15 +12,11 @@ import {
   tablesForGroups
 } from '../../../services/config-promote-groups.js'
 import { RESTORE_EXCLUDED } from '../../../services/config-restore.js'
-import {
-  isOutboundOptionKey,
-  mergeOutbound,
-  outboundPart
-} from '../../../services/env-refresh/flow-ops.js'
 import { allKeeps, type EnvKeepEntry } from '../../../services/env-refresh/registry.js'
 import {
   applyTargetKeeps,
   identityChanges,
+  KEEP_PSEUDO_COLUMNS,
   PromoteError,
   parsePromoteRequest,
   parseTables,
@@ -41,7 +37,6 @@ const snap = (tables: ConfigSnapshot['tables']): ConfigSnapshot => ({
   tables,
   errors: {}
 })
-const OUT = { part: outboundPart, merge: mergeOutbound, isKey: isOutboundOptionKey }
 
 describe('promotion groups', () => {
   it('names only CONFIG tables a restore may write', () => {
@@ -149,8 +144,7 @@ describe('what the target keeps', () => {
         }
       }),
       keeps,
-      { nivaro_settings: { '1': row({ id: 1, smtp_host: 'prod-mail', project_name: 'Prod' }) } },
-      OUT
+      { nivaro_settings: { '1': row({ id: 1, smtp_host: 'prod-mail', project_name: 'Prod' }) } }
     )
     expect(p.snapshot.tables.nivaro_settings['1'].data).toEqual({ id: 1, welcome_message: 'hi' })
     expect(p.kept.find((k) => k.table === 'nivaro_settings')?.columns).toContain('smtp_host')
@@ -160,8 +154,7 @@ describe('what the target keeps', () => {
     const p = applyTargetKeeps(
       snap({ nivaro_settings_overrides: { a: row({ id: 'a', data: '{}' }) } }),
       keeps,
-      {},
-      OUT
+      {}
     )
     expect(p.snapshot.tables.nivaro_settings_overrides).toBeUndefined()
     expect(p.refused[0]).toMatchObject({ table: 'nivaro_settings_overrides' })
@@ -177,8 +170,7 @@ describe('what the target keeps', () => {
         }
       }),
       keeps,
-      { nivaro_flows: { '1': row({ id: 1, name: 'old', status: 'inactive', description: 'v1' }) } },
-      OUT
+      { nivaro_flows: { '1': row({ id: 1, name: 'old', status: 'inactive', description: 'v1' }) } }
     )
     expect(p.snapshot.tables.nivaro_flows['1'].data).toEqual({
       id: 1,
@@ -189,12 +181,12 @@ describe('what the target keeps', () => {
     expect(p.switched_off).toEqual([{ table: 'nivaro_flows', key: '2', label: 'new' }])
   })
 
-  it('flow steps keep this environment’s outbound options; a new step has none', () => {
+  it('flow steps arrive without any outbound option (the engine writes the target’s own back)', () => {
     const p = applyTargetKeeps(
       snap({
         nivaro_flow_operations: {
           '5': row({ id: 5, key: 'send', options: '{"url":"https://dev","body":"v2"}' }),
-          '6': row({ id: 6, key: 'new', options: '{"url":"https://dev2","body":"x"}' })
+          '6': row({ id: 6, key: 'new', options: '{"headers":{"Authorization":"x"},"body":"x"}' })
         }
       }),
       keeps,
@@ -202,16 +194,15 @@ describe('what the target keeps', () => {
         nivaro_flow_operations: {
           '5': row({ id: 5, key: 'send', options: '{"url":"https://prod","body":"v1"}' })
         }
-      },
-      OUT
+      }
     )
     expect(JSON.parse(String(p.snapshot.tables.nivaro_flow_operations['5'].data.options))).toEqual({
-      body: 'v2',
-      url: 'https://prod'
+      body: 'v2'
     })
     expect(JSON.parse(String(p.snapshot.tables.nivaro_flow_operations['6'].data.options))).toEqual({
       body: 'x'
     })
+    expect(JSON.stringify(p.snapshot)).not.toContain('https://prod')
   })
 
   it('a row new here with a kept non-switch column is held back, never inserted half-set', () => {
@@ -232,8 +223,7 @@ describe('what the target keeps', () => {
         }
       }),
       [extra],
-      { nivaro_scheduled_reports: {} },
-      OUT
+      { nivaro_scheduled_reports: {} }
     )
     expect(p.snapshot.tables.nivaro_scheduled_reports).toEqual({})
     expect(p.held[0]).toMatchObject({
@@ -275,5 +265,85 @@ describe('identity warning', () => {
       ]
     } as unknown as Parameters<typeof identityChanges>[0]
     expect(identityChanges(preview)).toBe(2)
+  })
+})
+
+describe('keep pseudo-columns', () => {
+  it('the outbound pseudo-column strips a step’s outbound options on the source too', () => {
+    const out = stripKeepSecrets(
+      snap({
+        nivaro_flow_operations: {
+          '1': row({ id: 1, options: '{"url":"https://hook","token":"t0k","body":"b"}' })
+        }
+      }),
+      allKeeps([])
+    )
+    expect(JSON.parse(String(out.tables.nivaro_flow_operations['1'].data.options))).toEqual({
+      body: 'b'
+    })
+    expect(Object.keys(KEEP_PSEUDO_COLUMNS.nivaro_flow_operations)).toEqual(['outbound', 'fields'])
+  })
+
+  it('on the source, a secret name it cannot apply throws instead of doing nothing', () => {
+    const odd: EnvKeepEntry = {
+      source: 'x',
+      id: 'x:odd',
+      label: 'Odd',
+      reason: 'r',
+      table: 'nivaro_roles',
+      kind: 'columns',
+      key: ['id'],
+      columns: [],
+      secret_columns: ['endpoint_blob']
+    }
+    expect(() =>
+      stripKeepSecrets(snap({ nivaro_roles: { '1': row({ id: 1, name: 'A' }) } }), [odd], {
+        strict: true
+      })
+    ).toThrow(/neither a column/)
+    // The target is lenient: rows from an older source may not have a newer column.
+    expect(() =>
+      stripKeepSecrets(snap({ nivaro_roles: { '1': row({ id: 1, name: 'A' }) } }), [odd])
+    ).not.toThrow()
+  })
+})
+
+describe('flow redaction by value (every snapshot, restore and promotion)', () => {
+  it('step options lose their outbound part; a restore takes the live row’s back', async () => {
+    const { redactFlowOptions, restoreFlowOptions, redactRow } = await import(
+      '../../../services/config-inventory.js'
+    )
+    const opts = '{"url":"https://dev","headers":{"Authorization":"x"},"token":"t","body":"b"}'
+    expect(JSON.parse(String(redactFlowOptions(opts)))).toEqual({ body: 'b' })
+    expect(redactRow('nivaro_flow_operations', { id: 1, options: opts }).options).toBe(
+      '{"body":"b"}'
+    )
+    expect(
+      JSON.parse(String(restoreFlowOptions('{"body":"b2"}', '{"url":"https://prod","body":"b1"}')))
+    ).toEqual({ body: 'b2', url: 'https://prod' })
+    expect(
+      JSON.parse(String(restoreFlowOptions('{"body":"b2","url":"https://evil"}', null)))
+    ).toEqual({ body: 'b2' })
+    expect(redactFlowOptions('not json')).toBeNull()
+  })
+
+  it('a flow version’s definition loses every step’s and the trigger’s outbound part', async () => {
+    const { redactFlowDefinition, restoreFlowDefinition } = await import(
+      '../../../services/config-inventory.js'
+    )
+    const def = JSON.stringify({
+      flow: { name: 'f', trigger_options: '{"secret":"s1","method":"POST"}' },
+      operations: [{ id: 'a', key: 'k', options: '{"url":"https://x","body":"b"}' }]
+    })
+    const red = JSON.parse(String(redactFlowDefinition(def)))
+    expect(red.flow.trigger_options).toBe('{"method":"POST"}')
+    expect(red.operations[0].options).toBe('{"body":"b"}')
+    const back = JSON.parse(String(restoreFlowDefinition(JSON.stringify(red), def)))
+    expect(JSON.parse(back.operations[0].options)).toEqual({ body: 'b', url: 'https://x' })
+    expect(JSON.parse(back.flow.trigger_options)).toEqual({ method: 'POST', secret: 's1' })
+  })
+
+  it('nivaro_flow_versions is not promotable', () => {
+    expect(promotableTables().has('nivaro_flow_versions')).toBe(false)
   })
 })

@@ -6,6 +6,8 @@ import {
   buildConfigSnapshot,
   type ConfigSnapshot,
   hashRow,
+  isRedactedColumn,
+  redactFlowOptions,
   redactSnapshot,
   type SnapshotRow
 } from '../config-inventory.js'
@@ -93,10 +95,35 @@ export function secretColumnsByTable(keeps: readonly EnvKeepEntry[]): Map<string
   return out
 }
 
-/** Source side: the snapshot without any column the keep registry calls a secret. Pure. */
+/**
+ * Keep-registry columns that are not table columns but a part of one (a "pseudo-column"), with
+ * how each is taken off a row. `nivaro_flow_operations.outbound` = the outbound options inside a
+ * step's `options` (env-refresh/flow-ops); `.fields` names those options (no value to strip).
+ * A keep entry naming a column neither real nor listed here is a gap: the guard test
+ * (hub-config-promote-secrets.guard.test.ts) fails on it, and stripKeepSecrets throws when such
+ * a name meets rows that do not carry it (it could not tell whether it applied).
+ */
+export const KEEP_PSEUDO_COLUMNS: Record<
+  string,
+  Record<string, (data: Record<string, unknown>) => Record<string, unknown>>
+> = {
+  nivaro_flow_operations: {
+    outbound: (d) => ('options' in d ? { ...d, options: redactFlowOptions(d.options) } : d),
+    fields: (d) => d
+  }
+}
+
+/**
+ * Both sides: the snapshot without any column (or pseudo-column) the keep registry calls a
+ * secret. Pure. `strict` (the SOURCE, reading its own rows: every column is there, null or not,
+ * unless the snapshot redaction already dropped it) throws when a secret name is neither a column
+ * of the rows, a column the redaction drops, nor a known pseudo-column — never silently does
+ * nothing. The target is lenient: rows from an older source may simply not have a newer column.
+ */
 export function stripKeepSecrets(
   snap: ConfigSnapshot,
-  keeps: readonly EnvKeepEntry[]
+  keeps: readonly EnvKeepEntry[],
+  opts: { strict?: boolean } = {}
 ): ConfigSnapshot {
   const secrets = secretColumnsByTable(keeps)
   const tables: ConfigSnapshot['tables'] = {}
@@ -106,10 +133,21 @@ export function stripKeepSecrets(
       tables[table] = rows
       continue
     }
+    const pseudo = KEEP_PSEUDO_COLUMNS[table] ?? {}
+    const list = Object.values(rows)
+    if (opts.strict && list.length)
+      for (const c of drop) {
+        if (pseudo[c] || isRedactedColumn(table, c)) continue
+        if (!list.some((r) => c in r.data))
+          throw new Error(
+            `The keep rule for ${table} names ${c}, which is neither a column of its rows nor a part this promotion knows how to strip`
+          )
+      }
     const out: Record<string, SnapshotRow> = {}
     for (const [key, row] of Object.entries(rows)) {
-      const data: Record<string, unknown> = {}
-      for (const [c, v] of Object.entries(row.data)) if (!drop.has(c)) data[c] = v
+      let data: Record<string, unknown> = {}
+      for (const [c, v] of Object.entries(row.data)) if (!drop.has(c) || pseudo[c]) data[c] = v
+      for (const c of drop) if (pseudo[c]) data = pseudo[c](data)
       out[key] = rehash(data)
     }
     tables[table] = out
@@ -144,36 +182,22 @@ function rowLabel(data: Record<string, unknown> | undefined): string | null {
   return null
 }
 
-function parseObj(v: unknown): Record<string, unknown> | null {
-  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
-  if (typeof v !== 'string' || !v.trim()) return null
-  try {
-    const o = JSON.parse(v)
-    return o && typeof o === 'object' && !Array.isArray(o) ? o : null
-  } catch {
-    return null
-  }
-}
-
 /**
  * Target side, pure: the incoming snapshot as THIS environment's keep registry allows it.
  *  - `table` / `rows` / `delegate` entries: the table (and a delegate's further tables) is not
  *    promoted at all (refused, with the entry's reason);
  *  - `columns` entries: those columns are taken off every incoming row (this environment's
  *    values stay). A row new here: switches arrive off; any other kept column holds it back;
- *  - flow steps (core:flow-op-endpoints): a step's options keep this environment's outbound part
- *    (URL, headers, secrets, path override); a new step arrives without one.
+ *  - flow steps (core:flow-op-endpoints): a step's options arrive WITHOUT any outbound part (URL,
+ *    headers, secrets, path override — stripped on both sides); the restore engine writes this
+ *    environment's own outbound part back from the live row (config-inventory VALUE_REDACTED),
+ *    so a new step arrives without one.
  * `live` = this environment's current rows of the tables with `columns` entries.
  */
 export function applyTargetKeeps(
   snap: ConfigSnapshot,
   keeps: readonly EnvKeepEntry[],
-  live: Record<string, Record<string, SnapshotRow>>,
-  outbound: {
-    part: (options: unknown) => Record<string, unknown> | null
-    merge: (src: unknown, target: Record<string, unknown>) => string
-    isKey: (k: string) => boolean
-  }
+  live: Record<string, Record<string, SnapshotRow>>
 ): Prepared {
   const refused: Prepared['refused'] = []
   const kept: KeptNote[] = []
@@ -242,13 +266,7 @@ export function applyTargetKeeps(
         }
         if (off) switched.push({ table, key, label: rowLabel(row.data) })
       }
-      if (flowSteps && 'options' in data) {
-        const mine = isNew ? {} : (outbound.part(here[key]?.data.options) ?? {})
-        const theirs = parseObj(data.options)
-        const hasOutbound = theirs ? Object.keys(theirs).some(outbound.isKey) : false
-        if (hasOutbound || Object.keys(mine).length)
-          data.options = outbound.merge(data.options, mine)
-      }
+      if (flowSteps && 'options' in data) data.options = redactFlowOptions(data.options)
       out[key] = rehash(data)
     }
     tables[table] = out
@@ -349,7 +367,7 @@ export async function readPromotionSnapshot(tablesRaw: unknown): Promise<Promoti
     concurrency: 4
   })
   // The database name is this app's business, never the Hub's or the target's.
-  const out = stripKeepSecrets(redactSnapshot(snap), await keeps())
+  const out = stripKeepSecrets(redactSnapshot(snap), await keeps(), { strict: true })
   return {
     version: NIVARO_VERSION,
     environment: appEnvironment(),
@@ -391,17 +409,9 @@ async function prepare(req: PromoteRequest): Promise<{
         })
       ).tables
     : {}
-  const flow = await import('../env-refresh/flow-ops.js')
-  const prepared = applyTargetKeeps(
-    stripKeepSecrets({ ...theirs, tables: scoped }, reg),
-    reg,
-    live,
-    {
-      part: flow.outboundPart,
-      merge: flow.mergeOutbound,
-      isKey: flow.isOutboundOptionKey
-    }
-  )
+  // Stripped again here (whatever the source sent): the target's own secrets are merged back by
+  // the restore engine on write, never taken from the snapshot.
+  const prepared = applyTargetKeeps(stripKeepSecrets({ ...theirs, tables: scoped }, reg), reg, live)
   const warnings: string[] = []
   const v = String(theirs.instance?.version ?? '')
   if (v && v !== NIVARO_VERSION)

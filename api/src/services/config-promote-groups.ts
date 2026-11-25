@@ -40,7 +40,9 @@ export const CONFIG_PROMOTION_GROUPS: readonly ConfigGroup[] = [
     key: 'flows',
     label: 'Flows',
     hint: 'Automations and their steps. Step addresses, headers and secrets stay as this environment has them; a flow new here arrives switched off.',
-    tables: ['nivaro_flows', 'nivaro_flow_operations', 'nivaro_flow_versions']
+    // Not nivaro_flow_versions: a version row carries whole steps (options included). The target
+    // writes its own version rows when its flows change, through the normal path.
+    tables: ['nivaro_flows', 'nivaro_flow_operations']
   },
   {
     key: 'payload_templates',
