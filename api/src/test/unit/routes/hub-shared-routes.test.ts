@@ -1375,3 +1375,49 @@ describe('re-review FW1-M-3: dropping an extension holds the deployment lock', (
     if (again) await lock.release(made.row.id, again)
   })
 })
+
+describe('a registered deployment the Hub upgrades through GitLab', () => {
+  it('POST and PATCH name the GitLab driver and settings.gitlab; a Docker one keeps its driver', async () => {
+    await db('nivaro_hub_drivers').insert({
+      id: 4,
+      kind: 'gitlab',
+      name: 'gitlab',
+      config: JSON.stringify({
+        api: 'https://gitlab.example.com/api/v4',
+        project: 'ops/shared',
+        branch: 'production',
+        pin_file: '.docker/nivaro-version',
+        deploy_job: 'deploy_production'
+      })
+    })
+    const made = await create()
+    const patch = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: 'PATCH',
+        url: `/api/hub/shared/${made.row.id}`,
+        headers: asAdmin,
+        payload
+      })
+    const on = await patch({ driver_id: 4, settings: { gitlab: { source_branch: 'release' } } })
+    expect(on.statusCode).toBe(200)
+    expect(on.json().data).toMatchObject({
+      driver_id: 4,
+      settings: { gitlab: { source_branch: 'release', deploy_job: null } }
+    })
+    expect((await patch({ driver_id: 3 })).json().code).toBe('DRIVER_NOT_GITLAB')
+    expect((await patch({ settings: {} })).json().code).toBe('BAD_GITLAB')
+    const off = await patch({ driver_id: null, settings: {} })
+    expect(off.statusCode).toBe(200)
+    expect(off.json().data).toMatchObject({ driver_id: null, settings: {} })
+
+    const docker = await create({ key: 'shared-two', mode: 'docker', driver_id: 3 })
+    const moved = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${docker.row.id}`,
+      headers: asAdmin,
+      payload: { driver_id: 4 }
+    })
+    expect(moved.statusCode).toBe(400)
+    expect(moved.json().code).toBe('NOT_EDITABLE')
+  })
+})

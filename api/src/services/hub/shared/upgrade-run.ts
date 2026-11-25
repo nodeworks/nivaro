@@ -3,6 +3,7 @@ import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
+import type { GitCtx } from '../../gitlab-client.js'
 import { getApp } from '../../io-holder.js'
 import { type JobRunHandle, readJobLog, resumeJobRun, startJobRun } from '../../job-runs.js'
 import {
@@ -13,7 +14,8 @@ import {
   describeAgentError
 } from '../docker/agent-client.js'
 import type { AgentHealth, StackSpec, StackStatus } from '../docker/agent-types.js'
-import { type DockerDriverRow, getDriver } from '../drivers.js'
+import { type DockerDriverRow, driverCtx, getDriver } from '../drivers.js'
+import { deleteBranch } from '../gitlab-write.js'
 import { readServedField, type ServedField } from '../promote-gather.js'
 import { withoutFreshHeartbeat } from '../promote-heal.js'
 import {
@@ -21,11 +23,15 @@ import {
   LOCK_RENEW_MS,
   lockHolderRefusal,
   type PromoteLock,
+  PromotionError,
   type SharedLock,
   sharedLockRefusal
 } from '../promote-lock.js'
+import { type ExecuteDeps, executePlan } from '../promote-run.js'
+import type { PromotionStep } from '../promote-types.js'
 import { HUB_MASK, sealSecret } from '../secrets.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import { SHARED_GITLAB_POSITION } from './gitlab-upgrade.js'
 import { liveSightings, type Sighting } from './sightings.js'
 import { renderSharedSpec, SharedRenderError } from './stack-render.js'
 import {
@@ -86,6 +92,19 @@ import {
  * rows — only rows with `shared_deploy_id` set (place-shared rows are place.ts's own) — and its
  * job run; the deployment's status goes back to what it was.
  *
+ * A registered deployment the Hub upgrades through GitLab (plan `runner: 'gitlab'`) runs the same
+ * start, locks, heartbeat, cancel, heal and closing write; steps 1–2 are its pipeline instead:
+ *   1. push    — the promotion's own api step (promote-run.ts executePlan, one step): the release
+ *                commit merged onto the target branch with the pin committed on top, one merge (a
+ *                rollback checks that the recorded build is still on the branch; nothing merged).
+ *   2. deploy  — the deploy job waited for, played when manual (a rollback reruns the recorded
+ *                pipeline's deploy job); the commit and pipeline it ran on are recorded in the
+ *                stored plan (`gitlab_build`), which a later rollback reruns.
+ *   3. wait_version — every replica seen in the last 2 min reports the version (no swarm here).
+ * Then 4 and 5 as above. Cancel stops at the next step boundary, before the merge into the target
+ * branch, or during the deploy job wait (a job GitLab already started keeps running). Heal also
+ * deletes the run's temporary branches (`hub/promote-<id>-<SHARED_GITLAB_POSITION>` and `-src`).
+ *
  * Never logged, stored or answered: the token, the deployment's secrets, the rendered spec.
  */
 
@@ -129,6 +148,10 @@ export interface SharedRunDeps extends Partial<SharedPlanDeps> {
   now?: () => number
   startJobRun?: (label: string, sharedId: number, by: string | null) => Promise<JobRunHandle>
   renewMs?: number
+  /** GitLab runs: the write and wait calls of the pipeline step (promote-run's seam). */
+  gitlabWrite?: ExecuteDeps['gitlab']
+  /** Heal of a GitLab run: deletes its temporary branches (default gitlab-write deleteBranch). */
+  deleteBranch?: typeof deleteBranch
 }
 
 const realSleep = (ms: number) =>
@@ -648,11 +671,18 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
       throw new Stop(
         'cancelled',
         'CANCELLED',
-        'Cancelled. Whatever the agent already applied keeps running; the pins are unchanged.'
+        facts.gitlab
+          ? 'Cancelled. Whatever GitLab already deployed keeps running; the pins are unchanged.'
+          : 'Cancelled. Whatever the agent already applied keeps running; the pins are unchanged.'
       )
   }
 
-  try {
+  /** Docker: steps 1–2 through the agent; answers what wait_version asks swarm about. */
+  const agentLeg = async (): Promise<{
+    driver: DockerDriverRow
+    stackName: string
+    specHash: string
+  }> => {
     // 1. render
     await step('render', `1. render ${shared.stack} at ${version}`)
     await checkpoint()
@@ -725,6 +755,92 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
       )
     }
     await recordApplied(deployId, specHash, redisUrlFp(secrets))
+    return { driver, stackName, specHash }
+  }
+
+  /** GitLab: steps 1–2 through the deployment's pipeline (the promotion's own api step). */
+  const gitlabLeg = async (step0: PromotionStep): Promise<void> => {
+    const rollback = plan.kind === 'rollback'
+    await step(
+      'push',
+      rollback
+        ? `1. check that ${step0.targetBranch} still holds the ${version} build ${String(step0.sourceSha).slice(0, 8)}`
+        : `1. push nivaro ${version} to ${step0.targetBranch} through GitLab`
+    )
+    await checkpoint()
+    const gitCtx = async (driverId: number): Promise<GitCtx> => {
+      const d = await getDriver(driverId)
+      if (d?.kind !== 'gitlab')
+        throw new PromotionError('NO_DRIVER', 'The shared deployment names no GitLab driver.')
+      return (deps.gitCtx ?? driverCtx)(d)
+    }
+    const out = await executePlan(
+      { ok: true, blockers: [], lines: [], steps: [step0], plan_hash: plan.plan_hash },
+      {
+        deployId,
+        version,
+        kind: rollback ? 'rollback' : 'promote',
+        targetKey: shared.key,
+        gitCtx
+      },
+      {
+        deps: {
+          sleep: (ms) => sleep(ms),
+          now,
+          ...(deps.gitlabWrite ? { gitlab: deps.gitlabWrite } : {}),
+          ...(deps.readServedField ? { readServedField: deps.readServedField } : {}),
+          stopRequested: () => cancelRequested(deployId),
+          lockLost: () => lockLost,
+          // A held commit whose deploy job already passed is rerun when the deployment does not
+          // answer this version (a promotion's P30 rule).
+          currentVersion: async () => {
+            try {
+              const status = deps.status ?? ((x: SharedDeployment) => deploymentClient(x).status())
+              return (await status(shared)).version ?? null
+            } catch {
+              return null
+            }
+          }
+        },
+        onEvent: async (e) => {
+          if (e.kind === 'step') {
+            if (e.step.startsWith('deploy '))
+              await step(
+                'deploy',
+                `2. ${rollback ? 'rerun' : 'run'} ${step0.deployJob} in GitLab (≤ 60 min)`
+              )
+            return
+          }
+          if (e.kind === 'deployed') {
+            await recordGitlabBuild(deployId, e.sha, e.pipelineId)
+            return
+          }
+          // The step has no check address: the run verifies each app's name itself (step 5).
+          if (/^(verify|done):/.test(e.line)) return
+          run.log(`GitLab: ${e.line}`, e.level)
+        }
+      }
+    )
+    if (out.status === 'success') return
+    if (out.status === 'cancelled')
+      throw new Stop(
+        'cancelled',
+        'CANCELLED',
+        'Cancelled. Whatever GitLab already merged or deployed stays; the pins are unchanged.'
+      )
+    if (out.status === 'interrupted')
+      throw new Stop('interrupted', 'LOCK_LOST', 'The run lost its lock; plan again.')
+    throw new Stop(
+      'failed',
+      out.code ?? 'DEPLOY_FAILED',
+      out.error ?? 'The GitLab pipeline did not deploy the version.'
+    )
+  }
+
+  try {
+    /** Docker only: the stack swarm reports on during wait_version. */
+    const viaAgent = facts.gitlab ? null : await agentLeg()
+    if (facts.gitlab) await gitlabLeg(facts.gitlab.step)
 
     // 3. every live replica runs the version
     await step('wait_version', `3. waiting for every replica to run ${version} (≤ 30 min)`)
@@ -733,21 +849,29 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
     let lastLine = ''
     /** When swarm started saying `degraded` without a break (null: it does not now). */
     let degradedSince: number | null = null
+    const stackName = viaAgent?.stackName ?? shared.key
     for (;;) {
       await checkpoint()
       let st: StackStatus | null | undefined
-      try {
-        st = await (deps.agentStack ?? agentStack)(driver, stackName, specHash)
-        misses = 0
-      } catch (err) {
-        if (!(err instanceof AgentError && err.code === 'AGENT_UNREACHABLE')) throw err
-        if (++misses >= AGENT_MISSES)
-          throw new Stop(
-            'failed',
-            'AGENT_UNREACHABLE',
-            `The Hub agent did not answer ${misses} times in a row while swarm updated ${stackName}.`
+      // A GitLab-run deployment has no stack the Hub can ask: its deploy job passed, so only the
+      // replicas' versions count (st stays undefined and is never read as swarm's answer).
+      if (viaAgent)
+        try {
+          st = await (deps.agentStack ?? agentStack)(
+            viaAgent.driver,
+            viaAgent.stackName,
+            viaAgent.specHash
           )
-      }
+          misses = 0
+        } catch (err) {
+          if (!(err instanceof AgentError && err.code === 'AGENT_UNREACHABLE')) throw err
+          if (++misses >= AGENT_MISSES)
+            throw new Stop(
+              'failed',
+              'AGENT_UNREACHABLE',
+              `The Hub agent did not answer ${misses} times in a row while swarm updated ${stackName}.`
+            )
+        }
       if (st?.state === 'rolled_back')
         throw new Stop(
           'failed',
@@ -780,20 +904,20 @@ async function runUpgrade(c: RunCtx, deps: SharedRunDeps): Promise<void> {
         seen.length
           ? `${seen.length - behind.length}/${seen.length} replicas run ${version}`
           : 'no replica seen yet'
-      }; swarm ${st === undefined ? 'not answering' : (st?.state ?? 'has no such stack')}`
+      }${viaAgent ? `; swarm ${st === undefined ? 'not answering' : (st?.state ?? 'has no such stack')}` : ''}`
       if (line !== lastLine) {
         run.log(`3. ${line}`)
         lastLine = line
       }
       // Both: every live replica on the version AND swarm done replacing tasks — a same-version
       // re-apply has every sighting right at once while swarm is still rolling (review minor 6).
-      const converged = st?.state === 'converged'
+      const converged = !viaAgent || st?.state === 'converged'
       if (seen.length && !behind.length && converged) break
       if (now() >= versionBy)
         throw new Stop(
           'failed',
           'VERSION_TIMEOUT',
-          seen.length && !behind.length
+          seen.length && !behind.length && viaAgent
             ? `Swarm did not finish updating ${stackName} within 30 minutes (last: ${st?.state ?? 'no answer'}).`
             : seen.length
               ? `Replicas still on another version after 30 minutes: ${behind
@@ -933,6 +1057,31 @@ async function recordApplied(
   }
   stored.spec_hash = /^[0-9a-f]{1,128}$/i.test(specHash) ? specHash : null
   stored.redis_url_fp = redisFp
+  await db(SHARED_DEPLOYS)
+    .where({ id: deployId })
+    .update({ plan: JSON.stringify(stored) })
+}
+
+/**
+ * Notes the GitLab build the deploy job ran on in the stored plan (`gitlab_build`: commit and
+ * pipeline), written once the deploy passed. A later rollback to this version reruns it.
+ */
+async function recordGitlabBuild(
+  deployId: number,
+  sha: string,
+  pipelineId: number | null
+): Promise<void> {
+  const row = await db(SHARED_DEPLOYS).where({ id: deployId }).first('plan')
+  let stored: Record<string, unknown> = {}
+  try {
+    stored = JSON.parse(String(row?.plan ?? '{}')) as Record<string, unknown>
+  } catch {
+    /* keep going */
+  }
+  stored.gitlab_build = {
+    sha: /^[0-9a-f]{7,64}$/i.test(sha) ? sha : null,
+    pipeline_id: Number.isInteger(pipelineId) ? pipelineId : null
+  }
   await db(SHARED_DEPLOYS)
     .where({ id: deployId })
     .update({ plan: JSON.stringify(stored) })
@@ -1087,6 +1236,7 @@ export async function healSharedDeploys(
     })
     if (!healed) continue
     n++
+    await dropGitlabBranches(id, r.plan, deps)
     if (r.job_run_id != null) {
       try {
         const at = r.started_at == null ? null : new Date(r.started_at as string)
@@ -1100,6 +1250,39 @@ export async function healSharedDeploys(
     }
   }
   return n
+}
+
+/**
+ * A healed GitLab run may have left its temporary branches (and a merge request open on them):
+ * deleted, so nothing it opened can still be merged. Best effort: one try each, never thrown.
+ */
+async function dropGitlabBranches(
+  deployId: number,
+  rawPlan: unknown,
+  deps: SharedRunDeps
+): Promise<void> {
+  let driverId: number | null = null
+  try {
+    const p = JSON.parse(String(rawPlan ?? '{}')) as {
+      plan?: { runner?: unknown; kind?: unknown; gitlab?: { driver_id?: unknown } | null }
+    }
+    if (p.plan?.runner !== 'gitlab' || p.plan.kind === 'rollback') return
+    const d = p.plan.gitlab?.driver_id
+    driverId = typeof d === 'number' && Number.isInteger(d) ? d : null
+  } catch {
+    return
+  }
+  if (driverId == null) return
+  try {
+    const d = await getDriver(driverId)
+    if (d?.kind !== 'gitlab') return
+    const ctx = (deps.gitCtx ?? driverCtx)(d)
+    const temp = `hub/promote-${deployId}-${SHARED_GITLAB_POSITION}`
+    for (const b of [temp, `${temp}-src`])
+      await (deps.deleteBranch ?? deleteBranch)(ctx, b).catch(() => undefined)
+  } catch {
+    /* bookkeeping never breaks healing */
+  }
 }
 
 /** Heals at most `ms` before a read; never throws. */
