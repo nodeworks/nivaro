@@ -23,7 +23,12 @@ let fixed = 0
 
 for (const file of walk(dist)) {
   const content = readFileSync(file, 'utf8')
-  const updated = content.replace(/from ['"]\.\.\/graphql['"]/g, "from 'graphql'")
+  // Any depth: a file three folders down gets '../../../graphql' (services/hub/api/graphql.js,
+  // 0.3.215 canary died on it: ERR_UNSUPPORTED_DIR_IMPORT). Only the bare folder name is the
+  // package; '../graphql/scalars.js' and the like are real local imports and stay.
+  const updated = content
+    .replace(/from ['"](?:\.\.?\/)+graphql['"]/g, "from 'graphql'")
+    .replace(/import\(['"](?:\.\.?\/)+graphql['"]\)/g, "import('graphql')")
   if (updated !== content) {
     writeFileSync(file, updated)
     fixed++
