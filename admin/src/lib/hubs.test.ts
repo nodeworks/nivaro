@@ -30,9 +30,13 @@ describe('hub registry', () => {
       'Drivers',
       'Targets',
       'Databases',
-      'Sign-in'
+      'Sign-in',
+      'Fleet',
+      'Audit'
     ])
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
+    expect(hubForPath('/hub/fleet')?.tab.label).toBe('Fleet')
+    expect(hubForPath('/hub/audit')?.tab.label).toBe('Audit')
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
     expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
   })
