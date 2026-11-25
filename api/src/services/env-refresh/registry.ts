@@ -461,6 +461,14 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_uptime_hours',
       'nivaro_hub_fleet_alerts',
       'nivaro_hub_slo_reports',
+      // Hub insight (577): usage counts, dependency hosts, health history, digest switches/sends
+      'nivaro_hub_usage_days',
+      'nivaro_hub_usage_screens',
+      'nivaro_hub_dependencies',
+      'nivaro_hub_insight_state',
+      'nivaro_hub_health_scores',
+      'nivaro_hub_digest_prefs',
+      'nivaro_hub_digest_sends',
       // Hub incidents, on-call and status pages (576)
       'nivaro_hub_incidents',
       'nivaro_hub_incident_events',

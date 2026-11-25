@@ -68,6 +68,7 @@ const { up: up543 } = await import('../../../db/migrations/543_hub_promotions.js
 const { up: up570 } = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { hubSigninAdminRoutes } = await import('../../../routes/hub-signin-admin.js')
+const { hubInsightRoutes } = await import('../../../routes/hub-insight.js')
 const auth = await import('../../../middleware/authenticate.js')
 const { OWNER_GUARDED, OWNER_UNGUARDED, isProductionEnv } = await import(
   '../../../services/hub/owner-access.js'
@@ -113,6 +114,8 @@ beforeAll(async () => {
   await app.register(hubRoutes, { prefix: '/api/hub' })
   // The sign-in plugin is its own mount: the owner rule and the guard test cover it too (M2).
   await app.register(hubSigninAdminRoutes, { prefix: '/api/hub/signin' })
+  // Hub insight is its own mount too: its non-admin writes are listed in OWNER_UNGUARDED.
+  await app.register(hubInsightRoutes, { prefix: '/api/hub' })
   await app.ready()
 })
 afterAll(async () => {

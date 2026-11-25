@@ -32,7 +32,8 @@ export interface LinkReadResult {
   body: unknown
 }
 
-export type OpsWhat = 'issues' | 'files'
+/** `usage` + `dependencies`: Hub insight (enhancements 36 + 37, routes/hub-insight-link.ts). */
+export type OpsWhat = 'issues' | 'files' | 'usage' | 'dependencies'
 
 export interface LinkReadDeps {
   fetch?: (
