@@ -19,7 +19,7 @@ import {
   type SystemTable,
   systemDetailQuery
 } from './outside-write-system.js'
-import { announceRawWrites, BULK_CAP } from './raw-write-announcer.js'
+import { announceRawWrites, BULK_CAP, isLockTimeout } from './raw-write-announcer.js'
 import { runLongSql } from './run-long.js'
 import { appKeyPart } from './tenancy/credential-binding.js'
 import { currentTenantKey } from './tenant-rooms.js'
@@ -65,9 +65,11 @@ import { currentTenantKey } from './tenant-rooms.js'
  * inside its own tenant context: its own database (SQL Server apps only; Postgres and MySQL apps
  * return at once, as self-hosted), its own settings, state (appMap / appBox, dropped when the app
  * leaves), journal entries (its tenant-scoped rooms only), viewers and Redis keys (appKeyPart()).
- * One look of one app stops starting collections after APP_LOOK_BUDGET_MS and resumes with the
- * first one it skipped at the next look, so a slow app neither holds its lane long nor starves
- * its own last collections. Nivaro Cloud still never runs it.
+ * One look of one app is bounded by APP_LOOK_BUDGET_MS as a whole: no collection, dependents
+ * table or file lookup starts after it, each statement's timeout is the rest of the budget (at
+ * least 1 s, at most 5 s), and what was not read is read first at the next look (the dependents
+ * group keeps its version range and the tables done). Every watch read waits at most
+ * WATCH_LOCK_TIMEOUT_MS on a lock (a 1222 = next look). Nivaro Cloud still never runs it.
  */
 
 export const OUTSIDE_WRITES_KEY = 'outside_writes'
@@ -149,8 +151,8 @@ export function outsideWriteEnv(raw = process.env.OUTSIDE_WRITE_WATCH): boolean 
 }
 
 // ── Storage: this instance's nivaro_settings_overrides row, key `outside_writes` ────────
-// On a shared deployment: the app's own database, with the one-other-row fallback of
-// services/instance-row.ts (a moved app's row carries its old stack's instance name).
+// On a shared deployment: the app's own database, the deployment's instance key; a move to shared
+// carries the app's row there (services/move-carry.ts).
 
 const settingsCache = appBox<{ at: number; value: OutsideWriteSettings } | null>(() => null)
 
@@ -464,6 +466,30 @@ export interface WatchWindow {
 
 const qid = (s: string) => `[${s.replace(/]/g, ']]')}]`
 
+/** How long a watch read waits on a lock before it gives up for this look (an error 1222). */
+export const WATCH_LOCK_TIMEOUT_MS = 1000
+
+/**
+ * A watch read with a bounded lock wait (pure): READPAST passes row locks but not a table lock
+ * (the publisher's daily snapshot holds tables 16–30 s), so the read waits at most
+ * WATCH_LOCK_TIMEOUT_MS and the session's lock timeout is restored on both paths (a pooled
+ * connection must not keep it). A 1222 is "read again next look", never an error.
+ */
+export function lockBounded(sql: string, ms = WATCH_LOCK_TIMEOUT_MS): string {
+  return `SET LOCK_TIMEOUT ${Math.max(1, Math.floor(ms))};
+BEGIN TRY
+${sql.trim().replace(/;+$/, '')};
+END TRY
+BEGIN CATCH
+  SET LOCK_TIMEOUT -1;
+  THROW;
+END CATCH
+SET LOCK_TIMEOUT -1;`
+}
+
+/** A look cut by its time budget inside one table (the table is read again next look). */
+class LookCut extends Error {}
+
 /**
  * The read for one collection's look (pure). Stamps are the database's own (validated before
  * they are written into the text); names come from the catalog. Two range seeks on the index.
@@ -573,6 +599,9 @@ interface CollState {
   /** Change tracking: the last version announced up to, and the one the next look reads to. */
   ctLast?: string
   ctPending?: string
+  /** Dependents group, a look its budget or a lock cut: tables of (ctLast, ctPending] read already
+   *  (the next look reads the same range without them, then advances). */
+  depDone?: string[]
 }
 
 export interface CollectionStatus {
@@ -750,6 +779,10 @@ async function lookDependents(o: {
   recentMs: number
   mine: Map<string, { ids: Set<string>; whole: boolean }>
   wm: Record<string, string>
+  /** The look's own time budget is spent (shared deployment); never on a single-app process. */
+  outOfTime: () => boolean
+  /** The timeout of the next statement (the rest of the budget, 1–5 s). */
+  stmtMs: () => number
 }): Promise<Map<string, { caught: number; deduped: number }>> {
   const counts = new Map<string, { caught: number; deduped: number }>()
   const tracked = await trackedTables()
@@ -763,13 +796,45 @@ async function lookDependents(o: {
   if (!tables.length) return counts
   const st = states.get(DEP_KEY) ?? (await resumeState(DEP_KEY))
   const step = changeTrackingStep(st, o.current, null)
-  const next = { ...(st ?? {}), u: o.clock.u, l: o.clock.l, ...step.next }
-  states.set(DEP_KEY, next)
-  o.wm[DEP_KEY] = JSON.stringify({ ...next, at: o.now })
-  if (step.kind !== 'read') return counts
-  const moved = (
-    await runLongSql<{ t: string }>(probeQuery(tables, step.from, step.to), { timeoutMs: 5000 })
-  ).map((r) => r.t)
+  const save = (s: CollState) => {
+    states.set(DEP_KEY, s)
+    o.wm[DEP_KEY] = JSON.stringify({ ...s, at: o.now })
+  }
+  const advanced: CollState = {
+    ...(st ?? {}),
+    u: o.clock.u,
+    l: o.clock.l,
+    ...step.next,
+    depDone: undefined
+  }
+  if (step.kind !== 'read') {
+    save(advanced)
+    return counts
+  }
+  // A cut look keeps the range (ctLast, ctPending] and the tables already read in it.
+  const done = new Set(st?.depDone ?? [])
+  const keep = (): CollState => ({
+    ...(st as CollState),
+    u: o.clock.u,
+    l: o.clock.l,
+    depDone: [...done]
+  })
+  let moved: string[]
+  try {
+    if (o.outOfTime()) throw new LookCut()
+    moved = (
+      await runLongSql<{ t: string }>(lockBounded(probeQuery(tables, step.from, step.to)), {
+        timeoutMs: o.stmtMs()
+      })
+    ).map((r) => r.t)
+  } catch (err) {
+    if (err instanceof LookCut || isLockTimeout(err)) {
+      save(keep())
+      return counts
+    }
+    throw err
+  }
+  let cut = false
   const bump = (c: string, k: 'caught' | 'deduped', n: number) => {
     const key = c.toLowerCase()
     const cur = counts.get(key) ?? { caught: 0, deduped: 0 }
@@ -777,12 +842,17 @@ async function lookDependents(o: {
     counts.set(key, cur)
   }
   for (const t of moved) {
+    if (done.has(t)) continue
+    if (o.outOfTime()) {
+      cut = true
+      break
+    }
     try {
       let notices: ReturnType<typeof mapChildRows>
       if ((SYSTEM_TABLES as readonly string[]).includes(t)) {
         const rows = await runLongSql<Record<string, unknown>>(
-          systemDetailQuery(t as SystemTable, step.from, step.to),
-          { timeoutMs: 5000 }
+          lockBounded(systemDetailQuery(t as SystemTable, step.from, step.to)),
+          { timeoutMs: o.stmtMs() }
         )
         const plan = mapSystemRows(t as SystemTable, rows)
         notices = plan.notices
@@ -801,15 +871,17 @@ async function lookDependents(o: {
           const { announceFileCarriers, recordsCarryingFile } = await import(
             './related-announce.js'
           )
-          for (const f of plan.files.slice(0, 50))
+          for (const f of plan.files.slice(0, 50)) {
+            if (o.outOfTime()) throw new LookCut()
             announceFileCarriers(await recordsCarryingFile(f))
+          }
           bump('nivaro_files', 'caught', plan.files.length)
         }
       } else {
         const pk = o.catalog.get(t.toLowerCase())?.pk as string
         const rows = await runLongSql<Record<string, unknown>>(
-          childDetailQuery(t, pk, step.from, step.to),
-          { timeoutMs: 5000 }
+          lockBounded(childDetailQuery(t, pk, step.from, step.to)),
+          { timeoutMs: o.stmtMs() }
         )
         notices = mapChildRows(t, rels, rows)
       }
@@ -832,10 +904,18 @@ async function lookDependents(o: {
         bump(n.collection, 'caught', 1)
       }
       if (e.deduped) bump(t, 'deduped', e.deduped)
-    } catch {
-      /* one table's read failing never stops the others */
+      done.add(t)
+    } catch (err) {
+      // out of time or waiting on a lock: this table and the rest are read again next look
+      if (err instanceof LookCut || isLockTimeout(err)) {
+        cut = true
+        break
+      }
+      /* any other failure of one table's read never stops the others (nor holds the group) */
+      done.add(t)
     }
   }
+  save(cut ? keep() : advanced)
   return counts
 }
 
@@ -887,8 +967,15 @@ export async function outsideWriteTick(
   lastTickAt.value = now
   const t0 = Date.now()
   const outOfTime = () => Date.now() - t0 >= budgetMs
+  // One statement may run past the budget by at most a second (and never past 5 s).
+  const stmtMs = () =>
+    Number.isFinite(budgetMs) ? Math.min(5000, Math.max(1000, budgetMs - (Date.now() - t0))) : 5000
 
-  // 1. what the app announced since the last look (dedupe)
+  // 1. what the app announced since the last look (dedupe). The journal is one deployment-wide
+  //    sorted set with no per-app index, so on a shared deployment each app's look reads the
+  //    whole slice since its cursor (≤ 5000 entries) and keeps only its own rooms; past 5000 in one
+  //    interval dedupe is weaker (a few harmless re-announces), never wrong. A per-app journal
+  //    index would trim this; noted in the Hub gap report.
   const recentMs = recentWindowMs(settings.interval_seconds)
   const tail = await journalTail(journalCursor.value)
   if (tail) {
@@ -973,8 +1060,10 @@ export async function outsideWriteTick(
           counts.caught = 1
         } else if (step.kind === 'read') {
           const rows = await runLongSql<{ id: unknown; op: unknown }>(
-            changeTableQuery({ schema: j.schema, table: j.table, pk: j.pk }, step.from, step.to),
-            { timeoutMs: 5000 }
+            lockBounded(
+              changeTableQuery({ schema: j.schema, table: j.table, pk: j.pk }, step.from, step.to)
+            ),
+            { timeoutMs: stmtMs() }
           )
           if (rows.length > ROW_CAP) {
             await announceRawWrites(j.collection, null, { source: 'outside-write-watch' })
@@ -1005,6 +1094,11 @@ export async function outsideWriteTick(
         report.deduped += counts.deduped
         if (counts.caught || counts.deduped) caughtBy.set(key, counts)
       } catch (err) {
+        if (isLockTimeout(err)) {
+          // a lock held the table (a snapshot, a long transaction): read again next look
+          status.reason = 'A lock held the table; it is read again at the next look.'
+          continue
+        }
         status.state = 'error'
         status.reason = /timeout/i.test(err instanceof Error ? err.message : '')
           ? 'The look took longer than 5 seconds and was stopped.'
@@ -1029,8 +1123,8 @@ export async function outsideWriteTick(
     try {
       report.watched++
       const rows = await runLongSql<{ id: unknown; ts: unknown }>(
-        watchQuery({ schema: j.schema, table: j.table, ts: j.ts ?? '', pk: j.pk }, w),
-        { timeoutMs: 5000 }
+        lockBounded(watchQuery({ schema: j.schema, table: j.table, ts: j.ts ?? '', pk: j.pk }, w)),
+        { timeoutMs: stmtMs() }
       )
       const counts = { caught: 0, deduped: 0 }
       if (rows.length > ROW_CAP) {
@@ -1064,6 +1158,11 @@ export async function outsideWriteTick(
       report.deduped += counts.deduped
       if (counts.caught || counts.deduped) caughtBy.set(key, counts)
     } catch (err) {
+      if (isLockTimeout(err)) {
+        // a lock held the table: the window stays where it was and is read again next look
+        status.reason = 'A lock held the table; it is read again at the next look.'
+        continue
+      }
       status.state = 'error'
       status.reason = /timeout/i.test(err instanceof Error ? err.message : '')
         ? 'The look took longer than 5 seconds and was stopped.'
@@ -1083,7 +1182,9 @@ export async function outsideWriteTick(
         catalog,
         recentMs,
         mine,
-        wm
+        wm,
+        outOfTime,
+        stmtMs
       })
       for (const [k, n] of dep) {
         const cur = caughtBy.get(k) ?? { caught: 0, deduped: 0 }

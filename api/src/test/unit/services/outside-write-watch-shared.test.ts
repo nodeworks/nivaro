@@ -11,7 +11,11 @@ const st = vi.hoisted(() => ({
   mssql: true,
   rooms: [] as Array<{ room: string; size: number }>,
   keys: [] as string[],
-  announced: [] as Array<{ c: string; ids: unknown }>
+  announced: [] as Array<{ c: string; ids: unknown }>,
+  ct: null as string | null,
+  tracked: [] as Array<{ tbl: string }>,
+  sql: [] as string[],
+  runLong: (_sql: string): unknown[] | Promise<unknown[]> => []
 }))
 
 const chain = (rows: unknown[] = []) => {
@@ -48,7 +52,8 @@ vi.mock('../../../db/index.js', () => {
         { sch: 'dbo', tbl, col: 'id', ord: 1, pk: 1 },
         { sch: 'dbo', tbl, col: 'date_updated', ord: 1, pk: 0 }
       ])
-    else if (sql.includes('CHANGE_TRACKING_CURRENT_VERSION')) rows = [{ v: null }]
+    else if (sql.includes('CHANGE_TRACKING_CURRENT_VERSION')) rows = [{ v: st.ct }]
+    else if (sql.includes("s.name = 'dbo'")) rows = st.tracked
     const p = Promise.resolve(rows) as Promise<unknown[]> & { catch: unknown }
     return p
   }
@@ -68,11 +73,18 @@ vi.mock('../../../services/event-journal.js', () => ({
 vi.mock('../../../services/collection-live-mode.js', () => ({ liveModeOf: async () => 'on' }))
 vi.mock('../../../services/raw-write-announcer.js', () => ({
   BULK_CAP: 200,
+  isLockTimeout: (e: unknown) => /Lock request time out/i.test(String((e as Error)?.message)),
   announceRawWrites: async (c: string, ids: unknown) => {
     st.announced.push({ c, ids })
   }
 }))
-vi.mock('../../../services/run-long.js', () => ({ runLongSql: async () => [] }))
+vi.mock('../../../services/run-long.js', () => ({
+  runLongSql: async (sql: string) => {
+    st.sql.push(sql)
+    return st.runLong(sql)
+  }
+}))
+vi.mock('../../../services/collections.js', () => ({ getRelations: async () => [] }))
 vi.mock('../../../plugins/socketio.js', () => ({
   getLocalRealtimeStats: () => ({ rooms: st.rooms, sockets: [] }),
   getRecordViewerSnapshot: () => []
@@ -104,6 +116,10 @@ beforeEach(() => {
   st.mssql = true
   st.keys = []
   st.announced = []
+  st.ct = null
+  st.tracked = []
+  st.sql = []
+  st.runLong = () => []
   st.rooms = [
     { room: 't:a:collection:orders', size: 2 },
     { room: 't:a:collection:invoices', size: 1 },
@@ -202,5 +218,75 @@ describe('outside-write watch per app on a shared deployment', () => {
     expect([...(w.journalAnnounced(entries, 'a').get('orders')?.ids ?? [])]).toEqual(['1'])
     expect([...(w.journalAnnounced(entries, 'b').get('orders')?.ids ?? [])]).toEqual(['2'])
     expect([...(w.journalAnnounced(entries, '').get('orders')?.ids ?? [])]).toEqual(['3'])
+  })
+})
+
+// Review fixes M2 / L3: the budget covers the dependents group too, and a lock is "next look".
+describe('outside-write watch: bounded looks', () => {
+  const lockErr = () => new Error('Lock request time out period exceeded.')
+  const T0 = Date.parse('2026-11-24T10:00:00Z')
+
+  it('wraps every watch read in a bounded lock wait that is reset on both paths', () => {
+    const sql = w.lockBounded('SELECT 1 AS x;')
+    expect(sql).toMatch(new RegExp(`^SET LOCK_TIMEOUT ${w.WATCH_LOCK_TIMEOUT_MS};`))
+    expect(sql).toMatch(/BEGIN TRY\nSELECT 1 AS x;\nEND TRY/)
+    expect(sql).toMatch(
+      /BEGIN CATCH\s+SET LOCK_TIMEOUT -1;\s+THROW;\s+END CATCH\s+SET LOCK_TIMEOUT -1;$/
+    )
+  })
+
+  it('a lock on a collection is read again next look, never an error', async () => {
+    st.tenant = 'a'
+    await w.outsideWriteTick(T0, Number.POSITIVE_INFINITY) // first sight: starting
+    st.runLong = () => {
+      throw lockErr()
+    }
+    await w.outsideWriteTick(T0 + 20_000, Number.POSITIVE_INFINITY)
+    expect(st.sql.length).toBeGreaterThan(0)
+    expect(st.sql.every((q) => q.startsWith('SET LOCK_TIMEOUT'))).toBe(true)
+    const statuses = (await w.outsideWriteReport()).statuses
+    expect(statuses.map((x) => x.state)).not.toContain('error')
+    expect(statuses.find((x) => x.collection === 'orders')?.reason).toMatch(/lock/)
+  })
+
+  it('a cut dependents look keeps its version range and reads it again, then moves on', async () => {
+    st.tenant = 'a'
+    st.tracked = [{ tbl: 'nivaro_tasks' }]
+    const probes = () => st.sql.filter((q) => q.includes('CHANGE_TRACKING_MIN_VALID_VERSION'))
+    let t = T0
+    const look = async () => {
+      t += 20_000
+      return w.outsideWriteTick(t, Number.POSITIVE_INFINITY)
+    }
+    st.ct = '100'
+    await look() // start
+    st.ct = '120'
+    await look() // idle: (100, 100] → pending 120
+    st.ct = '130'
+    st.runLong = (sql) => {
+      if (sql.includes('CHANGE_TRACKING_MIN_VALID_VERSION')) return [{ t: 'nivaro_tasks' }]
+      throw lockErr()
+    }
+    await look() // reads (100, 120]: the detail read waits on a lock → cut
+    const first = probes().at(-1) as string
+    expect(first).toMatch(/\b100\b/)
+    expect(first).toMatch(/\b120\b/)
+    st.ct = '140'
+    st.runLong = (sql) =>
+      sql.includes('CHANGE_TRACKING_MIN_VALID_VERSION') ? [{ t: 'nivaro_tasks' }] : []
+    await look() // the same range again, now read
+    expect(probes().at(-1)).toBe(first)
+    await look() // advanced: (120, 140]
+    const next = probes().at(-1) as string
+    expect(next).not.toBe(first)
+    expect(next).toMatch(/\b140\b/)
+  })
+
+  it('a look past its budget does not start the dependents group', async () => {
+    st.tenant = 'a'
+    st.tracked = [{ tbl: 'nivaro_tasks' }]
+    st.ct = '100'
+    await w.outsideWriteTick(T0, 0)
+    expect(st.sql).toEqual([])
   })
 })
