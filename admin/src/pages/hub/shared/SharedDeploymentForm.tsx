@@ -17,10 +17,12 @@ import {
   type SharedCreated,
   type SharedDeployment,
   type SharedDetail,
+  type SharedGitlab,
   type SharedInput,
   type SharedMode,
   type SharedRotated,
   sharedError,
+  sharedGitlabOf,
   sharedKeys,
   updateShared
 } from './shared-api'
@@ -44,6 +46,14 @@ interface Draft {
   pool_budget: string
   size: 'small' | 'medium' | 'large'
   redis: 'bundled' | 'external'
+  /** Registered: who upgrades it — its own pipeline (the Hub watches) or the Hub through GitLab. */
+  upgrades: 'watch' | 'gitlab'
+  gl_driver_id: string
+  gl_source: string
+  gl_target: string
+  gl_pin: string
+  gl_before: string
+  gl_deploy: string
 }
 
 const PATTERN_RE = /^\*\.(?:[a-z0-9-]{1,63}\.)+[a-z0-9-]{1,63}$/
@@ -57,6 +67,15 @@ const PIN_RE =
 /** An external Redis address. */
 const REDIS_URL_RE = /^rediss?:\/\/\S+$/
 const STACK_RE = /^[a-z][a-z0-9-]{1,40}$/
+/** A branch name git takes (twin of the API's isGitBranchName in services/hub/shared/store.ts). */
+export function isGitBranchName(t: string): boolean {
+  if (!t || t.length > 200 || /\p{Cc}/u.test(t) || /[\s~^:?*[\\]/.test(t)) return false
+  if (t === '@' || t.includes('..') || t.includes('//') || t.includes('@{')) return false
+  if (t.startsWith('-') || t.startsWith('/') || t.endsWith('/') || t.endsWith('.')) return false
+  return t.split('/').every((part) => !part.startsWith('.') && !part.endsWith('.lock'))
+}
+/** A path in the repository: no leading slash, no `..` (twin of the API's PIN_FILE_RE). */
+const PIN_FILE_RE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[^\s\\]{1,300}$/
 
 function draftOf(s: SharedDeployment | null): Draft {
   return {
@@ -74,7 +93,37 @@ function draftOf(s: SharedDeployment | null): Draft {
     pool_budget: String(s?.pool_budget ?? 60),
     size:
       s?.settings?.size === 'medium' || s?.settings?.size === 'large' ? s.settings.size : 'small',
-    redis: s?.settings?.redis === 'external' ? 'external' : 'bundled'
+    redis: s?.settings?.redis === 'external' ? 'external' : 'bundled',
+    ...gitlabDraft(s)
+  }
+}
+
+function gitlabDraft(s: SharedDeployment | null) {
+  const g = s ? sharedGitlabOf(s) : null
+  return {
+    upgrades: g ? ('gitlab' as const) : ('watch' as const),
+    gl_driver_id: g && s?.driver_id != null ? String(s.driver_id) : '',
+    gl_source: g?.source_branch ?? '',
+    gl_target: g?.target_branch ?? '',
+    gl_pin: g?.pin_file ?? '',
+    gl_before: g?.before_job ?? '',
+    gl_deploy: g?.deploy_job ?? ''
+  }
+}
+
+/** The Hub upgrades it through GitLab (a registered deployment with that choice). */
+const viaGitlab = (d: Draft) => d.mode === 'registered' && d.upgrades === 'gitlab'
+
+/** The draft's `settings.gitlab` (null = watched only). */
+function gitlabOf(d: Draft): SharedGitlab | null {
+  if (!viaGitlab(d)) return null
+  const opt = (v: string) => v.trim() || null
+  return {
+    source_branch: d.gl_source.trim(),
+    target_branch: d.gl_target.trim(),
+    pin_file: opt(d.gl_pin),
+    before_job: opt(d.gl_before),
+    deploy_job: opt(d.gl_deploy)
   }
 }
 
@@ -124,6 +173,17 @@ export function sharedDraftErrors(
   const pins = pinMap(d.pins)
   if (!pins || Object.entries(pins).some(([id, v]) => !exts.includes(id) || !PIN_RE.test(v)))
     e.pins = 'One extension=image per line (repo@sha256:digest), for an extension listed above'
+  if (viaGitlab(d)) {
+    if (!d.gl_driver_id) e.gl_driver_id = 'Pick the GitLab driver that runs its pipeline'
+    if (!isGitBranchName(d.gl_source.trim()))
+      e.gl_source = 'The branch that holds the release commits (a git branch name)'
+    if (!isGitBranchName(d.gl_target.trim()))
+      e.gl_target = 'The branch only this deployment deploys (a git branch name)'
+    else if (d.gl_target.trim() === d.gl_source.trim())
+      e.gl_target = 'Another branch than the release branch'
+    if (d.gl_pin.trim() && !PIN_FILE_RE.test(d.gl_pin.trim()))
+      e.gl_pin = 'A path in the repository, or empty for the driver’s'
+  }
   const budget = Number(d.pool_budget)
   if (!/^\d+$/.test(d.pool_budget.trim()) || budget < 1 || budget > 500)
     e.pool_budget = 'A whole number from 1 to 500'
@@ -132,12 +192,15 @@ export function sharedDraftErrors(
 
 function inputOf(d: Draft, stored: Record<string, unknown> = {}): SharedInput {
   const docker = d.mode === 'docker'
+  const gitlab = gitlabOf(d)
+  const { gitlab: _was, ...rest } = stored
   return {
     ...(docker ? { settings: { ...stored, size: d.size, redis: d.redis } } : {}),
+    ...(!docker ? { settings: gitlab ? { ...rest, gitlab } : rest } : {}),
     key: d.key.trim(),
     name: d.name.trim(),
     mode: d.mode,
-    driver_id: docker ? Number(d.driver_id) : null,
+    driver_id: docker ? Number(d.driver_id) : gitlab ? Number(d.gl_driver_id) : null,
     stack: docker && d.stack.trim() ? d.stack.trim() : null,
     link_url: d.link_url.trim().replace(/\/$/, ''),
     host_pattern: d.host_pattern.trim() || null,
@@ -159,6 +222,19 @@ function changesOf(row: SharedDeployment, next: SharedInput): Partial<SharedInpu
   if (JSON.stringify(next.extension_pins) !== JSON.stringify(row.extension_pins ?? {}))
     out.extension_pins = next.extension_pins
   if (next.pool_budget !== row.pool_budget) out.pool_budget = next.pool_budget
+  // Registered: the GitLab driver and settings.gitlab change together (the API wants both).
+  if (row.mode === 'registered') {
+    const was = sharedGitlabOf(row)
+    const now = (next.settings?.gitlab as SharedGitlab | undefined) ?? null
+    if (
+      (next.driver_id ?? null) !== (was ? row.driver_id : null) ||
+      JSON.stringify(now) !== JSON.stringify(was)
+    ) {
+      out.driver_id = next.driver_id ?? null
+      out.settings = next.settings
+    }
+    return out
+  }
   // Size and Redis are compared as the stack reads them (missing = small / bundled).
   if (next.settings) {
     const was = draftOf(row)
@@ -186,6 +262,11 @@ const SIZE_OPTIONS = [
 const REDIS_OPTIONS = [
   { value: 'bundled', label: 'Bundled (in the stack)' },
   { value: 'external', label: 'External' }
+]
+
+const UPGRADES_OPTIONS = [
+  { value: 'watch', label: 'By its own pipeline (the Hub watches)' },
+  { value: 'gitlab', label: 'By the Hub, through GitLab' }
 ]
 
 const MODE_OPTIONS = (['registered', 'docker'] as const).map((m) => ({
@@ -243,6 +324,18 @@ export function SharedDeploymentForm({
     enabled: creating && d.mode === 'docker'
   })
   const dockerDrivers = (drivers.data ?? []).filter((x) => x.kind === 'docker')
+  const gitlabDrivers = useQuery({
+    queryKey: hubKeys.drivers(),
+    queryFn: fetchDrivers,
+    enabled: viaGitlab(d)
+  })
+  const gitlabChoices = (gitlabDrivers.data ?? []).filter((x) => x.kind === 'gitlab')
+  const gitlabDriver = gitlabChoices.find((x) => String(x.id) === d.gl_driver_id)
+  /** The driver's own value, said in a hint (" (deploy_production)"); '' before one is picked. */
+  const driverDefault = (k: 'pin_file' | 'deploy_job') => {
+    const v = (gitlabDriver?.config as Record<string, unknown> | undefined)?.[k]
+    return typeof v === 'string' && v ? ` (${v})` : ''
+  }
 
   const changes = shared
     ? {
@@ -398,6 +491,151 @@ export function SharedDeploymentForm({
               className='h-8 font-mono text-[13px]'
             />
           </Field>
+        )}
+
+        {d.mode === 'registered' && (
+          <Field
+            id='sh-upgrades'
+            label='Upgrades'
+            hint={
+              viaGitlab(d)
+                ? 'The Hub merges and pins the version in GitLab, runs the deploy job, then waits for every app.'
+                : 'Its own pipeline upgrades it; the Hub records the version it sees.'
+            }
+          >
+            <SimpleSelect
+              value={d.upgrades}
+              onChange={(v) => set({ upgrades: v as Draft['upgrades'] })}
+              options={UPGRADES_OPTIONS}
+              ariaLabel='Upgrades'
+              className='h-8 bg-white text-left text-[13px] dark:bg-background'
+              triggerProps={{ id: 'sh-upgrades' }}
+            />
+          </Field>
+        )}
+
+        {viaGitlab(d) && (
+          <section
+            aria-labelledby='sh-gl-heading'
+            className='space-y-3 border-y border-slate-200 py-4 md:col-span-2 dark:border-border'
+          >
+            <div>
+              <h3
+                id='sh-gl-heading'
+                className='m-0 text-[13px] font-semibold text-slate-900 dark:text-foreground'
+              >
+                GitLab
+              </h3>
+              <p className='m-0 mt-0.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
+                In the order an upgrade uses them: the release commit is merged onto the deploy
+                branch with the version pinned, then the deploy job runs.
+              </p>
+            </div>
+            <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
+              <Field
+                id='sh-gl-driver'
+                label='GitLab driver'
+                error={err('gl_driver_id')}
+                hint={
+                  gitlabDrivers.isSuccess && gitlabChoices.length === 0
+                    ? 'No GitLab driver yet: add one on the Drivers tab first.'
+                    : 'The project whose pipeline deploys it.'
+                }
+              >
+                <SimpleSelect
+                  value={d.gl_driver_id}
+                  onChange={(v) => set({ gl_driver_id: v })}
+                  options={[
+                    { value: '', label: 'Pick a driver' },
+                    ...gitlabChoices.map((x) => ({ value: String(x.id), label: x.name }))
+                  ]}
+                  ariaLabel='GitLab driver'
+                  className='h-8 bg-white text-left text-[13px] dark:bg-background'
+                  triggerProps={{ id: 'sh-gl-driver' }}
+                />
+              </Field>
+
+              <Field
+                id='sh-gl-source'
+                label='Release branch'
+                error={err('gl_source')}
+                hint='Holds the release commits, titled "… nivaro 0.3.x".'
+              >
+                <Input
+                  id='sh-gl-source'
+                  value={d.gl_source}
+                  onChange={(e) => set({ gl_source: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  placeholder='release'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+
+              <Field
+                id='sh-gl-target'
+                label='Deploy branch'
+                error={err('gl_target')}
+                hint='Its deploy job runs on it. Nothing else may deploy this branch: no environment, no other shared deployment.'
+              >
+                <Input
+                  id='sh-gl-target'
+                  value={d.gl_target}
+                  onChange={(e) => set({ gl_target: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  placeholder='shared-production'
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+
+              <Field
+                id='sh-gl-pin'
+                label='Pin file'
+                error={err('gl_pin')}
+                hint={`Where the version and image digests are committed. Leave empty to use the driver's${driverDefault('pin_file')}.`}
+              >
+                <Input
+                  id='sh-gl-pin'
+                  value={d.gl_pin}
+                  onChange={(e) => set({ gl_pin: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+
+              <Field
+                id='sh-gl-before'
+                label='Job to wait for first'
+                hint='Optional: a build or test job that must pass before the deploy job.'
+              >
+                <Input
+                  id='sh-gl-before'
+                  value={d.gl_before}
+                  onChange={(e) => set({ gl_before: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+
+              <Field
+                id='sh-gl-deploy'
+                label='Deploy job'
+                hint={`Played by the Hub when it is a manual job, else waited for. Leave empty to use the driver's${driverDefault('deploy_job')}.`}
+              >
+                <Input
+                  id='sh-gl-deploy'
+                  value={d.gl_deploy}
+                  onChange={(e) => set({ gl_deploy: e.target.value })}
+                  autoComplete='off'
+                  spellCheck={false}
+                  className='h-8 font-mono text-[13px]'
+                />
+              </Field>
+            </div>
+          </section>
         )}
 
         <Field

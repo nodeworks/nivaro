@@ -908,6 +908,13 @@ function driverRoutes(app: FastifyInstance) {
     if (!done.ok) {
       if (done.code === 'IN_USE')
         return fail(reply, 409, 'IN_USE', 'An environment still uses this driver')
+      if (done.code === 'DRIVER_IN_USE')
+        return fail(
+          reply,
+          409,
+          'DRIVER_IN_USE',
+          `The shared deployment ${done.shared} deploys through this driver — point it at another driver, or retire it, first`
+        )
       return notFound(reply)
     }
     await logActivity({

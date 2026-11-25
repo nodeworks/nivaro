@@ -6,6 +6,7 @@ vi.mock('../../../db/index.js', () => {
     vi.fn((table: string) => {
       const chain: Record<string, unknown> = {}
       chain.where = () => chain
+      chain.whereNot = () => chain
       chain.join = () => chain
       chain.orWhereIn = () => chain
       chain.select = () => chain
@@ -20,7 +21,10 @@ vi.mock('../../../db/index.js', () => {
       chain.del = () => Promise.resolve(1)
       return chain
     }),
-    { transaction: async (fn: (trx: unknown) => unknown) => fn(db) }
+    {
+      transaction: async (fn: (trx: unknown) => unknown) => fn(db),
+      schema: { hasTable: async () => true }
+    }
   )
   return { db }
 })

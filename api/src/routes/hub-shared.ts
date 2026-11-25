@@ -112,7 +112,10 @@ const PATCHABLE = [
   'extensions',
   'extension_pins',
   'pool_budget',
-  'settings'
+  'settings',
+  // A registered deployment only: the GitLab driver the Hub upgrades it through (null = watch
+  // only). A Docker deployment keeps the driver it was made with (NOT_EDITABLE).
+  'driver_id'
 ] as const
 
 /** Re-exported for callers of the routes module; the sentence lives with the app-key check. */
@@ -554,6 +557,12 @@ export function hubSharedRoutes(app: FastifyInstance): void {
         k !== 'secrets' &&
         !(PATCHABLE as readonly string[]).includes(k)
     )
+    if (
+      existing.mode === 'docker' &&
+      b.driver_id !== undefined &&
+      b.driver_id !== existing.driver_id
+    )
+      other.push('driver_id')
     if (other.length)
       return refuse(
         reply,

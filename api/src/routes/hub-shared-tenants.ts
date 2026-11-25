@@ -6,8 +6,9 @@ import {
   recordSighting,
   sightingInstance
 } from '../services/hub/shared/sightings.js'
-import { sharedForToken } from '../services/hub/shared/store.js'
+import { getShared, sharedForToken } from '../services/hub/shared/store.js'
 import { tenantsBody } from '../services/hub/shared/tenants.js'
+import { healSharedBeforeRead } from '../services/hub/shared/upgrade-run.js'
 
 /**
  * Nivaro Hub phase 6: the Hub side of the phase-5 tenants contract.
@@ -106,8 +107,16 @@ export async function hubSharedTenantsRoutes(app: FastifyInstance) {
       try {
         // Only apps placed here run this deployment's version: never a released move-out or an
         // app moving in before release.
+        // Review L1: an `upgrading` left by a run whose process died would hide an outside
+        // upgrade until someone opened the page: heal it here first (a stale heartbeat and a free
+        // lock only; one indexed read while nothing is stale).
+        let fresh = shared
+        if (shared.status === 'upgrading') {
+          await healSharedBeforeRead(shared.id, 1000)
+          fresh = (await getShared(shared.id)) ?? shared
+        }
         await noteObservedVersion(
-          shared,
+          fresh,
           out.rows
             .filter((r) => r.placedHere)
             .map((r) => ({ id: r.env.id, app_id: r.env.app_id, version_pin: r.env.version_pin }))

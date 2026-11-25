@@ -30,7 +30,7 @@ export const hubSharedDocs: DocSection = {
         [
           '`registered`',
           'Someone outside the Hub, for example your own pipeline.',
-          'Gives you the environment block and the token, shows what the deployment reports, and records a version change it notices as an observed deploy. It never deploys or upgrades the deployment. Upgrades driven by GitLab are not built: a deployment run from a GitLab pipeline is registered and upgraded by that pipeline.'
+          'Gives you the environment block and the token, shows what the deployment reports, and records a version change it notices as an observed deploy. Without a driver it never deploys or upgrades the deployment. Name a GitLab driver (Upgrades: By the Hub, through GitLab) and the Hub upgrades and rolls it back through that pipeline: see Upgrades and rollback.'
         ]
       ]
     },
@@ -276,7 +276,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-upgrade', text: 'Upgrades and rollback' },
     {
       type: 'p',
-      text: 'In docker mode the Hub upgrades the whole deployment in one run: Apps hub → Shared deployments → the deployment → Upgrade (a version picker, then the plan). A registered deployment is upgraded by whoever runs it; the plan says `SHARED_NOT_HUB_DEPLOYED`. The same panel rolls back: pick Roll back and a version this deployment ran successfully through the Hub. A rollback restores the image and the extension pins of that recorded run, not the stack settings (size, Redis mode, host pattern, publish port): those come from the deployment as it is now. The first deploy of a deployment has nothing to roll back to (`NOT_DEPLOYED_BEFORE`).'
+      text: 'In docker mode the Hub upgrades the whole deployment in one run: Apps hub → Shared deployments → the deployment → Upgrade (a version picker, then the plan). A registered deployment that names a GitLab driver is upgraded the same way, through its GitLab pipeline (below). A registered deployment without one is upgraded by whoever runs it; the plan says `SHARED_NOT_HUB_DEPLOYED`. The same panel rolls back: pick Roll back and a version this deployment ran successfully through the Hub. A rollback restores the image and the extension pins of that recorded run, not the stack settings (size, Redis mode, host pattern, publish port): those come from the deployment as it is now. The first deploy of a deployment has nothing to roll back to (`NOT_DEPLOYED_BEFORE`).'
     },
     {
       type: 'table',
@@ -284,7 +284,7 @@ export const hubSharedDocs: DocSection = {
       rows: [
         [
           '`SHARED_NOT_HUB_DEPLOYED`, `SHARED_RETIRED`, `BAD_VERSION`',
-          'The deployment is registered (the Hub cannot upgrade it) or retired, or the version is not `x.y.z`.'
+          'The deployment is registered without a GitLab driver (the Hub cannot upgrade it) or retired, or the version is not `x.y.z`.'
         ],
         [
           '`BUSY`, `LOCK_UNAVAILABLE`',
@@ -305,6 +305,10 @@ export const hubSharedDocs: DocSection = {
         [
           '`REDIS_NOT_AVAILABLE`, `REDIS_URL_MISSING`, `REDIS_DB_SHARED`, `HUB_URL_UNUSABLE`',
           'Bundled Redis asked for but the agent has no Redis image, external Redis chosen without its address, or the Hub address the stack would get is not a usable https origin.'
+        ],
+        [
+          'GitLab: `NO_DRIVER`, `GITLAB_UNREACHABLE`, `LINK_UNREACHABLE`, `BRANCH_IN_USE`, `BRANCH_BUSY`, `PIPELINE_RUNNING`, `NO_SOURCE_COMMIT`, `VERSION_UNKNOWN`, `PIN_CHANGED`, `ALREADY_RUNS`',
+          "A deployment its GitLab pipeline runs: the GitLab driver is gone or GitLab did not answer (the address or token of the driver), the deployment's link does not answer (the run reads it after the deploy), an environment or another shared deployment deploys the same branch of the same repository, a promotion, move or other upgrade holds that branch now, a pipeline on the deploy branch is not over yet (it may still be deploying), the release branch has no commit whose subject ends `nivaro <version>`, the image has no digest for the pin, the same version again would create or rewrite the pin of the version that runs (never done), or the deploy branch already holds the release commit and its pin (nothing to deploy). A rollback: `NOT_DEPLOYED_BEFORE` (the Hub never deployed that version here; an observed version does not count), `ROLLBACK_NOT_RECORDED`, `ROLLBACK_NO_BUILD` (the recorded commit left the branch, or its deploy job cannot be rerun). The agent, image, routing, Redis and extension-pin checks are not made: its pipeline builds and routes it."
         ],
         [
           '`MOVE_OPEN`',
@@ -340,6 +344,15 @@ export const hubSharedDocs: DocSection = {
         'While a move into or out of the deployment is waiting (a manual route can wait up to 24 hours), the plan is `BUSY` and the deployment page says which move it waits for.'
       ]
     },
+    { type: 'h3', id: 'hub-shared-upgrade-gitlab', text: 'A deployment its GitLab pipeline runs' },
+    {
+      type: 'p',
+      text: "A registered deployment can name a GitLab driver: Edit → Upgrades → By the Hub, through GitLab, then the driver, the release branch (the branch holding the release commits, a subject ending `nivaro <version>`), the deploy branch (required: the branch its deploy job runs on, never the driver's own default and never the release branch), and optionally the pin file and deploy job (empty: the driver's own) and a job to wait for first. Through the API: `driver_id` (a GitLab driver, else `DRIVER_NOT_GITLAB`) and `settings.gitlab` `{source_branch, target_branch, pin_file?, before_job?, deploy_job?}` (`BAD_GITLAB` when one comes without the other, a name is not a git branch name, or the two branches are the same). One writer per branch: a deploy branch an environment's component or another shared deployment already deploys on the same repository is refused at save (409 `BRANCH_IN_USE`) and again by every plan, and every run that writes a GitLab branch (a promotion, a move's GitLab deploy, a shared deployment upgrade) holds a lock on that branch for the whole run (`BRANCH_BUSY` for the other). A driver a shared deployment names cannot be deleted (409 `DRIVER_IN_USE`). Set `driver_id: null` and drop `settings.gitlab` to go back to watching it only. The plan says `runner: 'gitlab'` and what the run merges, pins and deploys (`gitlab`)."
+    },
+    {
+      type: 'p',
+      text: "The run is a promotion's API step on the deployment's own repository, under the same start checks, locks, overrides and downgrade confirm as a Docker upgrade. `push`: the release commit is merged onto the deploy branch with the pin file (`<version>`, the image digest, the slim image digest) committed on top, as one merge request, so the deploy branch moves once. `deploy`: the deploy job of that pipeline is waited for, or played when it is manual (60 minutes); the commit and pipeline it ran on are recorded. The version the deployment link answers (not the stored pin) decides the same-version and downgrade rules, and the pin file now on the deploy branch is part of the plan hash. Before anything is written the run asks the link once more (`LINK_UNREACHABLE`, nothing written). Then, as for Docker, every replica seen in the last 2 minutes must report the version (30 minutes; no swarm to ask), every app's schema must be `ok` (10 minutes) and each app's name must answer the version (5 minutes). A rollback reruns the deploy job of the pipeline the Hub recorded for that version (nothing merged, no pin written); GitLab refusing the rerun (Prevent outdated deployment jobs) stops it with `ROLLBACK_REFUSED_BY_GITLAB`. Cancel stops before the merge into the deploy branch, or during the deploy job wait (a job GitLab already started keeps running, so the next plan says `PIPELINE_RUNNING` until it ends). A run that loses one of its locks stops the same way, before a job is played or during the wait, and ends `interrupted` (`LOCK_LOST`); it stops vouching for its row at once, and a plan refuses `BUSY` while a run of the deployment is still `running`. A failed run names the GitLab code (`DEPLOY_FAILED`, `MERGE_REFUSED`, `HEAD_MOVED`, `DRIVER_CHANGED`, `GITLAB_UNAUTHORIZED` …), leaves the pins unchanged, and a heal after a Hub restart deletes the run's temporary branches (only on the repository the run used). A deployment left `upgrading` by a Hub that stopped is healed on the next tenants call of its replicas, so an upgrade done outside the Hub is still recorded. While the Hub upgrades it the deployment is `upgrading` and no observed version is recorded; the token rotation still answers `manual` (the pipeline holds the token)."
+    },
     {
       type: 'p',
       text: 'Routes (Hub administrator): `POST /api/hub/shared/:id/upgrade/plan` (`{version, kind?}`), `POST /api/hub/shared/:id/upgrade` (`{version, kind?, plan_hash, confirm, overrides?}`; 202; `409 PLAN_CHANGED` carries the new plan, `BLOCKED` and `APP_BLOCKED` say what holds it back, `400 CONFIRM_MISMATCH`), `GET /api/hub/shared/:id/upgrade/versions` (the versions the picker offers), `GET /api/hub/shared/:id/deploys`, `GET /api/hub/shared-deploys/:id`, `POST /api/hub/shared-deploys/:id/cancel` (409 `NOT_RUNNING`).'
@@ -347,7 +360,7 @@ export const hubSharedDocs: DocSection = {
     { type: 'h2', id: 'hub-shared-observed', text: 'Observed versions' },
     {
       type: 'p',
-      text: "A registered deployment tells the Hub its version on every tenants call. When every instance seen in the last 2 minutes agrees on a version different from the deployment's pin, the Hub records one `observed` shared deploy, adds a `shared` deploy row to each placed environment, and moves the pin. During a rolling upgrade, when replicas still disagree, nothing is recorded. The record is written once per version."
+      text: "A registered deployment tells the Hub its version on every tenants call. When every instance seen in the last 2 minutes agrees on a version different from the deployment's pin, the Hub records one `observed` shared deploy, adds a `shared` deploy row to each placed environment, and moves the pin. During a rolling upgrade, when replicas still disagree, nothing is recorded, and nothing while the Hub itself upgrades the deployment through GitLab (status `upgrading`: its own run records the version). The record is written once per version."
     },
     { type: 'h2', id: 'hub-shared-routes', text: 'Routes' },
     {
@@ -362,7 +375,7 @@ export const hubSharedDocs: DocSection = {
         ['`POST /api/hub/shared`', '201 `{row, token, env_block}`. The token is shown once.'],
         [
           '`PATCH /api/hub/shared/:id`',
-          'Name, link address, host pattern, extensions and pins, pool budget, settings. Mode or key: 400 `IMMUTABLE`. A retired deployment: `SHARED_RETIRED`.'
+          "Name, link address, host pattern, extensions and pins, pool budget, settings; on a registered deployment also `driver_id` (its GitLab driver, with `settings.gitlab`). Mode or key: 400 `IMMUTABLE`; a Docker deployment's driver: `NOT_EDITABLE`. A retired deployment: `SHARED_RETIRED`."
         ],
         [
           '`POST /api/hub/shared/:id/token`',
@@ -415,11 +428,6 @@ export const hubSharedDocs: DocSection = {
           'Help-video renders queued before a restart',
           'They render again on the next publish.',
           'warning `HELP_VIDEO_RENDERS`'
-        ],
-        [
-          'Upgrades driven by GitLab',
-          'A GitLab-run deployment is registered and upgraded by its pipeline.',
-          '-'
         ]
       ]
     },
