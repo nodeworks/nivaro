@@ -16,15 +16,20 @@ function schemeFor(suffixOrHost: string | null): 'http' | 'https' {
 
 /**
  * A Docker driver as a naming config: automatic DNS makes `<app>[--<env>].<wildcard>`, manual
- * DNS takes the name the person enters (and the ticket points at the driver's edge target).
+ * DNS takes the name the person enters (and the ticket points at the driver's edge target). The
+ * driver's edge_scheme / edge_port say how people reach its edge (an edge on :3280); unset =
+ * https on 443, plain http on 80 for localhost / .test names.
  */
 export function namingForDocker(c: DockerDriverConfig, host?: string | null): NamingConfig {
   const suffix = dnsSuffix(c?.wildcard_domain)
   return {
     dns_mode: c?.dns_mode === 'manual' ? 'manual' : 'automatic',
     wildcard_domain: suffix,
-    scheme: schemeFor(host ?? suffix),
-    port: null,
+    scheme:
+      c?.edge_scheme === 'https' || c?.edge_scheme === 'http'
+        ? c.edge_scheme
+        : schemeFor(host ?? suffix),
+    port: typeof c?.edge_port === 'number' ? c.edge_port : null,
     edge_address: c?.edge_target ?? null,
     cert_note: null
   }

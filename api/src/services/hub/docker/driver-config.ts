@@ -1,5 +1,6 @@
 import { isIP } from 'node:net'
 import { plainHttpAllowed } from '../../render-peer.js'
+import { httpAllowed } from '../create/dns.js'
 import type { DockerDriverRow, Validation } from '../drivers.js'
 import { nextSecret } from '../secrets.js'
 
@@ -16,13 +17,27 @@ export interface DockerDriverConfig {
   wildcard_domain: string | null
   /** manual: what a new name must point at (a DNS name or an address). */
   edge_target: string | null
+  /**
+   * How people reach the edge (2026-11-25): https or http; null = https, except plain http for
+   * localhost / .test names. A stored config from before this key reads as null.
+   */
+  edge_scheme?: 'https' | 'http' | null
+  /** The edge's public port when it is not the scheme's default (an edge on :3280); null = 443 / 80. */
+  edge_port?: number | null
 }
 
 export type DockerConfigCheck =
   | { ok: true; config: DockerDriverConfig }
   | { ok: false; code: 'BAD_CONFIG'; message: string }
 
-const CONFIG_KEYS = ['agent_url', 'dns_mode', 'wildcard_domain', 'edge_target'] as const
+const CONFIG_KEYS = [
+  'agent_url',
+  'dns_mode',
+  'wildcard_domain',
+  'edge_target',
+  'edge_scheme',
+  'edge_port'
+] as const
 
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 
@@ -101,6 +116,25 @@ export function checkDockerConfig(
     return bad('Config edge_target must be a DNS name or an address.')
   }
 
+  const schemeRaw = pick('edge_scheme')
+  let edgeScheme: 'https' | 'http' | null = null
+  if (schemeRaw !== undefined && schemeRaw !== null && schemeRaw !== '') {
+    if (schemeRaw !== 'https' && schemeRaw !== 'http')
+      return bad('Config edge_scheme must be https or http.')
+    edgeScheme = schemeRaw
+  }
+  if (edgeScheme === 'http' && wildcard && !httpAllowed(wildcard)) {
+    return bad('Plain http is only allowed for localhost and .test names.')
+  }
+
+  const portRaw = pick('edge_port')
+  let edgePort: number | null = null
+  if (portRaw !== undefined && portRaw !== null && portRaw !== '') {
+    if (typeof portRaw !== 'number' || !Number.isInteger(portRaw) || portRaw < 1 || portRaw > 65535)
+      return bad('Config edge_port must be a whole number from 1 to 65535.')
+    edgePort = portRaw
+  }
+
   if (mode === 'automatic' && !wildcard) {
     return bad('Automatic DNS needs wildcard_domain (the domain every stack name ends with).')
   }
@@ -109,7 +143,14 @@ export function checkDockerConfig(
   }
   return {
     ok: true,
-    config: { agent_url: origin, dns_mode: mode, wildcard_domain: wildcard, edge_target: edge }
+    config: {
+      agent_url: origin,
+      dns_mode: mode,
+      wildcard_domain: wildcard,
+      edge_target: edge,
+      edge_scheme: edgeScheme,
+      edge_port: edgePort
+    }
   }
 }
 

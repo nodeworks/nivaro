@@ -706,6 +706,14 @@ export const hubDockerDocs: DocSection = {
           'Edge target',
           'Manual only, required there: the DNS name or address each new name must point at.'
         ],
+        [
+          'Edge scheme (`edge_scheme`)',
+          'How people reach apps on this host: `https` or `http`. Automatic (empty) = https, plain http for `localhost` and `.test` names. Plain http is refused for any other wildcard domain.'
+        ],
+        [
+          'Edge port (`edge_port`)',
+          "The edge's public port when it is not the scheme's default, for example `3280` for a local Traefik on 3280. Empty = 443 / 80. A created app's address and sign-in redirect URI carry it (`https://myapp.apps.example.com:3280`)."
+        ],
         ['Agent token', 'The bearer token from `HUB_AGENT_TOKEN_FILE`.']
       ]
     },

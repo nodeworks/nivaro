@@ -146,7 +146,9 @@ describe('Docker driver form', () => {
         agent_url: 'https://swarm.example.com:8443',
         dns_mode: 'automatic',
         wildcard_domain: 'apps.example.com',
-        edge_target: null
+        edge_target: null,
+        edge_scheme: null,
+        edge_port: null
       },
       secret: token
     })
@@ -168,7 +170,7 @@ describe('Docker driver form', () => {
     await waitFor(() => expect(h.post).toHaveBeenCalled())
     const body = h.post.mock.calls[0][1] as { config: Record<string, unknown> }
     expect(Object.keys(body.config).sort()).toEqual(
-      ['agent_url', 'dns_mode', 'edge_target', 'wildcard_domain'].sort()
+      ['agent_url', 'dns_mode', 'edge_port', 'edge_scheme', 'edge_target', 'wildcard_domain'].sort()
     )
     expect(JSON.stringify(body)).not.toContain('group/repo')
   })
@@ -271,14 +273,32 @@ describe('docker-api helpers', () => {
     const base = {
       agent_url: 'https://a.example.com/',
       wildcard_domain: 'w.example.com',
-      edge_target: 'e.example.com'
+      edge_target: 'e.example.com',
+      edge_scheme: '' as const,
+      edge_port: ''
     }
     expect(dockerConfigBody({ ...base, dns_mode: 'automatic' })).toEqual({
       agent_url: 'https://a.example.com',
       dns_mode: 'automatic',
       wildcard_domain: 'w.example.com',
-      edge_target: null
+      edge_target: null,
+      edge_scheme: null,
+      edge_port: null
     })
+    expect(
+      dockerConfigBody({
+        ...base,
+        dns_mode: 'automatic',
+        edge_scheme: 'https',
+        edge_port: ' 3280 '
+      })
+    ).toMatchObject({ edge_scheme: 'https', edge_port: 3280 })
+    expect(
+      dockerDraftErrors({ ...base, dns_mode: 'automatic', edge_port: '99999' }).edge_port
+    ).toMatch(/1 to 65535/)
+    expect(dockerDraftErrors({ ...base, dns_mode: 'automatic', edge_port: '3280' }).edge_port).toBe(
+      ''
+    )
     expect(dockerConfigBody({ ...base, dns_mode: 'manual' })).toMatchObject({
       wildcard_domain: null,
       edge_target: 'e.example.com'

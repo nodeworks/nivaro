@@ -82,20 +82,28 @@ export interface DockerDraft {
   dns_mode: DnsMode
   wildcard_domain: string
   edge_target: string
+  /** '' = automatic (https; http for localhost / .test names). */
+  edge_scheme: '' | 'https' | 'http'
+  /** '' = the scheme's default port. */
+  edge_port: string
 }
 
 export const EMPTY_DOCKER_DRAFT: DockerDraft = {
   agent_url: '',
   dns_mode: 'automatic',
   wildcard_domain: '',
-  edge_target: ''
+  edge_target: '',
+  edge_scheme: '',
+  edge_port: ''
 }
 
 export const dockerDraftOf = (c: Partial<HubDockerDriverConfig> | undefined): DockerDraft => ({
   agent_url: c?.agent_url ?? '',
   dns_mode: c?.dns_mode === 'manual' ? 'manual' : 'automatic',
   wildcard_domain: c?.wildcard_domain ?? '',
-  edge_target: c?.edge_target ?? ''
+  edge_target: c?.edge_target ?? '',
+  edge_scheme: c?.edge_scheme === 'https' || c?.edge_scheme === 'http' ? c.edge_scheme : '',
+  edge_port: typeof c?.edge_port === 'number' ? String(c.edge_port) : ''
 })
 
 /** The config body a docker driver save sends (the field the other DNS mode needs is omitted). */
@@ -103,7 +111,9 @@ export const dockerConfigBody = (d: DockerDraft) => ({
   agent_url: d.agent_url.trim().replace(/\/+$/, ''),
   dns_mode: d.dns_mode,
   wildcard_domain: d.dns_mode === 'automatic' ? d.wildcard_domain.trim() : null,
-  edge_target: d.dns_mode === 'manual' ? d.edge_target.trim() : null
+  edge_target: d.dns_mode === 'manual' ? d.edge_target.trim() : null,
+  edge_scheme: d.edge_scheme || null,
+  edge_port: d.edge_port.trim() ? Number(d.edge_port.trim()) : null
 })
 
 export function dockerDraftErrors(d: DockerDraft) {
@@ -118,7 +128,14 @@ export function dockerDraftErrors(d: DockerDraft) {
     edge_target:
       d.dns_mode === 'manual' && !d.edge_target.trim()
         ? 'What each new name must point at, e.g. edge.example.com or an address'
-        : ''
+        : '',
+    edge_port:
+      !d.edge_port.trim() ||
+      (/^\d{1,5}$/.test(d.edge_port.trim()) &&
+        Number(d.edge_port.trim()) >= 1 &&
+        Number(d.edge_port.trim()) <= 65535)
+        ? ''
+        : 'A port from 1 to 65535, or leave it empty for 443 / 80'
   }
 }
 
