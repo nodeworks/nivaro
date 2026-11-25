@@ -89,7 +89,10 @@ const migrations = [
   await import('../../../db/migrations/553_hub_moves.js'),
   await import('../../../db/migrations/568_hub_ops.js'),
   await import('../../../db/migrations/569_hub_data.js'),
+  await import('../../../db/migrations/565_hub_release_ops.js'),
   await import('../../../db/migrations/570_hub_people_owner_policy.js'),
+  await import('../../../db/migrations/573_hub_change_ops.js'),
+  await import('../../../db/migrations/576_hub_incidents.js'),
   await import('../../../db/migrations/578_hub_security.js')
 ]
 const { hubRoutes } = await import('../../../routes/hub.js')
@@ -155,6 +158,11 @@ beforeEach(async () => {
   vi.clearAllMocks()
   for (const t of [
     'nivaro_hub_break_glass',
+    'nivaro_hub_incidents',
+    'nivaro_hub_oncall_rotas',
+    'nivaro_hub_oncall_overrides',
+    'nivaro_hub_calendar_entries',
+    'nivaro_hub_freezes',
     'nivaro_hub_access_reviews',
     'nivaro_hub_access_review_items',
     'nivaro_hub_security_settings',
@@ -284,6 +292,9 @@ describe('break-glass', () => {
     expect([target.envId, method, op]).toEqual([staging, 'POST', 'break-glass'])
     // The requester's PROVEN identity (their Hub account), the ref and the reason.
     expect(sent).toMatchObject({
+      hours: 2,
+      requested_by: 'Olu',
+      approved_by: 'Ada',
       ref: `bg-${req.id}`,
       emails: ['owner@x.io'],
       entra: [{ oid: 'oid-o', tid: null }],
@@ -340,23 +351,161 @@ describe('break-glass', () => {
     await bg.breakGlassTick()
     const last = m.call.mock.calls.at(-1)
     expect(last?.[2]).toBe('break-glass/revoke')
-    expect(last?.[3]).toMatchObject({ ref: `bg-${req.id}`, emails: ['owner@x.io'] })
+    expect(last?.[3]).toEqual({ ref: `bg-${req.id}` })
     expect((await bg.readBreakGlass(req.id))?.status).toBe('revoked')
   })
 
-  it('self-approval only through the incident seam: closed without the incident feature', async () => {
+  it('M5: self-approval only on call by the rota during a SEV 1/2 incident someone else opened', async () => {
     expect(json(await ask(asOwner, staging, { self_approve: true })).code).toBe('NO_INCIDENT')
-    expect(await seams.onCallIncident(appId, OWNER)).toBeNull()
-    // With the feature present and the person on call during an open incident, it opens.
-    const fake = await seams.onCallIncident(appId, OWNER, {
-      hasTable: async () => true,
-      load: async (spec) =>
-        spec.includes('store')
-          ? { readRota: async () => ({}), listOverrides: async () => [] }
-          : { onCallAt: () => ({ user_id: OWNER }) }
+    const weekAgo = new Date(Date.now() - 7 * 86_400_000)
+    await db('nivaro_hub_oncall_rotas').insert({
+      app_id: appId,
+      enabled: true,
+      people: JSON.stringify([OWNER]),
+      time_zone: 'UTC',
+      handover_weekday: 1,
+      handover_time: '09:00',
+      starts_on: weekAgo,
+      escalate_minutes: 15,
+      steps: JSON.stringify(['on_call'])
     })
-    // No open incident row in this database → still closed.
-    expect(fake).toBeNull()
+    const incident = async (o: Record<string, unknown>) =>
+      idOf(
+        await db('nivaro_hub_incidents')
+          .insert({
+            app_id: appId,
+            title: 'Orders fail',
+            severity: 'sev1',
+            status: 'open',
+            opened_at: new Date(),
+            ...o
+          })
+          .returning('id')
+      )
+    // Opened by the requester themselves: closed. SEV 3: closed.
+    await incident({ opened_by: OWNER })
+    await incident({ severity: 'sev3', opened_by: ADMIN })
+    expect(await seams.onCallIncident(appId, OWNER)).toBeNull()
+    // Someone else opened a SEV 1 → open, but not for a person put on call by a fresh override.
+    const inc = await incident({ opened_by: ADMIN })
+    expect(await seams.onCallIncident(appId, OWNER)).toEqual({ incident_id: inc, severity: 'sev1' })
+    await db('nivaro_hub_oncall_overrides').insert({
+      app_id: appId,
+      user_id: OTHER,
+      starts_at: new Date(Date.now() - 60_000),
+      ends_at: new Date(Date.now() + 86_400_000),
+      created_by: OTHER,
+      created_at: new Date()
+    })
+    expect(await seams.onCallIncident(appId, OTHER)).toBeNull()
+    // The self-approved grant goes out at once, every admin is told (urgent), and it ends when
+    // the incident resolves.
+    m.call.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: {
+        state: 'granted',
+        user_id: 'APP-OWNER',
+        until: new Date(Date.now() + 2 * 3_600_000).toISOString()
+      }
+    })
+    const r = await ask(asOwner, staging, { self_approve: true })
+    expect(r.statusCode).toBe(201)
+    const id = json(r).data.id
+    await vi.waitFor(async () => expect((await bg.readBreakGlass(id))?.status).toBe('active'))
+    expect(await bg.readBreakGlass(id)).toMatchObject({
+      approval_kind: 'incident',
+      incident_id: inc
+    })
+    expect(
+      m.notice.mock.calls.some(
+        ([to, n]) =>
+          (to as string[]).includes(ADMIN2) &&
+          (n as { urgent?: boolean; subject: string }).urgent &&
+          (n as { subject: string }).subject.startsWith('Break-glass self-approved')
+      )
+    ).toBe(true)
+    await db('nivaro_hub_incidents').where({ id: inc }).update({ status: 'resolved' })
+    m.call.mockResolvedValueOnce({ ok: true, status: 200, body: { state: 'revoked' } })
+    expect((await bg.breakGlassTick()).revoked).toEqual([id])
+    expect(await bg.readBreakGlass(id)).toMatchObject({
+      status: 'revoked',
+      revoke_reason: 'incident_resolved'
+    })
+  })
+
+  it('M2: the requester is judged again at approval, and offboarding ends everything of theirs', async () => {
+    const a = json(await ask(asOwner)).data
+    const b = json(await ask(asOwner, prod)).data
+    // No longer an owner when the admin approves → refused, the request withdrawn.
+    await db('nivaro_hub_app_owners').where({ user_id: OWNER }).delete()
+    const r = await app.inject({
+      method: 'POST',
+      url: `/api/hub/break-glass/${a.id}/approve`,
+      headers: asAdmin
+    })
+    expect(json(r).code).toBe('REQUESTER_NOT_ALLOWED')
+    expect((await bg.readBreakGlass(a.id))?.status).toBe('cancelled')
+    expect(m.call).not.toHaveBeenCalled()
+    // Offboarded: the pending one is withdrawn; an active one is revoked.
+    await db('nivaro_hub_break_glass')
+      .where({ id: b.id })
+      .update({ status: 'active', app_user_id: 'X1', expires_at: new Date(Date.now() + 3_600_000) })
+    m.call.mockResolvedValueOnce({ ok: true, status: 200, body: { state: 'revoked' } })
+    const out = await bg.endBreakGlassOfPerson(OWNER)
+    expect(out.revoking).toEqual([b.id])
+    expect((await bg.readBreakGlass(b.id))?.status).toBe('revoked')
+  })
+
+  it('TOCTOU: a grant that lands after its revoke is revoked again at once', async () => {
+    const req = json(await ask(asOwner)).data
+    await db('nivaro_hub_break_glass')
+      .where({ id: req.id })
+      .update({ status: 'granting', decided_by: ADMIN, decided_at: new Date() })
+    m.call.mockImplementationOnce(async () => {
+      // An admin ends it while the grant is on its way.
+      await db('nivaro_hub_break_glass').where({ id: req.id }).update({ status: 'revoked' })
+      return {
+        ok: true,
+        status: 200,
+        body: {
+          state: 'granted',
+          user_id: 'APP-U',
+          until: new Date(Date.now() + 3_600_000).toISOString()
+        }
+      }
+    })
+    m.call.mockResolvedValueOnce({ ok: true, status: 200, body: { state: 'revoked' } })
+    await bg.runGrant(req.id)
+    expect(m.call.mock.calls[1][2]).toBe('break-glass/revoke')
+    expect(m.call.mock.calls[1][3]).toEqual({ ref: `bg-${req.id}`, user_id: 'APP-U' })
+  })
+
+  it('an ended grant whose role was moved to another admin role is an urgent notice naming who', async () => {
+    const req = json(await ask(asOwner)).data
+    await db('nivaro_hub_break_glass')
+      .where({ id: req.id })
+      .update({ status: 'revoking', revoke_reason: 'expired', app_user_id: 'APP-U' })
+    m.call.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      body: {
+        state: 'restored_over_change',
+        changed_by: 'Olu',
+        changed_to: 'Ops Admin',
+        activity_count: 7
+      }
+    })
+    await bg.runRevoke(req.id)
+    const ended = m.notice.mock.calls.find(([, n]) =>
+      (n as { subject: string }).subject.includes('role was changed')
+    )
+    expect(ended?.[1]).toMatchObject({ urgent: true })
+    expect((ended?.[1] as { message: string }).message).toContain(
+      'Olu changed the account’s role to Ops Admin'
+    )
+    expect((ended?.[1] as { message: string }).message).toContain('7 change(s)')
+    expect((ended?.[0] as string[]).includes(ADMIN2)).toBe(true)
   })
 
   it('pending requests nobody decided are withdrawn after 24 h; the requester may withdraw', async () => {
@@ -518,12 +667,14 @@ describe('access reviews', () => {
         i.removal_state
       ])
     )
-    // Two people suspended through the app's route (by email, marked as an access review), a
+    // Two people suspended through the app's route (by account id, marked as an access review), a
     // service account never: remove it in the app.
     expect(m.suspend).toHaveBeenCalledTimes(2)
     expect(m.suspend.mock.calls[0][2]).toEqual({
-      emails: ['bo@x.io'],
+      emails: [],
       entra: [],
+      user_ids: [`B-${staging}`],
+      expect: { email: 'bo@x.io', entra_oid: null },
       reason: 'access_review'
     })
     expect(state[`S-${staging}`]).toBe('manual')
@@ -721,7 +872,6 @@ describe('settings', () => {
 
 describe('TLS watch', () => {
   it('warns at 30 / 14 / 3 days once each, on DNS failure once, and writes calendar entries', async () => {
-    const put = vi.fn(async () => undefined)
     const day = 86_400_000
     let left = 40
     const probe = async (t: { hostname: string }) => ({
@@ -733,16 +883,17 @@ describe('TLS watch', () => {
       authorized: true,
       error_code: t.hostname.startsWith('www.production') ? 'ENOTFOUND' : null
     })
-    const deps = {
-      probe,
-      hasTable: async (n: string) => n === 'nivaro_hub_calendar_entries',
-      load: async () => ({ upsertCalendarEntry: put, removeCalendarEntry: vi.fn() })
-    }
+    const deps = { probe }
     let r = await tls.tlsWatchTick(deps)
     expect(r.checked).toBe(6) // 3 environments × (base_url + one hostname)
     // Only the DNS failures warned at 40 days (www.production of both apps).
     expect(m.notice).toHaveBeenCalledTimes(2)
-    expect(put).toHaveBeenCalledWith(expect.objectContaining({ kind: 'tls', source: 'tls' }))
+    // Each expiry is a change-calendar entry (the real calendar table).
+    expect(
+      await db('nivaro_hub_calendar_entries')
+        .where({ source: 'tls', kind: 'tls' })
+        .count({ n: '*' })
+    ).toEqual([{ n: 6 }])
     left = 20
     m.notice.mockClear()
     r = await tls.tlsWatchTick(deps)
@@ -889,5 +1040,92 @@ describe('image scan', () => {
       })
     ).data
     expect(theirs.images).toEqual([])
+  })
+})
+
+describe('review lows', () => {
+  it('L4: error text for auditors carries no host, address, email or path', async () => {
+    const { auditorText } = await import('../../../services/hub/security/compliance.js')
+    const t = auditorText(
+      'connect ETIMEDOUT 10.1.2.3:1433 to sql-prod.corp.example (user ops@corp.example) at /var/lib/nivaro/x.bak Bearer abcdefghijklmnop\nstack line'
+    )
+    expect(t).not.toMatch(
+      /10\.1\.2\.3|sql-prod|corp\.example|ops@|\/var\/lib|abcdefghijklmnop|stack/
+    )
+    expect(t).toContain('ETIMEDOUT')
+  })
+
+  it('L1: a changed scanner address drops the stored token unless a new one is given', async () => {
+    const { nextSettings } = await import('../../../services/hub/security/settings.js')
+    const stored = {
+      scanner_url: 'https://a.example',
+      scanner_token: 'sealed',
+      break_glass_max_hours: 8,
+      tls_watch: true
+    }
+    expect(nextSettings({ scanner_url: 'https://b.example' }, stored).scanner_token).toBeNull()
+    expect(nextSettings({ scanner_url: 'https://a.example/v2' }, stored).scanner_token).toBe(
+      'sealed'
+    )
+    expect(nextSettings({ tls_watch: false }, stored).scanner_token).toBe('sealed')
+  })
+
+  it('L3 + L6: owners see the last scan of their own images only, and no resolved addresses', async () => {
+    await db('nivaro_hub_vuln_scans').insert({
+      status: 'done',
+      images: 2,
+      findings: 3,
+      result: JSON.stringify([{ image: 'x/other@sha256:1', state: 'scanned', count: 3 }]),
+      started_at: new Date(),
+      finished_at: new Date()
+    })
+    const v = json(
+      await app.inject({
+        method: 'GET',
+        url: '/api/hub/security/vulnerabilities',
+        headers: asOwner
+      })
+    ).data
+    expect(v.last_scan.result).toEqual([])
+    expect(v.last_scan.findings).toBeNull()
+    await db('nivaro_hub_cert_checks').insert({
+      environment_id: staging,
+      hostname: 'staging.efp.example',
+      state: 'ok',
+      addresses: '10.0.0.9',
+      subject: 'CN=x',
+      checked_at: new Date()
+    })
+    const c = json(
+      await app.inject({ method: 'GET', url: '/api/hub/security/certificates', headers: asOwner })
+    ).data
+    expect(c.certificates[0]).toMatchObject({ addresses: null, subject: null })
+    const ca = json(
+      await app.inject({ method: 'GET', url: '/api/hub/security/certificates', headers: asAdmin })
+    ).data
+    expect(ca.certificates[0].addresses).toBe('10.0.0.9')
+  })
+
+  it('an access review cannot complete during a freeze', async () => {
+    const id = idOf(
+      await db('nivaro_hub_access_reviews')
+        .insert({ app_id: appId, status: 'open', environments: '[]', started_at: new Date() })
+        .returning('id')
+    )
+    await db('nivaro_hub_freezes').insert({
+      app_id: appId,
+      name: 'Year end',
+      recurrence: 'once',
+      starts_at: new Date(Date.now() - 3_600_000),
+      ends_at: new Date(Date.now() + 3_600_000),
+      created_at: new Date()
+    })
+    const r = await app.inject({
+      method: 'POST',
+      url: `/api/hub/access-reviews/${id}/complete`,
+      headers: asOwner
+    })
+    expect(r.statusCode).toBe(409)
+    expect(json(r).code).toBe('FROZEN')
   })
 })

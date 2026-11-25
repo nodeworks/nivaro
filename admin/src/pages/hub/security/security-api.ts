@@ -182,7 +182,7 @@ export interface LastScan {
   started_at: string | null
   finished_at: string | null
   images: number
-  findings: number
+  findings: number | null
   error: string | null
 }
 
@@ -315,6 +315,7 @@ export const REMOVAL_WORDS: Record<string, string> = {
   none: 'No account any more',
   last_admin: 'Kept: last admin there',
   manual: 'Remove in the app',
+  stale: 'Changed since the review',
   failed: 'Did not answer'
 }
 
@@ -370,6 +371,20 @@ export const SECURITY_COPY: Record<string, { title: string; hint?: string }> = {
   },
   SCAN_RUNNING: { title: 'A scan is already running' },
   CHECK_RUNNING: { title: 'A certificate check is already running' },
+  REQUESTER_NOT_ALLOWED: {
+    title: 'The person who asked may no longer have it',
+    hint: 'Their Hub account is not active, they were offboarded, or they no longer own the app.'
+  },
+  IDENTITY_MISMATCH: {
+    title: 'The app account is not proven to be this person',
+    hint: 'Its Microsoft identity differs from the Hub account’s (or one side has none).'
+  },
+  REF_ENDED: { title: 'This grant was already ended', hint: 'Ask again if you still need it.' },
+  NO_INCIDENT: {
+    title: 'Self-approval is not open',
+    hint: 'Only the person on call by the rota, during an open SEV 1 or SEV 2 incident someone else opened.'
+  },
+  PACK_TOO_BIG: { title: 'The pack is too big', hint: 'Ask for fewer months.' },
   BAD_SCANNER_URL: {
     title: 'Use an https scanner address',
     hint: 'Plain http only to localhost; no user or password in it.'

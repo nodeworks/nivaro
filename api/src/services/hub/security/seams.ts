@@ -1,27 +1,13 @@
 import { db } from '../../../db/index.js'
+import { removeCalendarEntry, upsertCalendarEntry } from '../changes/calendar.js'
+import { onCallAt } from '../incident/rota.js'
+import { INCIDENTS, listOverrides, OVERRIDES, readRota } from '../incident/store.js'
 
 /**
- * Seams to Hub features built beside this one (wave 2): the change calendar (hub-enh/change,
- * services/hub/changes/calendar.ts `upsertCalendarEntry`) and incidents + on-call
- * (hub-enh/incident, services/hub/incident/*, tables nivaro_hub_incidents / _oncall_*). Each seam
- * does nothing until its feature is in this build: the module is loaded by URL at run time (so
- * this file compiles without it) and its table must exist. Any failure — module missing, a
- * changed shape, a read error — reads as "not there": nothing written, and for on-call, NO
- * self-approval (fails closed).
+ * Where Hub security meets the Hub features built beside it: the change calendar
+ * (services/hub/changes/calendar.ts) for certificate expiries, and incidents + on-call
+ * (services/hub/incident/*) for the compliance pack and break-glass self-approval.
  */
-
-type Loader = (spec: string) => Promise<Record<string, unknown>>
-
-/** Loads a sibling Hub module by URL (tests inject their own). */
-const defaultLoader: Loader = async (spec) =>
-  (await import(/* @vite-ignore */ new URL(spec, import.meta.url).href)) as Record<string, unknown>
-
-export interface SeamDeps {
-  load?: Loader
-  hasTable?: (name: string) => Promise<boolean>
-}
-
-const hasTableOf = (deps: SeamDeps) => deps.hasTable ?? ((n: string) => db.schema.hasTable(n))
 
 export interface CalendarEntry {
   source: string
@@ -35,32 +21,20 @@ export interface CalendarEntry {
   ends_at?: Date | null
 }
 
-/** Puts one change-calendar entry; false when the calendar is not in this build. Never throws. */
-export async function putCalendarEntry(e: CalendarEntry, deps: SeamDeps = {}): Promise<boolean> {
+/** Puts one change-calendar entry. Never throws (a calendar write never stops the watch). */
+export async function putCalendarEntry(e: CalendarEntry): Promise<boolean> {
   try {
-    if (!(await hasTableOf(deps)('nivaro_hub_calendar_entries'))) return false
-    const mod = await (deps.load ?? defaultLoader)('../changes/calendar.js')
-    const fn = mod.upsertCalendarEntry
-    if (typeof fn !== 'function') return false
-    await (fn as (x: CalendarEntry) => Promise<void>)(e)
+    await upsertCalendarEntry(e)
     return true
   } catch {
     return false
   }
 }
 
-/** Takes one entry off the calendar (the certificate was renewed). Never throws. */
-export async function dropCalendarEntry(
-  source: string,
-  key: string,
-  deps: SeamDeps = {}
-): Promise<boolean> {
+/** Takes one entry off the calendar (the name is gone). Never throws. */
+export async function dropCalendarEntry(source: string, key: string): Promise<boolean> {
   try {
-    if (!(await hasTableOf(deps)('nivaro_hub_calendar_entries'))) return false
-    const mod = await (deps.load ?? defaultLoader)('../changes/calendar.js')
-    const fn = mod.removeCalendarEntry
-    if (typeof fn !== 'function') return false
-    await (fn as (s: string, k: string) => Promise<void>)(source, key)
+    await removeCalendarEntry(source, key)
     return true
   } catch {
     return false
@@ -84,81 +58,97 @@ const iso = (v: unknown): string | null => {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null
 }
 
-/** The app's incidents opened since `since` (compliance pack); [] without the incidents table. */
-export async function incidentsOf(
-  appId: number,
-  since: Date,
-  deps: SeamDeps = {}
-): Promise<IncidentRow[]> {
-  try {
-    if (!(await hasTableOf(deps)('nivaro_hub_incidents'))) return []
-    const rows = (await db('nivaro_hub_incidents')
-      .where({ app_id: appId })
-      .where('opened_at', '>=', since)
-      .orderBy('opened_at', 'desc')
-      .limit(500)
-      .select(
-        'id',
-        'app_id',
-        'environment_id',
-        'title',
-        'severity',
-        'status',
-        'opened_at',
-        'resolved_at'
-      )) as Array<Record<string, unknown>>
-    return rows.map((r) => ({
-      id: Number(r.id),
-      app_id: Number(r.app_id),
-      environment_id: r.environment_id == null ? null : Number(r.environment_id),
-      title: String(r.title ?? '').slice(0, 200),
-      severity: String(r.severity ?? ''),
-      status: String(r.status ?? ''),
-      opened_at: iso(r.opened_at),
-      resolved_at: iso(r.resolved_at)
-    }))
-  } catch {
-    return []
-  }
+/** The app's incidents opened since `since` (compliance pack). */
+export async function incidentsOf(appId: number, since: Date): Promise<IncidentRow[]> {
+  const rows = (await db(INCIDENTS)
+    .where({ app_id: appId })
+    .where('opened_at', '>=', since)
+    .orderBy('opened_at', 'desc')
+    .limit(500)
+    .select(
+      'id',
+      'app_id',
+      'environment_id',
+      'title',
+      'severity',
+      'status',
+      'opened_at',
+      'resolved_at'
+    )) as Array<Record<string, unknown>>
+  return rows.map((r) => ({
+    id: Number(r.id),
+    app_id: Number(r.app_id),
+    environment_id: r.environment_id == null ? null : Number(r.environment_id),
+    title: String(r.title ?? '').slice(0, 200),
+    severity: String(r.severity ?? ''),
+    status: String(r.status ?? ''),
+    opened_at: iso(r.opened_at),
+    resolved_at: iso(r.resolved_at)
+  }))
 }
 
+/** Severities during which the person on call may approve their own break-glass. */
+export const SELF_APPROVAL_SEVERITIES = ['sev1', 'sev2'] as const
+/** An override this young does not make anyone "on call" for self-approval. */
+export const OVERRIDE_SETTLE_MS = 24 * 3_600_000
+
+const upper = (v: unknown) => String(v ?? '').toUpperCase()
+
 /**
- * The open incident of the app during which `userId` is on call (break-glass self-approval), or
- * null. Needs the incident feature (its tables and its rota module); anything missing or odd
- * answers null, so self-approval stays closed.
+ * The open incident during which `userId` may approve their own break-glass for this app, or
+ * null (ruling M5). All must hold:
+ *  - an OPEN incident of the app with severity SEV 1 or SEV 2, opened by someone else;
+ *  - `userId` is on call by the rota schedule — overrides created in the last 24 hours do not
+ *    count (an override made now cannot put its maker on call to approve themselves).
+ * Any read error answers null (self-approval stays closed).
  */
 export async function onCallIncident(
   appId: number,
   userId: string,
-  deps: SeamDeps & { nowMs?: number } = {}
-): Promise<{ incident_id: number } | null> {
+  deps: { nowMs?: number } = {}
+): Promise<{ incident_id: number; severity: string } | null> {
   try {
-    const has = hasTableOf(deps)
-    if (!(await has('nivaro_hub_incidents')) || !(await has('nivaro_hub_oncall_rotas'))) return null
-    const open = (await db('nivaro_hub_incidents')
+    const now = deps.nowMs ?? Date.now()
+    const open = (await db(INCIDENTS)
       .where({ app_id: appId, status: 'open' })
+      .whereIn('severity', [...SELF_APPROVAL_SEVERITIES])
       .orderBy('opened_at', 'desc')
-      .first('id')) as { id: unknown } | undefined
-    if (!open) return null
-    const load = deps.load ?? defaultLoader
-    const store = await load('../incident/store.js')
-    const rota = await load('../incident/rota.js')
-    const readRota = store.readRota as ((id: number) => Promise<unknown>) | undefined
-    const listOverrides = store.listOverrides as ((id: number) => Promise<unknown[]>) | undefined
-    const onCallAt = rota.onCallAt as
-      | ((r: unknown, o: unknown[], now: number) => { user_id?: unknown })
-      | undefined
-    if (
-      typeof readRota !== 'function' ||
-      typeof listOverrides !== 'function' ||
-      typeof onCallAt !== 'function'
+      .select('id', 'severity', 'opened_by')) as Array<{
+      id: unknown
+      severity: unknown
+      opened_by: unknown
+    }>
+    const theirs = open.find((i) => i.opened_by == null || upper(i.opened_by) !== upper(userId))
+    if (!theirs) return null
+    const rota = await readRota(appId)
+    if (!rota) return null
+    const settled = new Date(now - OVERRIDE_SETTLE_MS)
+    const fresh = new Set(
+      (
+        (await db(OVERRIDES)
+          .where({ app_id: appId })
+          .where('created_at', '>', settled)
+          .select('id')) as Array<{ id: unknown }>
+      ).map((r) => Number(r.id))
     )
-      return null
-    const who = onCallAt(await readRota(appId), await listOverrides(appId), deps.nowMs ?? Date.now())
-    const onCall = typeof who?.user_id === 'string' ? who.user_id : null
-    if (!onCall || onCall.toUpperCase() !== userId.toUpperCase()) return null
-    return { incident_id: Number(open.id) }
+    const overrides = (await listOverrides(appId, new Date(now))).filter((o) => !fresh.has(o.id))
+    const who = onCallAt(rota, overrides, now)
+    if (!who.user_id || upper(who.user_id) !== upper(userId)) return null
+    return { incident_id: Number(theirs.id), severity: String(theirs.severity) }
   } catch {
     return null
+  }
+}
+
+/** Whether the incident a self-approved grant rides on is still open (false = end the grant). */
+export async function incidentStillOpen(incidentId: number): Promise<boolean> {
+  try {
+    const r = (await db(INCIDENTS).where({ id: incidentId }).first('status')) as
+      | { status: unknown }
+      | undefined
+    return r?.status === 'open'
+  } catch {
+    // Unreadable: keep it; the hours cap still ends it.
+    return true
   }
 }

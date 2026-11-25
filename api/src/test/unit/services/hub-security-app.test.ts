@@ -1,9 +1,12 @@
+import Fastify from 'fastify'
 import type { Knex } from 'knex'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Hub security, APP side (services/hub-link/security.ts + services/break-glass-role.ts): role
-// holders for access reviews, break-glass grant / revoke / the app's own expiry. Real SQLite with
-// the app's users + roles and migration 578's nivaro_users.break_glass column.
+// Hub security, APP side: role holders for access reviews; break-glass grants in their own
+// table (nivaro_break_glass_grants — nivaro_users is never altered): grant, revoke + tombstone,
+// the app's own expiry, the request-time judgement, the last-admin count without grantees, the
+// offboard of a grantee, the self-elevation guard, and access-review removals by account id.
+// Real SQLite (roles, users, activity, migration 578); the activity log and sockets are mocked.
 
 vi.mock('../../../db/index.js', async () => {
   const knex = (await import('knex')).default
@@ -17,22 +20,36 @@ vi.mock('../../../db/index.js', async () => {
   })
   return { db }
 })
-const m = vi.hoisted(() => ({ logActivity: vi.fn(async (..._a: unknown[]) => null) }))
+const m = vi.hoisted(() => ({
+  logActivity: vi.fn(async (..._a: unknown[]) => null),
+  endUserSockets: vi.fn(),
+  recheck: vi.fn(),
+  notice: vi.fn()
+}))
 vi.mock('../../../services/activity.js', () => ({ logActivity: m.logActivity }))
+vi.mock('../../../services/socket-access.js', () => ({
+  endUserSockets: m.endUserSockets,
+  requestAccessRecheck: m.recheck
+}))
+vi.mock('../../../services/inactive-people-notice.js', () => ({ noteUsersDeactivated: m.notice }))
 
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const m578 = await import('../../../db/migrations/578_hub_security.js')
 const sec = await import('../../../services/hub-link/security.js')
-const { breakGlassRoleFor, readBreakGlassMark } = await import(
+const people = await import('../../../services/hub-link/people.js')
+const grants = await import('../../../services/break-glass-grants.js')
+const { grantEnded, roleAfterGrant, grantEndsAt } = await import(
   '../../../services/break-glass-role.js'
 )
+const guard = await import('../../../services/break-glass-guard.js')
 
 const ADMIN_ROLE = 'R-ADMIN'
+const OPS_ADMIN = 'R-OPS'
 const STAFF_ROLE = 'R-STAFF'
-const ANA = 'U-ANA'
-const BEN = 'U-BEN'
+const ANA = 'U-ANA' // the one permanent admin
+const BEN = 'U-BEN' // staff, will hold break-glass
 const NOW = Date.parse('2026-11-25T12:00:00.000Z')
-const until = (h: number) => new Date(NOW + h * 3_600_000).toISOString()
+const H = 3_600_000
 
 beforeAll(async () => {
   await db.schema.createTable('nivaro_roles', (t) => {
@@ -55,19 +72,27 @@ beforeAll(async () => {
     t.dateTime('created_at')
     t.dateTime('updated_at')
   })
+  await db.schema.createTable('nivaro_activity', (t) => {
+    t.increments('id')
+    t.string('user')
+    t.string('collection')
+    t.string('item')
+    t.dateTime('timestamp')
+  })
   await m578.up(db)
-  // Twice: every step is guarded.
-  await m578.up(db)
+  await m578.up(db) // every step is guarded
 })
 afterAll(async () => {
   await db.destroy()
 })
 beforeEach(async () => {
   vi.clearAllMocks()
-  await db('nivaro_users').delete()
-  await db('nivaro_roles').delete()
+  grants._resetGrantsTableForTests()
+  for (const t of ['nivaro_break_glass_grants', 'nivaro_activity', 'nivaro_users', 'nivaro_roles'])
+    await db(t).delete()
   await db('nivaro_roles').insert([
     { id: ADMIN_ROLE, name: 'Administrator', admin_access: true, created_at: new Date(0) },
+    { id: OPS_ADMIN, name: 'Ops Admin', admin_access: true, created_at: new Date(5) },
     { id: STAFF_ROLE, name: 'Staff', admin_access: false, created_at: new Date(1) }
   ])
   await db('nivaro_users').insert([
@@ -77,7 +102,8 @@ beforeEach(async () => {
       last_name: 'Admin',
       email: 'ana@example.com',
       role: ADMIN_ROLE,
-      status: 'active'
+      status: 'active',
+      entra_oid: 'oid-ana'
     },
     { id: BEN, first_name: 'Ben', email: 'ben@example.com', role: STAFF_ROLE, status: 'active' },
     { id: 'U-OFF', email: 'off@example.com', role: STAFF_ROLE, status: 'suspended' },
@@ -99,190 +125,378 @@ beforeEach(async () => {
   ])
 })
 
-const grant = (body: Record<string, unknown>) => sec.grantBreakGlass(body, { now: () => NOW })
+const grant = (body: Record<string, unknown>, at = NOW) =>
+  sec.grantBreakGlass({ hours: 2, reason: 'Outage fix', ...body }, { now: () => at })
+const role = async (id: string) => (await db('nivaro_users').where({ id }).first()).role
+const grantRow = (ref: string) => db('nivaro_break_glass_grants').where({ ref }).first()
 
 describe('role holders', () => {
-  it('lists every account with a role, admins first, never placeholders or role-less ones', async () => {
+  it('every account with a role, admins first, never placeholders; oid included', async () => {
     const out = await sec.listRoleHolders()
     const ids = out.accounts.map((a) => a.user_id)
     expect(ids).toEqual(expect.arrayContaining([ANA, BEN, 'U-OFF', 'U-SVC']))
     expect(ids).not.toContain('U-PH')
     expect(ids).not.toContain('U-NOROLE')
-    expect(out.accounts.slice(0, 2).every((a) => a.admin)).toBe(true)
-    const ana = out.accounts.find((a) => a.user_id === ANA)
-    expect(ana).toMatchObject({
+    expect(out.accounts.find((a) => a.user_id === ANA)).toMatchObject({
       name: 'Ana Admin',
-      role: 'Administrator',
-      email: 'ana@example.com'
+      entra_oid: 'oid-ana',
+      admin: true
     })
-    expect(out.accounts.find((a) => a.user_id === 'U-SVC')?.kind).toBe('service')
-    // No credential or preference column is ever answered.
-    expect(Object.keys(ana ?? {}).sort()).toEqual(
-      [
-        'admin',
-        'break_glass_until',
-        'created_at',
-        'email',
-        'kind',
-        'last_access',
-        'name',
-        'role',
-        'status',
-        'user_id'
-      ].sort()
+  })
+})
+
+describe('the pure rules', () => {
+  it('an unreadable end counts as ended; admin roles always come back; the app clock decides', () => {
+    expect(grantEnded({ ends_at: null }, NOW)).toBe(true)
+    expect(grantEnded({ ends_at: 'garbage' }, NOW)).toBe(true)
+    expect(grantEnded({ ends_at: new Date(NOW + 1000).toISOString() }, NOW)).toBe(false)
+    expect(roleAfterGrant({ id: ADMIN_ROLE, admin_access: true }, { role: ADMIN_ROLE })).toBe(
+      'restore'
     )
-    expect(m.logActivity).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'hub-access-review-read' })
+    expect(roleAfterGrant({ id: OPS_ADMIN, admin_access: 1 }, { role: ADMIN_ROLE })).toBe('restore')
+    expect(roleAfterGrant({ id: STAFF_ROLE, admin_access: false }, { role: ADMIN_ROLE })).toBe(
+      'keep'
     )
+    // A Hub clock 10 h ahead cannot stretch a 2 h grant.
+    expect(grantEndsAt(2, NOW + 10 * H, NOW).getTime()).toBe(NOW + 2 * H)
+    expect(grantEndsAt(2, NOW + H, NOW).getTime()).toBe(NOW + H)
   })
 })
 
 describe('break-glass grant', () => {
-  it('swaps the role to the oldest admin role and stores the expiry on the account', async () => {
+  it('swaps the role, keeps the grant in its own table, never touches nivaro_users otherwise', async () => {
     const out = await grant({
       ref: 'bg-7',
       emails: ['ben@example.com'],
-      until: until(2),
-      reason: 'Outage fix'
+      until: new Date(NOW + 9 * H).toISOString()
     })
-    expect(out).toEqual({ ok: true, state: 'granted', user_id: BEN, until: until(2) })
-    const row = await db('nivaro_users').where({ id: BEN }).first()
-    expect(row.role).toBe(ADMIN_ROLE)
-    expect(readBreakGlassMark(row.break_glass)).toMatchObject({
-      ref: 'bg-7',
-      role: ADMIN_ROLE,
-      prev_role: STAFF_ROLE
-    })
-    // The same ref again answers the grant that holds; another ref is refused.
-    expect(
-      await grant({ ref: 'bg-7', emails: ['ben@example.com'], until: until(3), reason: 'again' })
-    ).toMatchObject({
+    expect(out).toEqual({
       ok: true,
-      until: until(2)
+      state: 'granted',
+      user_id: BEN,
+      until: new Date(NOW + 2 * H).toISOString()
     })
-    expect(
-      await grant({ ref: 'bg-8', emails: ['ben@example.com'], until: until(1), reason: 'x' })
-    ).toMatchObject({
+    expect(await role(BEN)).toBe(ADMIN_ROLE)
+    const row = await grantRow('bg-7')
+    expect(row).toMatchObject({ user_id: BEN, role: ADMIN_ROLE, prev_role: STAFF_ROLE })
+    expect(Object.keys(await db('nivaro_users').where({ id: BEN }).first())).not.toContain(
+      'break_glass'
+    )
+    // The same ref again answers the grant that holds; another ref is refused.
+    expect(await grant({ ref: 'bg-7', emails: ['ben@example.com'] })).toMatchObject({
+      ok: true,
+      state: 'granted'
+    })
+    expect(await grant({ ref: 'bg-8', emails: ['ben@example.com'] })).toMatchObject({
       ok: false,
       code: 'BREAK_GLASS_ACTIVE'
     })
   })
 
-  it('refuses what it must never do', async () => {
+  it('M3: an Entra id must be the account’s own; email alone only when neither side has one', async () => {
+    // The Hub knows an oid; the account has none → refused.
     expect(
-      await grant({ ref: 'bg-1', emails: ['off@example.com'], until: until(1), reason: 'r' })
-    ).toMatchObject({
+      await grant({
+        ref: 'bg-1',
+        emails: ['ben@example.com'],
+        entra: [{ oid: 'oid-ben', tid: null }]
+      })
+    ).toMatchObject({ ok: false, code: 'IDENTITY_MISMATCH' })
+    // The account has an oid; the Hub knows none (email only) → refused.
+    await db('nivaro_users').where({ id: BEN }).update({ entra_oid: 'oid-someone-else' })
+    expect(await grant({ ref: 'bg-2', emails: ['ben@example.com'] })).toMatchObject({
+      ok: false,
+      code: 'IDENTITY_MISMATCH'
+    })
+    // Different oids → refused; the same oid → granted.
+    expect(
+      await grant({
+        ref: 'bg-3',
+        emails: ['ben@example.com'],
+        entra: [{ oid: 'oid-ben', tid: null }]
+      })
+    ).toMatchObject({ ok: false, code: 'IDENTITY_MISMATCH' })
+    await db('nivaro_users').where({ id: BEN }).update({ entra_oid: 'oid-ben' })
+    expect(
+      await grant({
+        ref: 'bg-4',
+        emails: ['ben@example.com'],
+        entra: [{ oid: 'oid-ben', tid: null }]
+      })
+    ).toMatchObject({ ok: true, state: 'granted' })
+  })
+
+  it('refuses what it must never do, writing nothing', async () => {
+    expect(await grant({ ref: 'bg-1', emails: ['off@example.com'] })).toMatchObject({
       ok: false,
       code: 'ACCOUNT_NOT_ACTIVE'
     })
-    expect(
-      await grant({ ref: 'bg-1', emails: ['svc@example.com'], until: until(1), reason: 'r' })
-    ).toMatchObject({
+    expect(await grant({ ref: 'bg-1', emails: ['svc@example.com'] })).toMatchObject({
       ok: false,
       code: 'NO_ACCOUNT'
     })
-    expect(
-      await grant({ ref: 'bg-1', emails: ['nobody@example.com'], until: until(1), reason: 'r' })
-    ).toMatchObject({
+    expect(await grant({ ref: 'bg-1', emails: ['ben@example.com'], hours: 25 })).toMatchObject({
       ok: false,
-      code: 'NO_ACCOUNT'
+      code: 'BAD_HOURS'
     })
-    expect(
-      await grant({ ref: 'bg-1', emails: ['ben@example.com'], until: until(26), reason: 'r' })
-    ).toMatchObject({
-      ok: false,
-      code: 'TOO_LONG'
-    })
-    expect(
-      await grant({ ref: 'bg-1', emails: ['ben@example.com'], until: until(-1), reason: 'r' })
-    ).toMatchObject({
-      ok: false,
-      code: 'BAD_UNTIL'
-    })
-    expect(
-      await grant({ ref: 'x', emails: ['ben@example.com'], until: until(1), reason: 'r' })
-    ).toMatchObject({
+    expect(await grant({ ref: 'x', emails: ['ben@example.com'] })).toMatchObject({
       ok: false,
       code: 'BAD_REF'
     })
-    // Nothing was written by any refusal.
-    expect((await db('nivaro_users').where({ id: BEN }).first()).role).toBe(STAFF_ROLE)
-    expect((await db('nivaro_users').where({ id: 'U-OFF' }).first()).status).toBe('suspended')
+    expect(await role(BEN)).toBe(STAFF_ROLE)
+    expect(await db('nivaro_break_glass_grants').count({ n: '*' })).toEqual([{ n: 0 }])
   })
 
   it('an admin already is not touched', async () => {
-    expect(
-      await grant({ ref: 'bg-2', emails: ['ana@example.com'], until: until(1), reason: 'r' })
-    ).toEqual({
+    await db('nivaro_users').where({ id: ANA }).update({ entra_oid: null })
+    expect(await grant({ ref: 'bg-2', emails: ['ana@example.com'] })).toMatchObject({
       ok: true,
       state: 'already_admin',
-      user_id: ANA,
-      until: null
+      user_id: ANA
     })
-    expect((await db('nivaro_users').where({ id: ANA }).first()).break_glass).toBeNull()
+    expect(await grantRow('bg-2')).toBeUndefined()
+  })
+
+  it('M1: a revoke that came first leaves a tombstone; the late grant is refused and logged', async () => {
+    expect(await sec.revokeBreakGlass({ ref: 'bg-9' })).toMatchObject({ ok: true, state: 'none' })
+    expect(await grant({ ref: 'bg-9', emails: ['ben@example.com'] })).toMatchObject({
+      ok: false,
+      code: 'REF_ENDED'
+    })
+    expect(await role(BEN)).toBe(STAFF_ROLE)
+    expect(m.logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'hub-break-glass-late' })
+    )
   })
 })
 
 describe('break-glass end', () => {
-  it('the Hub revokes by ref + account (role back), and a second revoke answers none', async () => {
-    await grant({ ref: 'bg-3', emails: ['ben@example.com'], until: until(2), reason: 'r' })
-    expect(await sec.revokeBreakGlass({ ref: 'bg-4', user_id: BEN })).toEqual({
-      ok: true,
-      state: 'none'
+  it('the Hub revokes by ref: role back, sockets end, the changes are counted', async () => {
+    await grant({ ref: 'bg-3', emails: ['ben@example.com'] })
+    await db('nivaro_activity').insert({
+      user: BEN,
+      collection: 'x',
+      item: '1',
+      timestamp: new Date(NOW + 60_000)
     })
-    expect(await sec.revokeBreakGlass({ ref: 'bg-3', user_id: BEN })).toEqual({
-      ok: true,
-      state: 'revoked'
-    })
-    const row = await db('nivaro_users').where({ id: BEN }).first()
-    expect(row.role).toBe(STAFF_ROLE)
-    expect(row.break_glass).toBeNull()
-    expect(await sec.revokeBreakGlass({ ref: 'bg-3', user_id: BEN })).toEqual({
-      ok: true,
-      state: 'none'
-    })
-  })
-
-  it('revokes by identity when the Hub never learned the account id', async () => {
-    await grant({ ref: 'bg-5', emails: ['ben@example.com'], until: until(2), reason: 'r' })
-    expect(await sec.revokeBreakGlass({ ref: 'bg-5', emails: ['ben@example.com'] })).toEqual({
+    const out = await sec.revokeBreakGlass({ ref: 'bg-3', user_id: BEN })
+    expect(out).toMatchObject({ ok: true, state: 'revoked', user_id: BEN, activity_count: 1 })
+    expect(await role(BEN)).toBe(STAFF_ROLE)
+    expect((await grantRow('bg-3')).ended_at).not.toBeNull()
+    expect(m.endUserSockets).toHaveBeenCalledWith(BEN, expect.any(String))
+    expect(m.recheck).toHaveBeenCalledWith({ userIds: [BEN] })
+    // Idempotent.
+    expect(await sec.revokeBreakGlass({ ref: 'bg-3' })).toMatchObject({
       ok: true,
       state: 'revoked'
     })
   })
 
-  it('a role changed during the grant stays as it is', async () => {
-    await grant({ ref: 'bg-6', emails: ['ben@example.com'], until: until(2), reason: 'r' })
+  it('H1: a move to ANOTHER admin role is undone at the end, and who did it is named', async () => {
+    await grant({ ref: 'bg-5', emails: ['ben@example.com'] })
+    await db('nivaro_users').where({ id: BEN }).update({ role: OPS_ADMIN })
+    await db('nivaro_activity').insert({
+      user: BEN,
+      collection: 'nivaro_users',
+      item: BEN,
+      timestamp: new Date(NOW + 60_000)
+    })
+    const out = await sec.revokeBreakGlass({ ref: 'bg-5' })
+    expect(out).toMatchObject({
+      state: 'restored_over_change',
+      changed_by: 'Ben',
+      changed_to: 'Ops Admin'
+    })
+    expect(await role(BEN)).toBe(STAFF_ROLE)
+  })
+
+  it('a change to a role WITHOUT admin access stays', async () => {
+    await grant({ ref: 'bg-6', emails: ['ben@example.com'] })
     await db('nivaro_users').where({ id: BEN }).update({ role: 'R-OTHER' })
-    expect(await sec.revokeBreakGlass({ ref: 'bg-6', user_id: BEN })).toEqual({
-      ok: true,
-      state: 'role_changed'
-    })
-    expect((await db('nivaro_users').where({ id: BEN }).first()).role).toBe('R-OTHER')
+    expect(await sec.revokeBreakGlass({ ref: 'bg-6' })).toMatchObject({ state: 'role_changed' })
+    expect(await role(BEN)).toBe('R-OTHER')
   })
 
-  it('the app ends a grant by itself once its time ran out (the Hub gone)', async () => {
-    await grant({ ref: 'bg-9', emails: ['ben@example.com'], until: until(1), reason: 'r' })
-    expect(await sec.expireBreakGlass({ now: () => NOW + 30 * 60_000 })).toEqual([])
-    expect(await sec.expireBreakGlass({ now: () => NOW + 61 * 60_000 })).toEqual([BEN])
-    const row = await db('nivaro_users').where({ id: BEN }).first()
-    expect(row.role).toBe(STAFF_ROLE)
-    expect(row.break_glass).toBeNull()
+  it('M7: the app ends a grant by itself (expired, or an unreadable end) — the Hub gone', async () => {
+    await grant({ ref: 'bg-10', emails: ['ben@example.com'] })
+    expect(await grants.expireGrants(db, new Date(NOW + H))).toEqual([])
+    await db('nivaro_break_glass_grants').where({ ref: 'bg-10' }).update({ ends_at: null })
+    expect(await grants.expireGrants(db, new Date(NOW + H))).toEqual([BEN])
+    expect(await role(BEN)).toBe(STAFF_ROLE)
+    expect(await grantRow('bg-10')).toMatchObject({
+      end_reason: 'unreadable',
+      end_state: 'restored'
+    })
   })
 
-  it('every request judges the mark before any job runs (read-time fail-safe)', async () => {
-    await grant({ ref: 'bg-10', emails: ['ben@example.com'], until: until(1), reason: 'r' })
-    const row = await db('nivaro_users').where({ id: BEN }).first()
-    expect(breakGlassRoleFor(row, NOW + 10 * 60_000)).toEqual({ role: ADMIN_ROLE, expired: false })
-    expect(breakGlassRoleFor(row, NOW + 61 * 60_000)).toEqual({ role: STAFF_ROLE, expired: true })
-    // A role changed on purpose during the grant is kept.
-    expect(breakGlassRoleFor({ ...row, role: 'R-OTHER' }, NOW + 61 * 60_000)).toEqual({
-      role: 'R-OTHER',
-      expired: true
-    })
-    expect(breakGlassRoleFor({ role: STAFF_ROLE, break_glass: 'not json' })).toEqual({
+  it('the request path judges it in the role statement before any job runs', async () => {
+    await grant({ ref: 'bg-11', emails: ['ben@example.com'] })
+    const live = await grants.effectiveRole({ id: BEN, role: ADMIN_ROLE }, db, NOW + 30 * 60_000)
+    expect(live).toMatchObject({ roleId: ADMIN_ROLE, ended: null })
+    expect(live.live?.ref).toBe('bg-11')
+    expect((live.role as { admin_access?: unknown }).admin_access).toBeTruthy()
+    // Past its end: the request runs with the role it replaced.
+    const ended = await grants.effectiveRole({ id: BEN, role: ADMIN_ROLE }, db, NOW + 3 * H)
+    expect(ended.roleId).toBe(STAFF_ROLE)
+    expect(ended.ended?.ref).toBe('bg-11')
+    // H1 at request time too: moved to another admin role → still the old role.
+    const moved = await grants.effectiveRole({ id: BEN, role: OPS_ADMIN }, db, NOW + 3 * H)
+    expect(moved.roleId).toBe(STAFF_ROLE)
+    // An account with no grant reads its own role.
+    expect((await grants.effectiveRole({ id: ANA, role: ADMIN_ROLE })).live).toBeNull()
+  })
+})
+
+describe('H2: the last-admin count never counts a grantee', () => {
+  it('the permanent admin cannot be removed while only a grantee would be left', async () => {
+    await grant({ ref: 'bg-12', emails: ['ben@example.com'] })
+    expect(await role(BEN)).toBe(ADMIN_ROLE)
+    const out = await people.suspendPeople({ emails: ['ana@example.com'] })
+    expect(out).toMatchObject({ ok: false, code: 'LAST_ADMIN' })
+    expect((await db('nivaro_users').where({ id: ANA }).first()).status).toBe('active')
+  })
+
+  it('offboarding a grantee ends the grant first and is never refused because of it', async () => {
+    await db('nivaro_users').where({ id: ANA }).update({ status: 'suspended' })
+    await grant({ ref: 'bg-13', emails: ['ben@example.com'] })
+    const out = await people.suspendPeople({ emails: ['ben@example.com'] })
+    expect(out).toMatchObject({ ok: true, state: 'suspended' })
+    const ben = await db('nivaro_users').where({ id: BEN }).first()
+    expect(ben).toMatchObject({ status: 'suspended', role: STAFF_ROLE })
+    expect(await grantRow('bg-13')).toMatchObject({ end_reason: 'offboarded' })
+  })
+})
+
+describe('M4: an access-review removal suspends the reviewed account only', () => {
+  it('by id, refused STALE when its email or Entra id changed since the review', async () => {
+    await db('nivaro_users').insert({
+      id: 'U-TWIN',
+      email: 'ben@example.com',
       role: STAFF_ROLE,
-      expired: false
+      status: 'active'
     })
+    const stale = await people.suspendPeople({
+      user_ids: [BEN],
+      expect: { email: 'ben@old.example', entra_oid: null }
+    })
+    expect(stale).toMatchObject({ ok: false, code: 'STALE' })
+    const ok = await people.suspendPeople({
+      user_ids: [BEN],
+      expect: { email: 'ben@example.com', entra_oid: null },
+      reason: 'access_review'
+    })
+    expect(ok).toMatchObject({ ok: true, state: 'suspended' })
+    // The other account with the same email was not touched.
+    expect((await db('nivaro_users').where({ id: 'U-TWIN' }).first()).status).toBe('active')
+    // An id query needs `expect` and no emails.
+    expect(people.readPeopleQuery({ user_ids: [BEN] })).toBeNull()
+    expect(people.readPeopleQuery({ user_ids: [BEN], emails: ['a@b.c'], expect: {} })).toBeNull()
+  })
+})
+
+describe('H1: a grantee cannot turn borrowed admin into lasting admin', () => {
+  it('role, policy and account-role writes refuse BREAK_GLASS_ACTIVE while the grant holds', async () => {
+    const app = Fastify()
+    guard.installBreakGlassWriteGuard(app)
+    const seen: string[] = []
+    await app.register(
+      async (f) => {
+        const sign = async (req: { headers: Record<string, unknown>; breakGlass?: unknown }) => {
+          req.breakGlass = req.headers['x-grant'] ? { ref: 'bg-1', ends_at: null } : null
+        }
+        f.patch('/users/:id', { preHandler: sign }, async () => {
+          seen.push('patch-user')
+          return { ok: true }
+        })
+        f.post('/roles', { preHandler: sign }, async () => ({ ok: true }))
+        f.post('/roles/:id/simulate', { preHandler: sign }, async () => ({ ok: true }))
+        f.post('/items/:collection', { preHandler: sign }, async () => ({ ok: true }))
+      },
+      { prefix: '/api' }
+    )
+    await app.ready()
+    const as = (grantee: boolean) => (grantee ? { 'x-grant': '1' } : {})
+    // Self-elevation: the grantee sets their own role to an admin role.
+    const self = await app.inject({
+      method: 'PATCH',
+      url: `/api/users/${BEN}`,
+      headers: as(true),
+      payload: { role: OPS_ADMIN }
+    })
+    expect(self.statusCode).toBe(403)
+    expect(self.json().code).toBe('BREAK_GLASS_ACTIVE')
+    // Creating an admin role, or the same through /items.
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/roles',
+          headers: as(true),
+          payload: { name: 'x', admin_access: true }
+        })
+      ).statusCode
+    ).toBe(403)
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/items/nivaro_roles',
+          headers: as(true),
+          payload: { name: 'x' }
+        })
+      ).statusCode
+    ).toBe(403)
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/items/nivaro_users',
+          headers: as(true),
+          payload: { email: 'a@b.c', role: ADMIN_ROLE }
+        })
+      ).statusCode
+    ).toBe(403)
+    // Reads, other edits and non-grantees pass.
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/roles/r1/simulate',
+          headers: as(true),
+          payload: {}
+        })
+      ).statusCode
+    ).toBe(200)
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/users/${BEN}`,
+          headers: as(true),
+          payload: { first_name: 'B' }
+        })
+      ).statusCode
+    ).toBe(200)
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/api/users/${BEN}`,
+          headers: as(false),
+          payload: { role: OPS_ADMIN }
+        })
+      ).statusCode
+    ).toBe(200)
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/api/items/workflows',
+          headers: as(true),
+          payload: { role: 'x' }
+        })
+      ).statusCode
+    ).toBe(200)
+    await app.close()
   })
 })

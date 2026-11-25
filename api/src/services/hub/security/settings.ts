@@ -34,7 +34,11 @@ export const DEFAULT_SETTINGS: SecuritySettings = {
   tls_watch: true
 }
 
-/** An https URL (or plain http to this machine) with no credentials; null when unusable. */
+/**
+ * An https URL (or plain http to this machine) with no credentials; null when unusable. A
+ * scanner on this machine or a private address is reached only when SSRF_ALLOW_HOSTS names it
+ * (the call goes through safeFetch).
+ */
 export function scannerUrlCheck(v: unknown): string | null {
   if (typeof v !== 'string' || !v.trim()) return null
   try {
@@ -120,7 +124,21 @@ export function nextSettings(body: unknown, stored: SecuritySettings): SecurityS
     out.break_glass_max_hours = h
   }
   if ('tls_watch' in b) out.tls_watch = b.tls_watch !== false
-  if (!out.scanner_url) out.scanner_token = out.scanner_token ?? null
+  // A token never follows its scanner to another place (L1): a changed or cleared URL drops
+  // the stored token unless this same edit gives a new one.
+  const origin = (u: string | null) => {
+    try {
+      return u ? new URL(u).origin : null
+    } catch {
+      return null
+    }
+  }
+  const newToken =
+    'scanner_token' in b &&
+    typeof b.scanner_token === 'string' &&
+    b.scanner_token !== HUB_MASK &&
+    b.scanner_token !== ''
+  if (origin(out.scanner_url) !== origin(stored.scanner_url) && !newToken) out.scanner_token = null
   return out
 }
 

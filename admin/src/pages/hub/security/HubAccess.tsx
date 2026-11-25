@@ -223,7 +223,7 @@ function BreakGlassRow({
   const approver = row.decided_by ? page.people[row.decided_by.toUpperCase()] : null
   const when =
     row.status === 'active' && row.expires_at
-      ? `ends ${untilWords(row.expires_at)}`
+      ? `ends ${untilWords(row.expires_at)}${row.approval_kind === 'incident' ? ' or when the incident resolves' : ''}`
       : row.created_at
         ? `asked ${formatRelative(row.created_at)}`
         : ''

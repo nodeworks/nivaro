@@ -70,6 +70,7 @@ export interface ReviewItem {
   account_kind: string | null
   last_access: string | null
   break_glass: boolean
+  entra_oid: string | null
   decision: 'pending' | 'keep' | 'remove'
   decided_by: string | null
   decided_at: string | null
@@ -141,6 +142,7 @@ export function itemFromRow(r: Record<string, unknown>): ReviewItem {
     account_kind: r.account_kind == null ? null : String(r.account_kind),
     last_access: iso(r.last_access),
     break_glass: truthy(r.break_glass),
+    entra_oid: r.entra_oid == null ? null : String(r.entra_oid),
     decision: d === 'keep' || d === 'remove' ? d : 'pending',
     decided_by: r.decided_by == null ? null : String(r.decided_by),
     decided_at: iso(r.decided_at),
@@ -260,6 +262,7 @@ async function readEnvironment(
       account_kind: str(a.kind, 32),
       last_access: a.last_access ? new Date(String(a.last_access)) : null,
       break_glass: !!a.break_glass_until,
+      entra_oid: str(a.entra_oid, 64)?.toLowerCase() ?? null,
       decision: 'pending'
     }))
     .map((r) => ({
@@ -408,7 +411,6 @@ export function readDecisions(
 
 function removalFor(item: ReviewItem): { state: string; code?: string } | null {
   if (item.account_kind) return { state: 'manual', code: 'NOT_A_PERSON' }
-  if (!item.email) return { state: 'manual', code: 'NO_EMAIL' }
   return null
 }
 
@@ -437,12 +439,25 @@ export async function runRemovals(reviewId: number, deps: ReviewDeps = {}): Prom
           const target = targets.get(env.id) ?? null
           if (!target) out = { state: 'failed', code: 'NO_LINK' }
           else {
-            // `reason` only changes the app's activity text (an access review, not an offboard).
+            // By the reviewed ACCOUNT (never by email: another account may share it), and only
+            // while its email + Entra oid are what the review read (409 STALE otherwise). `reason`
+            // only changes the app's activity text.
             const body: {
               emails: string[]
               entra: Array<{ oid: string; tid: string | null }>
+              user_ids: string[]
+              expect: { email: string | null; entra_oid: string | null }
               reason: string
-            } = { emails: [String(item.email)], entra: [], reason: 'access_review' }
+            } = {
+              emails: [],
+              entra: [],
+              user_ids: [item.app_user_id],
+              expect: {
+                email: item.email ? item.email.trim().toLowerCase() : null,
+                entra_oid: item.entra_oid
+              },
+              reason: 'access_review'
+            }
             const res = await (deps.suspend ?? callPeople)(target, 'suspend', body, deps)
             if (res.ok)
               out =
@@ -452,6 +467,7 @@ export async function runRemovals(reviewId: number, deps: ReviewDeps = {}): Prom
                     ? { state: 'already' }
                     : { state: 'none', code: 'NO_ACCOUNT' }
             else if (res.code === 'LAST_ADMIN') out = { state: 'last_admin', code: 'LAST_ADMIN' }
+            else if (res.code === 'STALE') out = { state: 'stale', code: 'STALE' }
             else out = { state: 'failed', code: res.code }
           }
         }

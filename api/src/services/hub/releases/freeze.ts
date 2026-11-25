@@ -33,6 +33,8 @@ export type FrozenAction =
   | 'apply'
   | 'config_promote'
   | 'extension_promote'
+  /** An access review's removals (services/hub/security/reviews.ts): accounts suspended. */
+  | 'access_change'
 
 export interface HubFreeze {
   id: number
@@ -149,7 +151,8 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
   upgrade: 'Shared deployment upgrades',
   move: 'Moves',
   config_promote: 'Config promotions',
-  extension_promote: 'Extension promotions'
+  extension_promote: 'Extension promotions',
+  access_change: 'Access review removals'
 }
 
 export interface FreezeRefusal {

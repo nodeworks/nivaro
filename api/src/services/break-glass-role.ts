@@ -1,72 +1,59 @@
 /**
- * Break-glass grants, the app's own read-time judgement (Hub enhancement 45). Leaf module: no
- * imports, so middleware/authenticate.ts can call it on every request for free.
+ * Break-glass grants, the pure rules (Hub enhancement 45). Leaf module: no imports.
  *
- * While a Nivaro Hub break-glass grant holds a person's account, `nivaro_users.break_glass` is
- * JSON `{ref, until, role, prev_role, at}`: the account's role was swapped to the admin role
- * `role` until `until`, and was `prev_role` before. The Hub revokes at `until`, the app's own job
- * (hub-break-glass-expire) revokes too — and in between, every request the person makes is judged
- * here: once `until` has passed, the request runs with `prev_role` already, so a grant can never
- * outlive its expiry by a missed job or an unreachable Hub.
+ * A grant (app table nivaro_break_glass_grants) gave an account the app's admin role until
+ * `ends_at`, and remembers the role it had (`prev_role`). The rules every judge shares — the
+ * request path (middleware/authenticate.ts through services/break-glass-grants.ts), the app's
+ * expiry job, the Hub's revoke, isActiveAdmin:
  *
- * Only while the role is still the granted one: an administrator who changed the person's role
- * during the grant decided on purpose, and that stands.
+ *  - A grant whose end time cannot be read counts as ENDED (fail closed).
+ *  - When a grant ends, the saved role comes back whenever the account's role now carries admin
+ *    access (the granted role, or any other admin role someone set meanwhile — a grantee can never
+ *    keep admin by moving to another admin role). A role changed to one WITHOUT admin access is
+ *    kept: someone took access away on purpose.
  */
 
-export interface BreakGlassMark {
+export interface GrantRow {
+  id: number
   ref: string
-  /** ISO time the grant ends. */
-  until: string
-  /** The admin role id the grant set. */
-  role: string
-  /** The role id the account had before (null = none). */
+  user_id: string | null
+  role: string | null
   prev_role: string | null
-  at: string
+  ends_at: string | null
 }
 
-const REF_RE = /^bg-[1-9][0-9]{0,11}$/
+const ms = (v: unknown): number => {
+  if (v == null || v === '') return Number.NaN
+  const d = v instanceof Date ? v : new Date(typeof v === 'number' ? v : String(v))
+  return d.getTime()
+}
 
-/** The stored mark, or null (missing, not JSON, or not a mark). Never throws. */
-export function readBreakGlassMark(raw: unknown): BreakGlassMark | null {
-  if (raw == null || raw === '') return null
-  let v: unknown = raw
-  if (typeof raw === 'string') {
-    try {
-      v = JSON.parse(raw)
-    } catch {
-      return null
-    }
-  }
-  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
-  const m = v as Record<string, unknown>
-  if (typeof m.ref !== 'string' || !REF_RE.test(m.ref)) return null
-  if (typeof m.until !== 'string' || !Number.isFinite(Date.parse(m.until))) return null
-  if (typeof m.role !== 'string' || !m.role) return null
-  const prev = m.prev_role == null ? null : String(m.prev_role)
-  return {
-    ref: m.ref,
-    until: m.until,
-    role: m.role,
-    prev_role: prev,
-    at: typeof m.at === 'string' ? m.at : ''
-  }
+/** Ended: its time ran out, or its end time cannot be read. Pure. */
+export function grantEnded(g: Pick<GrantRow, 'ends_at'>, now: number = Date.now()): boolean {
+  const end = ms(g.ends_at)
+  return !Number.isFinite(end) || end <= now
 }
 
 const same = (a: unknown, b: unknown) =>
   a != null && b != null && String(a).toUpperCase() === String(b).toUpperCase()
 
 /**
- * The role a request by this account runs with: `prev_role` when the account's grant has ended
- * and its role is still the granted one, else the account's own role. `expired` says the app
- * should put the role back now (the caller starts that in the background).
+ * What happens to the account's role when its grant ends: `restore` (back to prev_role) when the
+ * current role is the granted one or carries admin access, else `keep`. Pure.
  */
-export function breakGlassRoleFor(
-  user: { role?: unknown; break_glass?: unknown },
-  now: number = Date.now()
-): { role: unknown; expired: boolean } {
-  const mark = readBreakGlassMark(user.break_glass)
-  if (!mark) return { role: user.role, expired: false }
-  if (Date.parse(mark.until) > now) return { role: user.role, expired: false }
-  if (!same(user.role, mark.role)) return { role: user.role, expired: true }
-  return { role: mark.prev_role, expired: true }
+export function roleAfterGrant(
+  current: { id: unknown; admin_access?: unknown } | null | undefined,
+  g: Pick<GrantRow, 'role'>
+): 'restore' | 'keep' {
+  if (!current) return 'keep'
+  if (same(current.id, g.role)) return 'restore'
+  const admin =
+    current.admin_access === true || current.admin_access === 1 || current.admin_access === '1'
+  return admin ? 'restore' : 'keep'
+}
+
+/** The grant's end time: the earlier of the Hub's `until` and the app's own now + hours. Pure. */
+export function grantEndsAt(hours: number, until: number | null, now: number = Date.now()): Date {
+  const own = now + hours * 3_600_000
+  return new Date(until != null && Number.isFinite(until) ? Math.min(own, until) : own)
 }

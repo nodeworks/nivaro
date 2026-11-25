@@ -364,6 +364,13 @@ export async function startOffboard(
     item: String(id),
     comment: `Offboard everywhere: ${results.length} environment(s); Hub account ${hubAccount}`
   })
+  // Break-glass of this person (Hub security): pending requests withdrawn, grants revoked.
+  if (input.hubUserId) {
+    const hubUserId = input.hubUserId
+    void import('../security/break-glass.js')
+      .then((m) => m.endBreakGlassOfPerson(hubUserId))
+      .catch(() => undefined)
+  }
   launch(id, deps)
   return (await readOffboard(id)) as OffboardRow
 }

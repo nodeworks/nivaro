@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -6,6 +7,7 @@ import { appBox } from '../services/app-state.js'
 import { idParam, isAppOwner } from '../services/hub/apps.js'
 import { moveOpenRefusal } from '../services/hub/move-open.js'
 import { deliverHubNotice, hubEventRecipients } from '../services/hub/notify-events.js'
+import { freezeRefusal } from '../services/hub/releases/freeze.js'
 import {
   approveBreakGlass,
   BreakGlassError,
@@ -174,6 +176,15 @@ async function envDirectory(appIds: number[] | null): Promise<EnvLabel[]> {
     .sort((a, b) => a.app_name.localeCompare(b.app_name) || a.position - b.position)
 }
 
+/** The apps of an environment list, each once, in its order. */
+function appsOf(envs: EnvLabel[]): Array<{ id: number; key: string; name: string }> {
+  const out: Array<{ id: number; key: string; name: string }> = []
+  for (const e of envs)
+    if (!out.some((a) => a.id === e.app_id))
+      out.push({ id: e.app_id, key: e.app_key, name: e.app_name })
+  return out
+}
+
 async function envIdsOf(appIds: number[] | null): Promise<number[] | null> {
   if (!appIds) return null
   if (!appIds.length) return []
@@ -206,6 +217,26 @@ async function reviewNotify(appId: number, subject: string, message: string, rev
     source: { kind: 'hub_access_review', label: 'Access review', id: reviewId },
     why: 'You are a Hub administrator or an owner of this app; its access is reviewed regularly.'
   })
+}
+
+/** The last scan as this caller may see it: admins whole; owners only their own images' rows. */
+async function scanFor(req: FastifyRequest, mine: string[]) {
+  const last = await lastScan()
+  if (!last || req.isAdmin) return last
+  const own = new Set(mine)
+  const result = Array.isArray(last.result)
+    ? (last.result as Array<{ image?: unknown }>).filter((r) => own.has(String(r.image)))
+    : []
+  return {
+    id: last.id,
+    status: last.status,
+    started_at: last.started_at,
+    finished_at: last.finished_at,
+    images: result.length,
+    findings: null,
+    error: null,
+    result
+  }
 }
 
 /** When the last manual certificate check started (this process; Hub mode is one app). */
@@ -320,13 +351,7 @@ export function hubSecurityRoutes(app: FastifyInstance) {
     )
     return {
       data: reviews.map((r, i) => ({ ...r, counts: counts[i] })),
-      apps: (await envDirectory(apps)).reduce<Array<{ id: number; key: string; name: string }>>(
-        (out, e) =>
-          out.some((a) => a.id === e.app_id)
-            ? out
-            : [...out, { id: e.app_id, key: e.app_key, name: e.app_name }],
-        []
-      )
+      apps: appsOf(await envDirectory(apps))
     }
   })
 
@@ -437,6 +462,8 @@ export function hubSecurityRoutes(app: FastifyInstance) {
       const envIds = r.environments.map((e) => e.environment_id)
       const moving = await moveOpenRefusal({ envIds })
       if (moving) return fail(reply, 409, moving.code, moving.message)
+      const frozen = await freezeRefusal({ appIds: [r.app_id], action: 'access_change' })
+      if (frozen) return fail(reply, frozen.status, frozen.code, frozen.message)
       try {
         const out = await completeReview(r.id, userId(req))
         await logActivity({
@@ -460,6 +487,8 @@ export function hubSecurityRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const r = await reviewFor(req, reply, req.params.id)
       if (!r) return reply
+      const frozen = await freezeRefusal({ appIds: [r.app_id], action: 'access_change' })
+      if (frozen) return fail(reply, frozen.status, frozen.code, frozen.message)
       try {
         const out = await retryRemovals(r.id)
         await logActivity({
@@ -612,7 +641,14 @@ export function hubSecurityRoutes(app: FastifyInstance) {
       const m = Number(query(req).months ?? 12)
       if (!Number.isInteger(m) || m < 1 || m > 36)
         return fail(reply, 400, 'BAD_MONTHS', 'months is 1 to 36')
-      const pack = await buildCompliancePack(id, m)
+      let pack: Awaited<ReturnType<typeof buildCompliancePack>>
+      try {
+        pack = await buildCompliancePack(id, m)
+      } catch (err) {
+        if ((err as { code?: unknown }).code === 'PACK_TOO_BIG')
+          return fail(reply, 413, 'PACK_TOO_BIG', (err as Error).message)
+        throw err
+      }
       await logActivity({
         action: 'hub-compliance-pack',
         user: userId(req),
@@ -624,7 +660,8 @@ export function hubSecurityRoutes(app: FastifyInstance) {
       reply.header('Content-Type', 'application/zip')
       reply.header('Content-Disposition', `attachment; filename="${pack.filename}"`)
       reply.header('Cache-Control', 'no-store')
-      return reply.send(pack.zip)
+      // Streamed piece by piece (each file, then the directory): no second whole copy.
+      return reply.send(Readable.from(pack.parts))
     }
   )
 
@@ -645,7 +682,11 @@ export function hubSecurityRoutes(app: FastifyInstance) {
       data: {
         scanner: !!settings.scanner_url,
         environments: await envDirectory(await visibleApps(req)),
-        last_scan: await lastScan(),
+        // Owners: when the last scan ran, never which images of other apps it covered.
+        last_scan: await scanFor(
+          req,
+          images.map((i) => i.image)
+        ),
         images: images.map((i) => {
           const mine = findings.filter((f) => f.digest === i.digest)
           return { ...i, counts: severityCounts(mine) }
@@ -677,7 +718,10 @@ export function hubSecurityRoutes(app: FastifyInstance) {
     const envIds = await envIdsOf(await visibleApps(req))
     return {
       data: {
-        certificates: await listCerts(envIds),
+        // Resolved addresses are internal detail: Hub admins only.
+        certificates: (await listCerts(envIds)).map((c) =>
+          req.isAdmin ? c : { ...c, addresses: null, subject: null }
+        ),
         environments: await envDirectory(await visibleApps(req)),
         running: tlsCheck.value > Date.now() - 10 * 60_000
       }

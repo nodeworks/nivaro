@@ -2677,6 +2677,25 @@ export async function buildServer() {
         })
       }
 
+      // Nivaro Hub break-glass (hub enhancement 45): every grant whose time ran out (or whose end
+      // cannot be read) gets its role back — on every install, linked to a Hub or not, so a grant
+      // never outlives its end by a missing link. A no-op without the table or rows.
+      app.cron.schedule(
+        'hub-break-glass-expire',
+        '* * * * *',
+        async () => {
+          const { expireGrants } = await import('./services/break-glass-grants.js')
+          const done = await expireGrants()
+          if (done.length) app.log.info(`hub-break-glass-expire: ${done.length} grant(s) ended`)
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Every minute — puts back the role of every Nivaro Hub break-glass grant whose time ran out, even when the Hub cannot be reached.'
+        }
+      )
+
       // Directory sync: is every user still with the company? Registered
       // always so Background Jobs lists it; the body skips itself until the
       // Settings switch is on AND the app token carries User.Read.All.

@@ -22,11 +22,16 @@ import { longText } from '../portable-ddl.js'
  *  - nivaro_hub_break_glass          temporary admin in an app: request, approval, grant over the
  *                                    hub link, automatic revoke (heartbeat + resume)
  *
- * App side (every install):
- *  - nivaro_users.break_glass        JSON {ref, until, role, prev_role, at} while a break-glass
- *                                    grant holds the account's role: the app itself puts the role
- *                                    back when `until` passes (its own job, and every request the
- *                                    person makes judges it) even if the Hub never comes back
+ * App side (every install; travels with nivaro_users — env refresh, moves; never promoted):
+ *  - nivaro_break_glass_grants       one row per break-glass grant the Hub made here (ref unique):
+ *                                    the account, the admin role it got, the role it had, the
+ *                                    app-computed end time; `ended_at` once the role is back. A
+ *                                    revoke for a ref no grant holds leaves a tombstone row (no
+ *                                    account) so a late grant with that ref is refused. The
+ *                                    request path judges it in the same statement as the role
+ *                                    read (services/break-glass-grants.ts): an ended or unreadable
+ *                                    grant never leaves admin access — nivaro_users is never
+ *                                    altered (EFP production is a replication publisher)
  */
 export async function up(knex: Knex): Promise<void> {
   if (!(await knex.schema.hasTable('nivaro_hub_access_reviews'))) {
@@ -67,6 +72,8 @@ export async function up(knex: Knex): Promise<void> {
       t.string('account_kind', 32).nullable()
       t.dateTime('last_access').nullable()
       t.boolean('break_glass').nullable()
+      // the account's Entra object id at the read: a removal is refused STALE if it changed
+      t.string('entra_oid', 64).nullable()
       // pending | keep | remove
       t.string('decision', 16).notNullable().defaultTo('pending')
       t.uuid('decided_by').nullable()
@@ -194,20 +201,35 @@ export async function up(knex: Knex): Promise<void> {
     })
   }
 
-  if (
-    (await knex.schema.hasTable('nivaro_users')) &&
-    !(await knex.schema.hasColumn('nivaro_users', 'break_glass'))
-  ) {
-    await knex.schema.alterTable('nivaro_users', (t) => {
-      longText(t, knex, 'break_glass').nullable()
+  if (!(await knex.schema.hasTable('nivaro_break_glass_grants'))) {
+    await knex.schema.createTable('nivaro_break_glass_grants', (t) => {
+      t.increments('id').primary()
+      t.string('ref', 24).notNullable()
+      // null on a tombstone (a revoke that came before its grant)
+      t.uuid('user_id').nullable()
+      t.uuid('role').nullable()
+      t.uuid('prev_role').nullable()
+      t.string('reason', 1000).nullable()
+      t.string('requested_by', 200).nullable()
+      t.string('approved_by', 200).nullable()
+      t.dateTime('granted_at').nullable()
+      t.dateTime('ends_at').nullable()
+      t.dateTime('ended_at').nullable()
+      // expired | revoked | offboarded | unreadable | revoked_before_grant
+      t.string('end_reason', 24).nullable()
+      // restored | role_changed | restored_over_change | none
+      t.string('end_state', 24).nullable()
+      t.string('changed_by', 200).nullable()
+      t.string('changed_to', 200).nullable()
+      t.unique(['ref'], { indexName: 'ux_nivaro_break_glass_grants_ref' })
+      t.index(['user_id', 'ended_at'], 'ix_nivaro_break_glass_grants_user')
     })
   }
 }
 
 export async function down(knex: Knex): Promise<void> {
-  if (await knex.schema.hasColumn('nivaro_users', 'break_glass'))
-    await knex.schema.alterTable('nivaro_users', (t) => t.dropColumn('break_glass'))
   for (const table of [
+    'nivaro_break_glass_grants',
     'nivaro_hub_break_glass',
     'nivaro_hub_cert_checks',
     'nivaro_hub_vuln_findings',

@@ -3,7 +3,7 @@ import { type PeerCertificate, connect as tlsConnect } from 'node:tls'
 import { db } from '../../../db/index.js'
 import { parseJson } from '../../pipeline-engine.js'
 import { deliverHubNotice, hubEventRecipients } from '../notify-events.js'
-import { dropCalendarEntry, putCalendarEntry, type SeamDeps } from './seams.js'
+import { dropCalendarEntry, putCalendarEntry } from './seams.js'
 
 /**
  * TLS / domain watch (Hub enhancement 44): for every environment's address (base_url) and every
@@ -15,7 +15,7 @@ import { dropCalendarEntry, putCalendarEntry, type SeamDeps } from './seams.js'
  * Warnings go to the app's owners + Hub admins (deliverHubNotice) once per threshold — 30, 14
  * and 3 days before expiry, and when it has expired — and once when a name stops resolving; a
  * renewed certificate (more than 30 days again) resets them. Each certificate expiry is also a
- * change-calendar entry (kind `tls`) once the change calendar is in this build (seams.ts).
+ * change-calendar entry (kind `tls`, services/hub/changes/calendar.ts).
  *
  * The names are the Hub's own environments (admin-entered), the same hosts the fleet probe
  * calls; plain-http addresses and IP literals are checked for DNS only (no certificate).
@@ -46,7 +46,7 @@ export interface CertFacts {
   error_code: string | null
 }
 
-export interface TlsDeps extends SeamDeps {
+export interface TlsDeps {
   now?: () => Date
   probe?: (t: HostTarget) => Promise<CertFacts>
   notice?: typeof deliverHubNotice
@@ -268,7 +268,7 @@ export async function tlsWatchTick(
     const key = `${r.environment_id}:${r.hostname}`
     if (keep.has(key)) continue
     await db(CERTS).where({ id: r.id }).delete()
-    await dropCalendarEntry('tls', key, deps)
+    await dropCalendarEntry('tls', key)
   }
   return { checked: targets.length, warned }
 }
@@ -333,19 +333,16 @@ async function record(t: HostTarget, f: CertFacts, now: Date, deps: TlsDeps): Pr
   if (prev) await db(CERTS).where({ id: prev.id }).update(row)
   else await db(CERTS).insert({ environment_id: t.environment_id, hostname: t.hostname, ...row })
   if (f.expires_at)
-    await putCalendarEntry(
-      {
-        source: 'tls',
-        key,
-        kind: 'tls',
-        title: `Certificate of ${t.hostname} expires`,
-        description: f.issuer ? `Issued by ${f.issuer}` : null,
-        app_id: t.app_id,
-        environment_id: t.environment_id,
-        starts_at: f.expires_at
-      },
-      deps
-    )
+    await putCalendarEntry({
+      source: 'tls',
+      key,
+      kind: 'tls',
+      title: `Certificate of ${t.hostname} expires`,
+      description: f.issuer ? `Issued by ${f.issuer}` : null,
+      app_id: t.app_id,
+      environment_id: t.environment_id,
+      starts_at: f.expires_at
+    })
   return warned
 }
 

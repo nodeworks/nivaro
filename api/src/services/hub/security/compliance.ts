@@ -1,9 +1,10 @@
 import { db } from '../../../db/index.js'
 import { csvRow } from '../../../lib/csv-cell.js'
-import { buildZip } from '../../zip-writer.js'
+import { firstLineScrubbed } from '../../ai-explain.js'
+import { zipParts } from '../../zip-writer.js'
 import { listBreakGlass } from './break-glass.js'
 import { EVIDENCE_HEADER, evidenceCsv, hubNames, listReviews, reviewItems } from './reviews.js'
-import { type IncidentRow, incidentsOf, type SeamDeps } from './seams.js'
+import { type IncidentRow, incidentsOf } from './seams.js'
 import { listCerts } from './tls.js'
 import { openFindings, pinnedImages, severityCounts } from './vuln.js'
 
@@ -29,6 +30,31 @@ import { openFindings, pinnedImages, severityCounts } from './vuln.js'
  */
 
 const DAY = 86_400_000
+/** The most rows one pack carries in all (413 PACK_TOO_BIG past it: ask for fewer months). */
+export const PACK_MAX_ROWS = 50_000
+/** And the most bytes (before the zip's few headers). */
+export const PACK_MAX_BYTES = 48 * 1024 * 1024
+
+export class PackTooBigError extends Error {
+  statusCode = 413
+  code = 'PACK_TOO_BIG'
+}
+
+/**
+ * Error text of a deploy or data run, safe for an outside auditor (L4): its first line, secrets
+ * masked (Bearer / key=value / long hex), then every URL, email, IP address, file path and host
+ * name replaced by a placeholder, cut to 200 characters. Pure.
+ */
+export function auditorText(v: unknown): string {
+  const line = firstLineScrubbed(v, 400)
+  return line
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<address>')
+    .replace(/[^\s@'"<>]+@[^\s@'"<>]+\.[a-z]{2,}\b/gi, '<email>')
+    .replace(/\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b/g, '<ip>')
+    .replace(/(^|[\s'"(=])(\/|[A-Za-z]:\\|\\\\)[^\s'")]+/g, '$1<path>')
+    .replace(/\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(:\d+)?\b/gi, '<host>')
+    .slice(0, 200)
+}
 
 const iso = (v: unknown): string => {
   if (v == null || v === '') return ''
@@ -45,7 +71,7 @@ const esc = (v: unknown) =>
 const csv = (header: string[], rows: unknown[][]) =>
   `${[csvRow(header), ...rows.map((r) => csvRow(r))].join('\r\n')}\r\n`
 
-export interface PackDeps extends SeamDeps {
+export interface PackDeps {
   now?: () => Date
   /** HTML → PDF (services/pdf-layout.ts htmlToPdf); a throw = no renderer here. */
   pdf?: (html: string) => Promise<Buffer>
@@ -61,7 +87,7 @@ export async function buildCompliancePack(
   appId: number,
   months: number,
   deps: PackDeps = {}
-): Promise<{ filename: string; zip: Buffer; pdf: boolean }> {
+): Promise<{ filename: string; parts: Iterable<Buffer>; bytes: number; pdf: boolean }> {
   const now = (deps.now ?? (() => new Date()))()
   const since = new Date(now.getTime() - months * 30 * DAY)
   const app = (await db('nivaro_hub_apps').where({ id: appId }).first('id', 'key', 'name')) as
@@ -102,8 +128,12 @@ export async function buildCompliancePack(
   )
   const reviewCsvParts: string[] = []
   const reviewLines: string[] = []
+  let reviewRows = 0
   for (const r of reviews) {
     const items = await reviewItems(r.id)
+    reviewRows += items.length
+    if (reviewRows > PACK_MAX_ROWS)
+      throw new PackTooBigError('The access reviews alone are too many rows; ask for fewer months.')
     const people = await hubNames([r.started_by, r.completed_by, ...items.map((i) => i.decided_by)])
     const body = evidenceCsv(r, app.name || app.key, items, people)
     reviewCsvParts.push(reviewCsvParts.length ? body.slice(body.indexOf('\r\n') + 2) : body)
@@ -157,7 +187,7 @@ export async function buildCompliancePack(
   >
 
   // ─── Incidents (seam), certificates, vulnerabilities ────────────────────────────────────
-  const incidents: IncidentRow[] = await incidentsOf(appId, since, deps)
+  const incidents: IncidentRow[] = await incidentsOf(appId, since)
   const certs = await listCerts(envIds, now)
   const images = (await pinnedImages()).filter((i) =>
     i.environment_ids.some((e) => envIds.includes(e))
@@ -174,6 +204,19 @@ export async function buildCompliancePack(
   const who = (id: unknown) =>
     id == null || id === '' ? '' : (people.get(String(id).toUpperCase()) ?? String(id))
 
+  const totalRows =
+    deploys.length +
+    dataRuns.length +
+    rotations.length +
+    grants.length +
+    incidents.length +
+    certs.length +
+    findings.length +
+    reviewRows
+  if (totalRows > PACK_MAX_ROWS)
+    throw new PackTooBigError(
+      `This pack would carry ${totalRows} rows (at most ${PACK_MAX_ROWS}); ask for fewer months.`
+    )
   const files: Array<{ name: string; data: Buffer }> = []
   const put = (name: string, text: string) => files.push({ name, data: Buffer.from(text, 'utf8') })
 
@@ -202,7 +245,7 @@ export async function buildCompliancePack(
         who(d.started_by),
         iso(d.started_at),
         iso(d.finished_at),
-        String(d.error ?? '').slice(0, 500)
+        d.error ? auditorText(d.error) : ''
       ])
     )
   )
@@ -272,7 +315,7 @@ export async function buildCompliancePack(
         who(r.started_by),
         iso(r.started_at),
         iso(r.finished_at),
-        String(r.error ?? '').slice(0, 500)
+        r.error ? auditorText(r.error) : ''
       ])
     )
   )
@@ -470,7 +513,10 @@ export async function buildCompliancePack(
     ].join('\r\n')
   )
   const stamp = now.toISOString().slice(0, 10)
-  return { filename: `compliance-${app.key}-${stamp}.zip`, zip: buildZip(files), pdf }
+  const bytes = files.reduce((n, f) => n + f.data.length, 0)
+  if (bytes > PACK_MAX_BYTES)
+    throw new PackTooBigError('This pack is too big to build; ask for fewer months.')
+  return { filename: `compliance-${app.key}-${stamp}.zip`, parts: zipParts(files), bytes, pdf }
 }
 
 /** The summary page (light, A4, every value escaped). Pure. */

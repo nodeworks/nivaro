@@ -412,7 +412,7 @@ function ImageRow({
                     <Chip tone={SEV_TONE[f.severity]}>{SEV_WORD[f.severity]}</Chip>
                   </td>
                   <td className={td}>
-                    {f.url ? (
+                    {f.url && /^https:\/\//i.test(f.url) ? (
                       <a
                         href={f.url}
                         target='_blank'
@@ -591,7 +591,7 @@ function SettingsCard() {
         <Field
           id='sec-scanner'
           label='Scanner endpoint'
-          hint='An https service that answers POST /scan {image} with its known vulnerabilities (a Trivy, Grype or OSV wrapper). Empty = no scan and no outbound call. A private address must be in SSRF_ALLOW_HOSTS.'
+          hint='An https service that answers POST /scan {image} with its known vulnerabilities (a Trivy, Grype or OSV wrapper). Empty = no scan and no outbound call. A scanner on this machine or a private address must be named in SSRF_ALLOW_HOSTS.'
         >
           <Input
             id='sec-scanner'

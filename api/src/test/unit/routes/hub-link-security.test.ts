@@ -153,6 +153,8 @@ describe('/api/hub-link/security/*', () => {
     const g = await call('POST', 'break-glass', {
       ref: 'bg-41',
       emails: ['bob@example.com'],
+      entra: [{ oid: 'aaaa-1111', tid: 'tttt-0000' }],
+      hours: 2,
       until,
       reason: 'Release the stuck import'
     })

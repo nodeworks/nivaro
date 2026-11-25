@@ -1,6 +1,8 @@
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
+import { withoutLiveGrantees } from '../../break-glass-grants.js'
+import { isAppOwner } from '../apps.js'
 import { moveOpenRefusal } from '../move-open.js'
 import { deliverHubNotice, hubEventRecipients } from '../notify-events.js'
 import { flagOf, isProductionEnv } from '../owner-access.js'
@@ -8,7 +10,7 @@ import { assertEmailNotOffboarded } from '../people/block.js'
 import { identityOf, type PersonIdentity } from '../people/directory.js'
 import { type PeopleTarget, peopleTargetOf } from '../people/link-calls.js'
 import { callSecurity, type SecurityCallDeps } from './link.js'
-import { onCallIncident, type SeamDeps } from './seams.js'
+import { incidentStillOpen, onCallIncident } from './seams.js'
 import { loadSecuritySettings } from './settings.js'
 
 /**
@@ -20,21 +22,26 @@ import { loadSecuritySettings } from './settings.js'
  *      ├─deny──▶ denied     ├─the app refused──▶ failed
  *      └─cancel / 24 h──▶ cancelled                └─already an admin there──▶ not_needed
  *
- * Who: the request and every decision only on the person's OWN browser session (never View-as, an
- * API key, a phone/OAuth token or an MCP call — the route checks). The requester is an owner of
- * the app, a Hub administrator, or — through the incident seam — the person on call for the app
- * during one of its open incidents. A Hub administrator approves; nobody approves their own
- * request, except the person on call during an open incident of the app (approval_kind
- * `incident`, the incident recorded). Every step is logged and told to the app's owners + Hub
- * admins through the Hub's one notice path (deliverHubNotice).
+ * Who: the request and every decision only on the person's OWN browser session (the route
+ * checks). The requester is an owner of the app, a Hub administrator, or the person on call for
+ * the app during one of its open SEV 1/2 incidents. A Hub administrator approves; nobody approves
+ * their own request, except on call during an open SEV 1/2 incident someone ELSE opened, and on
+ * call by the rota schedule (not an override younger than 24 h) — ruling M5 (seams.ts
+ * onCallIncident). A self-approved grant ends when that incident resolves or its hours run out,
+ * whichever first, and every Hub admin and owner is told at once (urgent).
  *
- * The grant: the requester's PROVEN identity (their Hub account's email + Entra id) is asked of
- * the app over the hub link (POST security/break-glass, ref `bg-<id>`); the app swaps the
- * account's role to its admin role and stores the expiry itself (services/hub-link/security.ts),
- * so the app ends the grant on time even if the Hub is gone. The Hub revokes at `expires_at`
- * (job hub-break-glass, every minute, one leader), retrying forever until the app answers; a grant
- * that could not be confirmed within GRANT_GIVE_UP_MS is revoked anyway (it may have landed).
- * Runs claim the row by heartbeat, so a run whose process stopped is resumed by the job.
+ * The requester is judged again at approve and again before the grant goes out (still an
+ * active Hub account, not offboarded, still allowed to ask): a request can sit for 24 h.
+ * "Offboard everywhere" cancels the person's pending requests and revokes their grants
+ * (endBreakGlassOfPerson).
+ *
+ * The grant: the requester's PROVEN identity (their Hub account's email + Entra id) and the
+ * hours are sent to the app (POST security/break-glass, ref `bg-<id>`); the app computes its own
+ * end time and ends the grant itself (services/break-glass-grants.ts). The Hub revokes at
+ * `expires_at` (job hub-break-glass, every minute, one leader), retrying until the app answers.
+ * A revoke that reaches the app before its grant leaves a tombstone there (a late grant is
+ * refused); and when a grant's answer arrives for a row that was revoked meanwhile, the Hub
+ * sends the revoke again at once. Runs claim the row by heartbeat.
  */
 
 export const BREAK_GLASS = 'nivaro_hub_break_glass'
@@ -102,6 +109,7 @@ const iso = (v: unknown): string | null => {
   const d = v instanceof Date ? v : new Date(String(v))
   return Number.isFinite(d.getTime()) ? d.toISOString() : null
 }
+const upper = (v: unknown) => String(v ?? '').toUpperCase()
 
 export function breakGlassFromRow(r: Record<string, unknown>): BreakGlass {
   const kind =
@@ -158,7 +166,7 @@ export async function listBreakGlass(o: {
   return ((await q.select()) as Array<Record<string, unknown>>).map(breakGlassFromRow)
 }
 
-export interface BreakGlassDeps extends SecurityCallDeps, SeamDeps {
+export interface BreakGlassDeps extends SecurityCallDeps {
   now?: () => Date
   targetOf?: (env: EnvRow) => Promise<PeopleTarget | null>
   call?: typeof callSecurity
@@ -217,16 +225,46 @@ async function names(appId: number, envId: number) {
   return `${app?.name || app?.key || `app ${appId}`} · ${env?.key ?? envId}`
 }
 
+/** A Hub person's display name (activity, the app's log, notices). */
+async function personName(id: string | null | undefined): Promise<string | null> {
+  if (!id) return null
+  const u = (await db('nivaro_users').where({ id }).first('first_name', 'last_name', 'email')) as
+    | Record<string, unknown>
+    | undefined
+  if (!u) return null
+  const n = [u.first_name, u.last_name].filter((x) => typeof x === 'string' && x).join(' ')
+  return (n || String(u.email ?? id)).slice(0, 200)
+}
+
+/** Active Hub administrators (people; never a break-glass grantee). */
+async function adminIds(): Promise<string[]> {
+  const rows = (await withoutLiveGrantees(
+    db('nivaro_users as u')
+      .join('nivaro_roles as r', 'r.id', 'u.role')
+      .where('r.admin_access', true)
+      .where('u.status', 'active')
+      .whereNull('u.account_kind')
+      .select('u.id')
+  )) as Array<{ id: unknown }>
+  return rows.map((r) => String(r.id))
+}
+
 async function tell(
   row: BreakGlass,
-  o: { subject: string; message: string; urgent?: boolean; to?: 'admins' | 'all' },
+  o: {
+    subject: string
+    message: string
+    urgent?: boolean
+    /** admins = Hub admins only; all = owners + admins + requester; every = all + EVERY admin */
+    to?: 'admins' | 'all' | 'every'
+  },
   deps: BreakGlassDeps
 ): Promise<void> {
   try {
-    const people =
-      o.to === 'admins'
-        ? await adminIds()
-        : [...(await (deps.recipients ?? hubEventRecipients)(row.app_id)), row.requester_id]
+    const owners =
+      o.to === 'admins' ? [] : await (deps.recipients ?? hubEventRecipients)(row.app_id)
+    const admins = o.to === 'all' ? [] : await adminIds()
+    const people = [...owners, ...admins, ...(o.to === 'admins' ? [] : [row.requester_id])]
     await (deps.notice ?? deliverHubNotice)(people, {
       subject: o.subject,
       message: o.message,
@@ -241,16 +279,6 @@ async function tell(
   }
 }
 
-async function adminIds(): Promise<string[]> {
-  const rows = (await db('nivaro_users as u')
-    .join('nivaro_roles as r', 'r.id', 'u.role')
-    .where('r.admin_access', true)
-    .where('u.status', 'active')
-    .whereNull('u.account_kind')
-    .select('u.id')) as Array<{ id: unknown }>
-  return rows.map((r) => String(r.id))
-}
-
 /** The requester's proven identity: their Hub account's email and Entra object id. */
 export async function requesterIdentity(userId: string): Promise<PersonIdentity> {
   const hasEntra = await db.schema.hasColumn('nivaro_users', 'entra_oid')
@@ -262,9 +290,10 @@ export async function requesterIdentity(userId: string): Promise<PersonIdentity>
       'last_name',
       'email',
       'status',
+      'account_kind',
       ...(hasEntra ? ['entra_oid', 'entra_tid'] : [])
     )) as Record<string, unknown> | undefined
-  if (!u || String(u.status) !== 'active') return { emails: [], entra: [] }
+  if (!u || String(u.status) !== 'active' || u.account_kind) return { emails: [], entra: [] }
   return identityOf([], {
     id: String(u.id),
     first_name: (u.first_name as string | null) ?? null,
@@ -275,7 +304,46 @@ export async function requesterIdentity(userId: string): Promise<PersonIdentity>
   })
 }
 
-/** A new request (see the header). `onCallFor` = the incident seam's answer for the requester. */
+/** Whether this Hub account is an active Hub administrator (never a grantee). */
+async function isHubAdmin(userId: string): Promise<boolean> {
+  return (await adminIds()).some((id) => upper(id) === upper(userId))
+}
+
+/**
+ * The requester as they are NOW (M2): an active Hub person, not offboarded, and still allowed to
+ * ask for this app (owner, Hub admin, or on call during a qualifying incident). Throws the
+ * refusal; answers their identity.
+ */
+async function requesterNow(
+  appId: number,
+  userId: string,
+  deps: BreakGlassDeps
+): Promise<PersonIdentity> {
+  const identity = await requesterIdentity(userId)
+  if (!identity.emails.length && !identity.entra.length)
+    throw new BreakGlassError(
+      409,
+      'REQUESTER_NOT_ALLOWED',
+      'The person who asked has no active Hub account (or nothing an app could know them by).'
+    )
+  await (deps.offboarded ?? assertEmailNotOffboarded)({
+    id: userId,
+    email: identity.emails[0] ?? null
+  })
+  const allowed =
+    (await isHubAdmin(userId)) ||
+    (await isAppOwner(appId, userId)) ||
+    !!(await onCallIncident(appId, userId))
+  if (!allowed)
+    throw new BreakGlassError(
+      409,
+      'REQUESTER_NOT_ALLOWED',
+      'The person who asked is no longer an owner of this app, a Hub administrator or on call.'
+    )
+  return identity
+}
+
+/** A new request (see the header). `mayRequest` = owner or Hub admin (the route decides). */
 export async function requestBreakGlass(
   input: {
     appId: number
@@ -292,7 +360,7 @@ export async function requestBreakGlass(
   const env = await envRow(input.envId)
   if (!env || env.app_id !== input.appId || env.status === 'archived')
     throw new BreakGlassError(404, 'NOT_FOUND', 'No such environment of this app')
-  const incident = await onCallIncident(input.appId, input.requesterId, deps)
+  const incident = await onCallIncident(input.appId, input.requesterId)
   if (!input.mayRequest && !incident)
     throw new BreakGlassError(
       404,
@@ -314,7 +382,7 @@ export async function requestBreakGlass(
     throw new BreakGlassError(
       403,
       'NO_INCIDENT',
-      'Only the person on call may approve their own request, and only during an open incident of the app.'
+      'Only the person on call by the rota may approve their own request, and only during an open SEV 1 or SEV 2 incident of the app that someone else opened.'
     )
   const identity = await requesterIdentity(input.requesterId)
   if (!identity.emails.length && !identity.entra.length)
@@ -376,8 +444,8 @@ export async function requestBreakGlass(
 }
 
 /**
- * Approve (Hub admin, never their own request) or self-approve during an incident
- * (`incidentId` set by the route only after the seam said so). Starts the grant.
+ * Approve (a Hub admin, never their own request) or self-approve on call during a qualifying
+ * incident (`incidentId`, re-judged here). The requester is judged again first. Starts the grant.
  */
 export async function approveBreakGlass(
   id: number,
@@ -390,19 +458,29 @@ export async function approveBreakGlass(
   if (!row) throw new BreakGlassError(404, 'NOT_FOUND', 'No such request')
   if (row.status !== 'pending')
     throw new BreakGlassError(409, 'NOT_PENDING', 'Only a pending request can be approved.')
-  const self = row.requester_id.toUpperCase() === by.toUpperCase()
+  const self = upper(row.requester_id) === upper(by)
   let kind: 'admin' | 'incident' = 'admin'
   let incidentId: number | null = null
   if (self) {
-    const incident = await onCallIncident(row.app_id, by, deps)
+    const incident = await onCallIncident(row.app_id, by)
     if (!incident || (o.incidentId != null && incident.incident_id !== o.incidentId))
       throw new BreakGlassError(
         403,
         'SELF_APPROVAL',
-        'Nobody approves their own request (only the person on call, during an open incident).'
+        'Nobody approves their own request (only the person on call by the rota, during an open SEV 1 or SEV 2 incident someone else opened).'
       )
     kind = 'incident'
     incidentId = incident.incident_id
+  }
+  try {
+    await requesterNow(row.app_id, row.requester_id, deps)
+  } catch (err) {
+    await db(BREAK_GLASS).where({ id, status: 'pending' }).update({
+      status: 'cancelled',
+      decision_note: 'The requester may no longer ask (checked at approval)',
+      updated_at: now
+    })
+    throw err
   }
   const moving = await moveOpenRefusal({ envIds: [row.environment_id] })
   if (moving) throw new BreakGlassError(409, moving.code, moving.message)
@@ -428,6 +506,21 @@ export async function approveBreakGlass(
         ? `Approved by the person on call during incident ${incidentId}`
         : 'Approved by a Hub administrator'
   })
+  if (kind === 'incident')
+    await tell(
+      row,
+      {
+        to: 'every',
+        urgent: true,
+        subject: `Break-glass self-approved: ${await names(row.app_id, row.environment_id)}`,
+        message:
+          `${(await personName(row.requester_id)) ?? 'The person on call'} approved their own ${row.hours} h of administrator access during incident ${incidentId}: ${row.reason}. It ends when the incident resolves.`.slice(
+            0,
+            1000
+          )
+      },
+      deps
+    )
   const run = runGrant(id, deps)
   if (deps.background === false) await run
   else void run.catch(() => undefined)
@@ -478,7 +571,7 @@ export async function cancelBreakGlass(
   now = new Date()
 ): Promise<BreakGlass> {
   const row = await readBreakGlass(id)
-  if (!row || row.requester_id.toUpperCase() !== by.toUpperCase())
+  if (!row || upper(row.requester_id) !== upper(by))
     throw new BreakGlassError(404, 'NOT_FOUND', 'No such request of yours')
   const n = await db(BREAK_GLASS)
     .where({ id, status: 'pending' })
@@ -494,6 +587,24 @@ export async function cancelBreakGlass(
   return (await readBreakGlass(id)) as BreakGlass
 }
 
+/** Moves an active / granting row to `revoking` (reason given). Answers whether it moved. */
+async function toRevoking(
+  id: number,
+  reason: string,
+  by: string | null,
+  now: Date
+): Promise<boolean> {
+  const n = await db(BREAK_GLASS).where({ id }).whereIn('status', ['active', 'granting']).update({
+    status: 'revoking',
+    revoke_reason: reason,
+    revoked_by: by,
+    next_try_at: now,
+    heartbeat_at: null,
+    updated_at: now
+  })
+  return n > 0
+}
+
 /** End a grant early (Hub admin or the requester). Granting rows are revoked too. */
 export async function revokeEarly(
   id: number,
@@ -501,15 +612,8 @@ export async function revokeEarly(
   deps: BreakGlassDeps = {}
 ): Promise<BreakGlass> {
   const now = (deps.now ?? (() => new Date()))()
-  const n = await db(BREAK_GLASS).where({ id }).whereIn('status', ['active', 'granting']).update({
-    status: 'revoking',
-    revoke_reason: 'early',
-    revoked_by: by,
-    next_try_at: now,
-    heartbeat_at: null,
-    updated_at: now
-  })
-  if (!n) throw new BreakGlassError(409, 'NOT_ACTIVE', 'Only a grant that holds can be ended.')
+  if (!(await toRevoking(id, 'early', by, now)))
+    throw new BreakGlassError(409, 'NOT_ACTIVE', 'Only a grant that holds can be ended.')
   await logActivity({
     action: 'hub-break-glass-revoke',
     user: by,
@@ -521,6 +625,37 @@ export async function revokeEarly(
   if (deps.background === false) await run
   else void run.catch(() => undefined)
   return (await readBreakGlass(id)) as BreakGlass
+}
+
+/**
+ * "Offboard everywhere" of a Hub person (services/hub/people/offboard.ts): every pending request
+ * is withdrawn and every grant is revoked. Never throws.
+ */
+export async function endBreakGlassOfPerson(
+  hubUserId: string,
+  deps: BreakGlassDeps = {}
+): Promise<{ cancelled: number; revoking: number[] }> {
+  const now = (deps.now ?? (() => new Date()))()
+  const out = { cancelled: 0, revoking: [] as number[] }
+  try {
+    out.cancelled = await db(BREAK_GLASS)
+      .where({ requester_id: hubUserId, status: 'pending' })
+      .update({
+        status: 'cancelled',
+        decision_note: 'The requester was offboarded',
+        updated_at: now
+      })
+    const live = (await db(BREAK_GLASS)
+      .where({ requester_id: hubUserId })
+      .whereIn('status', ['active', 'granting'])
+      .select('id')) as Array<{ id: unknown }>
+    for (const r of live)
+      if (await toRevoking(Number(r.id), 'offboarded', null, now)) out.revoking.push(Number(r.id))
+    for (const id of out.revoking) await runRevoke(id, deps).catch(() => undefined)
+  } catch {
+    // The tick retries revokes; the offboard itself goes on.
+  }
+  return out
 }
 
 /** Takes the row for one run (heartbeat claim); false when another live run holds it. */
@@ -555,29 +690,37 @@ async function target(row: BreakGlass, deps: BreakGlassDeps): Promise<PeopleTarg
   return (deps.targetOf ?? (async (e: EnvRow) => peopleTargetOf(e)))(env)
 }
 
-function parseIdentity(raw: unknown): PersonIdentity {
-  try {
-    const v = typeof raw === 'string' ? JSON.parse(raw) : raw
-    const emails = Array.isArray(v?.emails)
-      ? v.emails.filter((x: unknown) => typeof x === 'string')
-      : []
-    const entra = Array.isArray(v?.entra) ? v.entra : []
-    return { emails: emails.slice(0, 5), entra: entra.slice(0, 5) }
-  } catch {
-    return { emails: [], entra: [] }
-  }
-}
-
 /** The grant leg: asks the app; retried by the job on a transient failure. */
 export async function runGrant(id: number, deps: BreakGlassDeps = {}): Promise<void> {
   const now = (deps.now ?? (() => new Date()))()
   if (!(await claim(id, 'granting', now))) return
   const row = await readBreakGlass(id)
   if (!row || row.status !== 'granting') return
-  const raw = (await db(BREAK_GLASS).where({ id }).first('identity')) as { identity: unknown }
-  const identity = parseIdentity(raw?.identity)
+  // M2: judged again right before anything reaches the app.
+  let identity: PersonIdentity
+  try {
+    identity = await requesterNow(row.app_id, row.requester_id, deps)
+  } catch (err) {
+    const code = err instanceof BreakGlassError ? err.code : 'REQUESTER_NOT_ALLOWED'
+    await db(BREAK_GLASS)
+      .where({ id, status: 'granting' })
+      .update({
+        status: 'failed',
+        last_error: code.slice(0, 64),
+        heartbeat_at: null,
+        updated_at: now
+      })
+    await tell(
+      row,
+      {
+        subject: `Break-glass not granted: ${await names(row.app_id, row.environment_id)}`,
+        message: 'The person who asked may no longer have it (checked before granting).'
+      },
+      deps
+    )
+    return
+  }
   const t = await target(row, deps).catch(() => null)
-  const until = new Date(now.getTime() + row.hours * 3_600_000)
   const res = t
     ? await (deps.call ?? callSecurity)(
         t,
@@ -587,8 +730,10 @@ export async function runGrant(id: number, deps: BreakGlassDeps = {}): Promise<v
           ref: `bg-${id}`,
           emails: identity.emails,
           entra: identity.entra,
-          until: until.toISOString(),
-          reason: row.reason
+          hours: row.hours,
+          reason: row.reason,
+          requested_by: await personName(row.requester_id),
+          approved_by: await personName(row.decided_by)
         },
         deps
       )
@@ -616,34 +761,57 @@ export async function runGrant(id: number, deps: BreakGlassDeps = {}): Promise<v
       return
     }
     if (state === 'granted') {
-      await db(BREAK_GLASS)
+      const until = appUntil ? new Date(appUntil) : new Date(now.getTime() + row.hours * 3_600_000)
+      const n = await db(BREAK_GLASS)
         .where({ id, status: 'granting' })
         .update({
           status: 'active',
           app_state: 'granted',
           app_user_id: appUser,
           granted_at: now,
-          expires_at: appUntil ? new Date(appUntil) : until,
+          expires_at: until,
           attempts: row.attempts + 1,
           last_error: null,
           next_try_at: null,
           heartbeat_at: null,
           updated_at: now
         })
+      if (!n) {
+        // Revoked while the grant was on its way (TOCTOU): the app holds a grant nobody wants.
+        // Tell it to end at once, with the account it named; the revoke leg retries if needed.
+        await db(BREAK_GLASS).where({ id }).update({ app_user_id: appUser, updated_at: now })
+        if (t)
+          await (deps.call ?? callSecurity)(
+            t,
+            'POST',
+            'break-glass/revoke',
+            { ref: `bg-${id}`, ...(appUser ? { user_id: appUser } : {}) },
+            deps
+          ).catch(() => undefined)
+        await logActivity({
+          action: 'hub-break-glass-revoke',
+          user: null,
+          collection: BREAK_GLASS,
+          item: String(id),
+          comment: 'The grant arrived after it was ended; revoked again at once'
+        })
+        return
+      }
       await logActivity({
         action: 'hub-break-glass-granted',
         user: row.decided_by,
         collection: BREAK_GLASS,
         item: String(id),
-        comment: `Granted until ${appUntil ?? until.toISOString()} (account ${appUser ?? '?'})`
+        comment: `Granted until ${until.toISOString()} (account ${appUser ?? '?'})`
       })
       await tell(
         row,
         {
           urgent: true,
+          to: row.approval_kind === 'incident' ? 'every' : 'all',
           subject: `Break-glass granted: ${await names(row.app_id, row.environment_id)}`,
           message:
-            `Administrator access for ${row.hours} h until ${appUntil ?? until.toISOString()}: ${row.reason}`.slice(
+            `Administrator access for ${row.hours} h until ${until.toISOString()}${row.approval_kind === 'incident' ? ' (or when the incident resolves)' : ''}: ${row.reason}`.slice(
               0,
               1000
             )
@@ -652,9 +820,20 @@ export async function runGrant(id: number, deps: BreakGlassDeps = {}): Promise<v
       )
       return
     }
+    // An answer the Hub does not understand may still mean a grant: revoke to be sure.
+    await db(BREAK_GLASS).where({ id, status: 'granting' }).update({
+      status: 'revoking',
+      revoke_reason: 'grant_failed',
+      last_error: 'LINK_BAD_ANSWER',
+      next_try_at: now,
+      heartbeat_at: null,
+      updated_at: now
+    })
+    await runRevoke(id, deps)
+    return
   }
-  const code = res.ok ? 'LINK_BAD_ANSWER' : res.code
-  const status = res.ok ? 200 : res.status
+  const code = res.code
+  const status = res.status
   const decided = row.decided_at ? Date.parse(row.decided_at) : now.getTime()
   const tooLong = now.getTime() - decided > GRANT_GIVE_UP_MS
   if (transient(code, status) && !tooLong) {
@@ -704,70 +883,78 @@ export async function runGrant(id: number, deps: BreakGlassDeps = {}): Promise<v
   )
 }
 
-/** The revoke leg: retried forever (the app ends the grant by itself meanwhile). */
+/** The revoke leg: by ref (the app keeps a tombstone); retried until the app answers. */
 export async function runRevoke(id: number, deps: BreakGlassDeps = {}): Promise<void> {
   const now = (deps.now ?? (() => new Date()))()
   if (!(await claim(id, 'revoking', now))) return
   const row = await readBreakGlass(id)
   if (!row || row.status !== 'revoking') return
-  const done = async (appState: string) => {
-    const expired = row.revoke_reason === 'expired'
-    await db(BREAK_GLASS)
-      .where({ id, status: 'revoking' })
-      .update({
-        status: expired ? 'expired' : 'revoked',
-        app_state: appState,
-        revoked_at: now,
-        last_error: null,
-        next_try_at: null,
-        heartbeat_at: null,
-        updated_at: now
-      })
-    await logActivity({
-      action: 'hub-break-glass-ended',
-      user: row.revoked_by,
-      collection: BREAK_GLASS,
-      item: String(id),
-      comment: `Administrator access ended (${row.revoke_reason ?? 'revoked'}; the app answered ${appState})`
-    })
-    await tell(
-      row,
-      {
-        subject: `Break-glass ended: ${await names(row.app_id, row.environment_id)}`,
-        message:
-          appState === 'role_changed'
-            ? 'The grant ended; the account’s role had been changed during it and stays as it is.'
-            : 'The temporary administrator access ended; the account has its own role again.'
-      },
-      deps
-    )
-  }
-  // Without the account id (a grant whose answer was lost) the app finds the account by the
-  // same proven identity the grant used — and only a mark with this ref is touched.
-  let who: Record<string, unknown> = { user_id: row.app_user_id }
-  if (!row.app_user_id) {
-    const raw = (await db(BREAK_GLASS).where({ id }).first('identity')) as { identity: unknown }
-    const identity = parseIdentity(raw?.identity)
-    if (!identity.emails.length && !identity.entra.length) {
-      await done('unknown_account')
-      return
-    }
-    who = { emails: identity.emails, entra: identity.entra }
-  }
   const t = await target(row, deps).catch(() => null)
   const res = t
     ? await (deps.call ?? callSecurity)(
         t,
         'POST',
         'break-glass/revoke',
-        { ref: `bg-${id}`, ...who },
+        { ref: `bg-${id}`, ...(row.app_user_id ? { user_id: row.app_user_id } : {}) },
         deps
       )
     : ({ ok: false, code: 'NO_LINK', status: 0 } as const)
   if (res.ok) {
     const state = String(res.body.state ?? '')
-    if (state === 'revoked' || state === 'none' || state === 'role_changed') {
-      await done(state)
+    if (['revoked', 'none', 'role_changed', 'restored_over_change'].includes(state)) {
+      const expired = row.revoke_reason === 'expired'
+      await db(BREAK_GLASS)
+        .where({ id, status: 'revoking' })
+        .update({
+          status: expired ? 'expired' : 'revoked',
+          app_state: state,
+          revoked_at: now,
+          last_error: null,
+          next_try_at: null,
+          heartbeat_at: null,
+          updated_at: now
+        })
+      const changedBy = typeof res.body.changed_by === 'string' ? res.body.changed_by : null
+      const changedTo = typeof res.body.changed_to === 'string' ? res.body.changed_to : null
+      const count = typeof res.body.activity_count === 'number' ? res.body.activity_count : null
+      await logActivity({
+        action: 'hub-break-glass-ended',
+        user: row.revoked_by,
+        collection: BREAK_GLASS,
+        item: String(id),
+        comment:
+          `Administrator access ended (${row.revoke_reason ?? 'revoked'}; the app answered ${state}${changedBy ? `; role changed by ${changedBy} to ${changedTo ?? '?'}` : ''})`.slice(
+            0,
+            1000
+          )
+      })
+      const env = await envRow(row.environment_id)
+      const link =
+        env && row.app_user_id
+          ? ` Their changes: ${env.base_url.replace(/\/+$/, '')}/users/${encodeURIComponent(row.app_user_id)}?tab=activity`
+          : ''
+      const did =
+        count != null ? ` ${count} change(s) were made by the account during the grant.` : ''
+      const changed = state === 'role_changed' || state === 'restored_over_change'
+      await tell(
+        row,
+        {
+          urgent: changed,
+          to: changed ? 'every' : 'all',
+          subject: changed
+            ? `Break-glass ended — role was changed: ${await names(row.app_id, row.environment_id)}`
+            : `Break-glass ended: ${await names(row.app_id, row.environment_id)}`,
+          message:
+            (state === 'role_changed'
+              ? `${changedBy ?? 'Someone'} changed the account’s role to ${changedTo ?? 'another role'} (without admin access) during the grant; that stays.`
+              : state === 'restored_over_change'
+                ? `${changedBy ?? 'Someone'} changed the account’s role to ${changedTo ?? 'another admin role'} during the grant; the role it had before was put back.`
+                : 'The temporary administrator access ended; the account has its own role again.') +
+            did +
+            link
+        },
+        deps
+      )
       return
     }
   }
@@ -785,9 +972,9 @@ export async function runRevoke(id: number, deps: BreakGlassDeps = {}): Promise<
 }
 
 /**
- * The job (hub-break-glass, every minute, one leader): expired grants start their revoke,
- * revokes and grants due a retry (or whose process stopped) run again, requests nobody decided
- * within 24 h are withdrawn.
+ * The job (hub-break-glass, every minute, one leader): expired grants and self-approved grants
+ * whose incident resolved start their revoke; revokes and grants due a retry (or whose process
+ * stopped) run again; requests nobody decided within 24 h are withdrawn.
  */
 export async function breakGlassTick(
   deps: BreakGlassDeps = {}
@@ -798,14 +985,22 @@ export async function breakGlassTick(
     .where({ status: 'active' })
     .where('expires_at', '<=', now)
     .select('id')) as Array<{ id: unknown }>
-  for (const r of due) {
-    const id = Number(r.id)
-    const n = await db(BREAK_GLASS)
-      .where({ id, status: 'active' })
-      .update({ status: 'revoking', revoke_reason: 'expired', next_try_at: now, updated_at: now })
-    if (n) {
-      await runRevoke(id, deps)
-      out.revoked.push(id)
+  const incidentRows = (await db(BREAK_GLASS)
+    .where({ status: 'active', approval_kind: 'incident' })
+    .whereNotNull('incident_id')
+    .select('id', 'incident_id')) as Array<{ id: unknown; incident_id: unknown }>
+  const resolved: number[] = []
+  for (const r of incidentRows)
+    if (!(await incidentStillOpen(Number(r.incident_id)))) resolved.push(Number(r.id))
+  for (const [ids, reason] of [
+    [due.map((r) => Number(r.id)), 'expired'],
+    [resolved, 'incident_resolved']
+  ] as const) {
+    for (const id of ids) {
+      if (await toRevoking(id, reason, null, now)) {
+        await runRevoke(id, deps)
+        out.revoked.push(id)
+      }
     }
   }
   const stale = new Date(now.getTime() - STALE_MS)
@@ -816,6 +1011,7 @@ export async function breakGlassTick(
     .select('id', 'status')) as Array<{ id: unknown; status: string }>
   for (const r of retry) {
     const id = Number(r.id)
+    if (out.revoked.includes(id)) continue
     if (r.status === 'revoking') await runRevoke(id, deps)
     else await runGrant(id, deps)
     out.retried.push(id)

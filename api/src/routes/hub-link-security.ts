@@ -17,8 +17,8 @@ import { NIVARO_VERSION } from '../version.js'
  *   POST security/break-glass           {ref, emails?, entra?, until, reason} → {state, user_id, until}
  *   POST security/break-glass/revoke    {ref, user_id} → {state}
  *
- * The app's own revoke job `hub-break-glass-expire` (every minute, per app on a shared
- * deployment) is registered here too, so it exists exactly where a grant can be made.
+ * The app's own revoke job `hub-break-glass-expire` is a core job (server.ts, every install):
+ * a grant ends on time even where the hub link is gone.
  */
 
 function fail(reply: FastifyReply, status: number, code: string, message: string) {
@@ -85,29 +85,9 @@ function securityRoutes(app: FastifyInstance, prefix: string, inApp: InApp) {
   })
 }
 
-function expireJob(app: FastifyInstance) {
-  if (!app.cron) return
-  app.cron.schedule(
-    'hub-break-glass-expire',
-    '* * * * *',
-    async () => {
-      const { expireBreakGlass } = await import('../services/hub-link/security.js')
-      const done = await expireBreakGlass()
-      if (done.length) app.log.info(`hub-break-glass-expire: ${done.length} grant(s) ended`)
-    },
-    {
-      quiet: true,
-      idempotent: 'safe',
-      description:
-        'Every minute (apps linked to a Nivaro Hub) — puts back the role of every break-glass grant whose time ran out, even when the Hub cannot be reached.'
-    }
-  )
-}
-
 /** Inside routes/hub-link.ts (after its bearer hook): `/api/hub-link/security/*`. */
 export function hubLinkSecurityRoutes(app: FastifyInstance): void {
   securityRoutes(app, '/security', async (_id, _reply, fn) => fn())
-  expireJob(app)
 }
 
 async function tenantById(id: string): Promise<TenantRecord | null> {
@@ -126,5 +106,4 @@ export function deploymentLinkSecurityRoutes(app: FastifyInstance): void {
     return withTenant(t, fn, t.origin)
   }
   securityRoutes(app, '/apps/:id/security', inApp)
-  expireJob(app)
 }

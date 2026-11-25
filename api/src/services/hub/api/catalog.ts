@@ -2163,7 +2163,7 @@ export const HUB_ROUTES: HubRoute[] = [
     'The public status page (HTML; ?format=json for JSON)',
     {
       notes:
-        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.',
+        'No sign-in: the token is the credential. Rate-limited; a wrong, expired or replaced token answers 404. No hostnames, versions or error text.'
     }
   ),
   // ─── Verification: smoke checks, extension versions (routes/hub-verify.ts) ──────────
@@ -2275,6 +2275,8 @@ export const HUB_ROUTES: HubRoute[] = [
       sensitive: true,
       notes:
         'Docker: the pin is written inside the promotion lock as part of Apply now (202, a normal Hub deploy) and put back when the deploy fails. GitLab: the pin file extensions/<id>.pin beside the driver’s pin file is committed under the promotion and branch locks, a deploy record (kind extension) is written and the repository pipeline is watched (202). Refused for an extension the app neither lists nor runs (UNKNOWN_EXTENSION), on a shared deployment (EXTENSION_ON_SHARED), while a move or creation is open (MOVE_OPEN, CREATION_OPEN), in a freeze (FROZEN) or while the environment deploys (LOCKED).'
+    }
+  ),
   // ─── Security (routes/hub-security.ts) ──────────────────────────────────────
   r(
     'GET',
