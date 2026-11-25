@@ -132,6 +132,9 @@ export interface PullRequest {
   env_objects?: boolean
   /** 0.3.215 (both sides): also copy the cold objects of session replays. */
   replays?: boolean
+  /** 0.3.215: `root` (dedicated source) or the shared source's tenant id: the only place the
+   *  target may copy an object from inside one bucket. */
+  source_scope?: string
 }
 
 export interface PullStatus {
@@ -571,7 +574,8 @@ export function deploymentClient(
           mode: req.mode,
           ...(req.objects ? { objects: true } : {}),
           ...(req.env_objects ? { env_objects: true } : {}),
-          ...(req.replays ? { replays: true } : {})
+          ...(req.replays ? { replays: true } : {}),
+          ...(req.source_scope ? { source_scope: req.source_scope } : {})
         }
       })
       if (!ok(a)) throw refusalOf(a, transferRefusal)

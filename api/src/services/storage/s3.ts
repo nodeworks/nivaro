@@ -28,6 +28,7 @@ import {
   S3Client,
   UploadPartCommand
 } from '@aws-sdk/client-s3'
+import { assertCopySource, type CopySourceScope } from './app-scope.js'
 import type { StorageProvider, StoredStream } from './index.js'
 import { StoredObjectMissing } from './missing.js'
 import { parseByteRange } from './range.js'
@@ -274,9 +275,11 @@ export class S3Storage implements StorageProvider {
     key: string,
     rawSource: string,
     mime: string,
-    opts: { signal?: AbortSignal } = {}
+    opts: { signal?: AbortSignal; sourceScope: CopySourceScope }
   ): Promise<number> {
-    const source = `${uriEncode(this.bucket)}/${rawSource.split('/').map(uriEncode).join('/')}`
+    // Never a key the caller did not scope: `..`, control characters, another app's folder.
+    const from = assertCopySource(rawSource, opts?.sourceScope)
+    const source = `${uriEncode(this.bucket)}/${from.split('/').map(uriEncode).join('/')}`
     await this.client.send(
       new CopyObjectCommand({
         Bucket: this.bucket,

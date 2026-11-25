@@ -308,7 +308,8 @@ export function hubLinkClient(
         mode: req.mode,
         ...(req.objects ? { objects: true } : {}),
         ...(req.env_objects ? { env_objects: true } : {}),
-        ...(req.replays ? { replays: true } : {})
+        ...(req.replays ? { replays: true } : {}),
+        ...(req.source_scope ? { source_scope: req.source_scope } : {})
       })
       if (!ok(a)) throw refusal(a)
       const b = a.body

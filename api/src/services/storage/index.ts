@@ -8,6 +8,7 @@
 import type { Readable } from 'node:stream'
 import { getTenantId } from '../../db/tenant-context.js'
 import { tenantSource } from '../deployment-mode.js'
+import type { CopySourceScope } from './app-scope.js'
 import { scopedStorage } from './app-scope.js'
 import { AzureStorage } from './azure.js'
 import { instrumentStorage } from './instrument.js'
@@ -48,12 +49,13 @@ export interface StorageProvider {
    *  copies server-side when source and target name the same one (0.3.215). */
   storeId?(): string
   /** Server-side copy inside the same bucket/container from the source's FULL key `rawSource`
-   *  (never scoped) to `key`; resolves to the copy's size (0.3.215). */
+   *  to `key`. The source must lie in `sourceScope` (assertCopySource), which the caller names
+   *  from what it controls, never from what the source sent. Resolves to the size (0.3.215). */
   copyFrom?(
     key: string,
     rawSource: string,
     mime: string,
-    opts?: { signal?: AbortSignal }
+    opts: { signal?: AbortSignal; sourceScope: CopySourceScope }
   ): Promise<number>
 }
 

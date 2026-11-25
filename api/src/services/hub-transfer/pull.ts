@@ -14,7 +14,12 @@ import { type SafeFetchInit, safeFetch } from '../../lib/ssrf.js'
 import { tenantSource } from '../deployment-mode.js'
 import { hubLinkKeyTag } from '../hub-link/retire.js'
 import { getApp } from '../io-holder.js'
-import { APP_SCOPE_ROOT, appScopedKey } from '../storage/app-scope.js'
+import {
+  appScopedKey,
+  appScopePrefix,
+  assertCopySource,
+  type CopySourceScope
+} from '../storage/app-scope.js'
 import { getStorage, type StorageProvider } from '../storage/index.js'
 import { appKeyPart } from '../tenancy/credential-binding.js'
 import { COPYABLE_OBJECT_STORAGE, ENV_STORAGE_PROVIDERS } from './copyable.js'
@@ -38,10 +43,11 @@ import { TRANSFER_TICKET_RE } from './tickets.js'
  *    replays (`nivaro_session_recordings.cold_key`, from the source's /replays/:id; their ids are
  *    `replay:<id>` in the manifest, `missing` and `failed_ids`). The source says which store held
  *    each object (`X-Nivaro-Transfer-Store: env | settings`) and the target writes it to the same
- *    kind of its own store. When the source's env bucket is this side's env bucket (same hash) and
- *    it names this app's own full key (bucket root, or apps/<this tenant>/ — never another app's
- *    folder), the bucket copies it (`copyFrom`, counted in `server_copied` too); a refusal
- *    streams it as usual.
+ *    kind of its own store. When the source's env bucket is this side's env bucket (same hash),
+ *    the bucket copies it (`copyFrom`, counted in `server_copied` too) from a full key REBUILT
+ *    here from the Hub's `source_scope` and the row's key (the source's stored-key header must
+ *    agree, it never chooses it); a shared target only from its own apps/<tenant>/. Anything
+ *    else, or a refusal, streams it as usual.
  *  - Per row: skipped when the object is already here at the row's size (resumable); otherwise
  *    fetched (`redirect: 'error'`, 10 min per object, 4 at a time) into a temp file, then
  *    `putFile(filename_disk)`. Streams go through `pipeline()`, never `.pipe()`.
@@ -84,6 +90,12 @@ export interface PullRequest {
   env_objects?: boolean
   /** 0.3.215: also copy the cold objects of session replays (the source's /replays/:id). */
   replays?: boolean
+  /**
+   * 0.3.215: where the source keeps this app's objects in its bucket, named by the Hub for this
+   * move: `root` (a dedicated source) or the shared source's tenant id (apps/<id>/). Without it
+   * no object is copied server-side. Never read from the source's answers.
+   */
+  source_scope?: string
 }
 
 export interface PullStatus {
@@ -164,6 +176,18 @@ const TRANSFER_MISSING_HEADER = 'x-nivaro-transfer-missing'
 const TRANSFER_STORE_HEADER = 'x-nivaro-transfer-store'
 const TRANSFER_STORE_ID_HEADER = 'x-nivaro-transfer-store-id'
 const TRANSFER_STORED_KEY_HEADER = 'x-nivaro-transfer-stored-key'
+
+/** The Hub's `source_scope`: `root`, or a tenant id usable as apps/<id>/; anything else null. */
+export function parseSourceScope(raw: unknown): CopySourceScope | null {
+  if (raw === 'root') return 'root'
+  if (typeof raw !== 'string') return null
+  try {
+    appScopePrefix(raw)
+  } catch {
+    return null
+  }
+  return { tenant: raw }
+}
 
 /** A row's id in the manifest, `missing` and `failed_ids`: a replay's carries `replay:`. */
 function rowTag(row: FileRow): string {
@@ -547,6 +571,7 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
   const objects = b.objects === true
   const envObjects = b.env_objects === true
   const replays = b.replays === true
+  const sourceScope = parseSourceScope(b.source_scope)
   const sc = scope()
   const now = Date.now()
   prune(now)
@@ -602,7 +627,7 @@ export async function startPull(req: PullRequest): Promise<{ run_id: string }> {
   // Runs in the caller's async context (on a shared deployment, inside the target app) and on
   // the background pool: fire-and-forget work never takes request connections.
   void runInBackgroundPool(() =>
-    execute(run, { source, ticket, mode, objects, envObjects, replays }, redis)
+    execute(run, { source, ticket, mode, objects, envObjects, replays, sourceScope }, redis)
   )
   return { run_id: runId }
 }
@@ -616,6 +641,7 @@ async function execute(
     objects?: boolean
     envObjects?: boolean
     replays?: boolean
+    sourceScope?: CopySourceScope | null
   },
   redis: PullRedis | null
 ): Promise<void> {
@@ -813,23 +839,24 @@ async function execute(
       return false
     }
     /**
-     * 0.3.215: the source's full key of the object when this side may copy it inside the bucket:
-     * this app's own key at the bucket root, or under apps/<tenant>/ — on a shared deployment
-     * only this app's own tenant. Anything else (another app's folder, a path trick) is null and
-     * the bytes are streamed as usual.
+     * 0.3.215: the source's full key for a server-side copy, REBUILT here from what this side
+     * controls — the source scope the Hub named for this move (`source_scope`: a dedicated
+     * source's bucket root, or the shared source's apps/<tenant>/) and the row's own key — never
+     * taken from what the source sent. A shared target copies only from its own apps/<tenant>/
+     * folder (the root of a shared bucket and every other app's folder are refused). Null = no
+     * copy: the bytes are streamed through the authenticated source read.
      */
-    const ownRawKey = (key: string, raw: string | null): string | null => {
-      if (raw === null) return null
-      if (raw === key) return raw
-      if (!raw.startsWith(APP_SCOPE_ROOT) || !raw.endsWith(`/${key}`)) return null
-      const tenant = raw.slice(APP_SCOPE_ROOT.length, raw.length - key.length - 1)
+    const copySource = (key: string): { raw: string; scope: CopySourceScope } | null => {
+      const scope = req.sourceScope ?? null
+      if (!scope) return null
+      if (tenantSource() === 'hub' && (scope === 'root' || scope.tenant !== getTenantId()))
+        return null
       try {
-        if (appScopedKey(key, tenant) !== raw) return null
+        const raw = scope === 'root' ? key : appScopedKey(key, scope.tenant)
+        return { raw: assertCopySource(raw, scope), scope }
       } catch {
         return null
       }
-      if (tenantSource() === 'hub' && tenant !== getTenantId()) return null
-      return raw
     }
     /** The key as this side's env provider stores it (apps/<tenantId>/… on a shared one). */
     const ownStoredKey = (key: string): string | null => {
@@ -957,19 +984,22 @@ async function execute(
       // the env provider, only from this app's own key; any failure streams it as usual.
       const sourceId = res.headers.get(TRANSFER_STORE_ID_HEADER)
       const rawHeader = res.headers.get(TRANSFER_STORED_KEY_HEADER)
-      const raw = ownRawKey(key, rawHeader === null ? null : decodeHeader(rawHeader))
+      const from = copySource(key)
+      // The source's own word must agree with the key rebuilt here; it never chooses it.
+      const agrees = from !== null && rawHeader !== null && decodeHeader(rawHeader) === from.raw
       if (
         !streamOnly &&
         said === 'env' &&
         store === storage &&
         sourceId &&
-        raw !== null &&
+        from !== null &&
+        agrees &&
         typeof storage.copyFrom === 'function' &&
         typeof storage.storeId === 'function' &&
         safeStoreId(storage) === sourceId
       ) {
         drop()
-        if (raw === ownStoredKey(key)) {
+        if (from.raw === ownStoredKey(key)) {
           // The very object this side reads (same bucket, same full key): nothing to copy.
           st.skipped++
           progress()
@@ -977,7 +1007,10 @@ async function execute(
           return
         }
         try {
-          const n = await storage.copyFrom(key, raw, mime, { signal })
+          const n = await storage.copyFrom(key, from.raw, mime, {
+            signal,
+            sourceScope: from.scope
+          })
           if (n === declared) {
             st.copied++
             st.server_copied = (st.server_copied ?? 0) + 1

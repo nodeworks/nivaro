@@ -767,7 +767,11 @@ describe('the Hub asks for tickets and pulls', () => {
     vi.mocked(pull.startPull).mockImplementationOnce(async (req) => {
       seenIn.push(getTenantId())
       objectsSeen = req.objects
-      flagsSeen = { env_objects: req.env_objects, replays: req.replays }
+      flagsSeen = {
+        env_objects: req.env_objects,
+        replays: req.replays,
+        source_scope: req.source_scope
+      }
       return { run_id: 'run-9' }
     })
     const p = await a.inject({
@@ -780,13 +784,14 @@ describe('the Hub asks for tickets and pulls', () => {
         mode: 'delta',
         objects: true,
         env_objects: true,
-        replays: true
+        replays: true,
+        source_scope: 'app-a-e1'
       }
     })
     expect(p.statusCode).toBe(202)
     expect(seenIn).toEqual(['app-b-e2'])
     expect(objectsSeen).toBe(true)
-    expect(flagsSeen).toEqual({ env_objects: true, replays: true })
+    expect(flagsSeen).toEqual({ env_objects: true, replays: true, source_scope: 'app-a-e1' })
     const unknownApp = await a.inject({
       method: 'POST',
       url: '/api/hub-deployment/apps/nope-e1/files/ticket',

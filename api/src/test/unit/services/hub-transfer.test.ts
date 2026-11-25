@@ -26,11 +26,12 @@ vi.mock('../../../db/index.js', () => ({
 }))
 
 import { requestedPool } from '../../../db/pool-context.js'
-import { withTenant } from '../../../db/tenant-context.js'
+import { getTenantId, withTenant } from '../../../db/tenant-context.js'
 import {
   errorShape,
   type FileRow,
   PullError,
+  parseSourceScope,
   pullDeps,
   pullStatus,
   readPullStatus,
@@ -45,6 +46,7 @@ import {
   ticketKey,
   ticketTenant
 } from '../../../services/hub-transfer/tickets.js'
+import { scopedStorage } from '../../../services/storage/app-scope.js'
 
 // ─── an in-memory Redis with the commands the transfer uses ─────────────────────────────────
 
@@ -939,7 +941,7 @@ describe('pull: env object storage and session replays (0.3.215)', () => {
   /** This side's env provider on one bucket (hash BUCKET): what it holds, and its copies. */
   const BUCKET = 'b'.repeat(64)
   const envBucket = new Map<string, Buffer>()
-  const copies: Array<{ key: string; raw: string; mime: string }> = []
+  const copies: Array<{ key: string; raw: string; mime: string; scope: unknown }> = []
   let copyFails = false
   function envS3(tenant: string | null = null) {
     const full = (k: string) => (tenant ? `apps/${tenant}/${k}` : k)
@@ -953,9 +955,9 @@ describe('pull: env object storage and session replays (0.3.215)', () => {
         return b.length
       },
       storeId: () => BUCKET,
-      async copyFrom(k: string, raw: string, mime: string) {
+      async copyFrom(k: string, raw: string, mime: string, opts: { sourceScope: unknown }) {
         if (copyFails) throw Object.assign(new Error('AccessDenied'), { name: 'AccessDenied' })
-        copies.push({ key: full(k), raw, mime })
+        copies.push({ key: full(k), raw, mime, scope: opts.sourceScope })
         const b = envBucket.get(raw)
         if (!b) throw new Error('NoSuchKey')
         envBucket.set(full(k), b)
@@ -1032,12 +1034,66 @@ describe('pull: env object storage and session replays (0.3.215)', () => {
     objects.set('e3', Buffer.from('shared obj'))
     rows.push(row('e3', 10, { storage: 's3' }))
     envSaid('e3', 'apps/shop-e1/e3.bin')
-    const s = await finished((await start()).run_id)
+    const s = await finished((await start({ source_scope: 'shop-e1' })).run_id)
     expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 1, bytes: 10, failed: 0 })
     expect(copies).toEqual([
-      { key: 'e3.bin', raw: 'apps/shop-e1/e3.bin', mime: 'application/octet-stream' }
+      {
+        key: 'e3.bin',
+        raw: 'apps/shop-e1/e3.bin',
+        mime: 'application/octet-stream',
+        scope: { tenant: 'shop-e1' }
+      }
     ])
     expect(envBucket.get('e3.bin')?.toString()).toBe('shared obj')
+  })
+
+  it('without a source scope from the Hub nothing is copied server-side (streamed)', async () => {
+    envBucket.set('apps/shop-e1/e9.bin', Buffer.from('shared obj'))
+    objects.set('e9', Buffer.from('shared obj'))
+    rows.push(row('e9', 10, { storage: 's3' }))
+    envSaid('e9', 'apps/shop-e1/e9.bin')
+    const s = await finished((await start()).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 0 })
+    expect(copies).toEqual([])
+  })
+
+  it('dedicated target: another app’s key the source names in the same bucket is never copied', async () => {
+    envBucket.set('apps/other-e2/e8.bin', Buffer.from('not ours!!'))
+    objects.set('e8', Buffer.from('our bytes!'))
+    rows.push(row('e8', 10, { storage: 's3' }))
+    envSaid('e8', 'apps/other-e2/e8.bin') // the source lies about where the object is
+    const s = await finished((await start({ source_scope: 'shop-e1' })).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 0 })
+    expect(copies).toEqual([])
+    expect(envBucket.get('e8.bin')?.toString()).toBe('our bytes!') // the authenticated read
+  })
+
+  it('the root form is refused when the Hub says the source is shared', async () => {
+    envBucket.set('e10.bin', Buffer.from('root'))
+    objects.set('e10', Buffer.from('streamed!'))
+    rows.push(row('e10', 9, { storage: 's3' }))
+    envSaid('e10', 'e10.bin')
+    const s = await finished((await start({ source_scope: 'shop-e1' })).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 0 })
+    expect(copies).toEqual([])
+    expect(envBucket.get('e10.bin')?.toString()).toBe('streamed!')
+  })
+
+  it('a dedicated source (root) naming an apps/ key is refused', async () => {
+    envBucket.set('apps/other-e2/e11.bin', Buffer.from('not ours'))
+    objects.set('e11', Buffer.from('streamed'))
+    rows.push(row('e11', 8, { storage: 's3' }))
+    envSaid('e11', 'apps/other-e2/e11.bin')
+    const s = await finished((await start({ source_scope: 'root' })).run_id)
+    expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 0 })
+    expect(copies).toEqual([])
+  })
+
+  it('a source scope that is not a tenant id is ignored (streamed)', async () => {
+    expect(parseSourceScope('root')).toBe('root')
+    expect(parseSourceScope('shop-e1')).toEqual({ tenant: 'shop-e1' })
+    for (const bad of ['../x', 'a/b', '', 'apps/x', 7, null, undefined])
+      expect(parseSourceScope(bad), String(bad)).toBeNull()
   })
 
   it('the same bucket and the very same full key: nothing to copy (skipped)', async () => {
@@ -1045,7 +1101,7 @@ describe('pull: env object storage and session replays (0.3.215)', () => {
     objects.set('e4', Buffer.from('xxx')) // the row's size is stale, so the size skip misses
     rows.push(row('e4', 3, { storage: 's3' }))
     envSaid('e4', 'e4.bin')
-    const s = await finished((await start()).run_id)
+    const s = await finished((await start({ source_scope: 'root' })).run_id)
     expect(s).toMatchObject({ state: 'done', skipped: 1, copied: 0 })
     expect(copies).toEqual([])
   })
@@ -1056,25 +1112,26 @@ describe('pull: env object storage and session replays (0.3.215)', () => {
     rows.push(row('e5', 8, { storage: 's3' }))
     envSaid('e5', 'apps/shop-e1/e5.bin')
     copyFails = true
-    const s = await finished((await start()).run_id)
+    const s = await finished((await start({ source_scope: 'shop-e1' })).run_id)
     expect(s).toMatchObject({ state: 'done', copied: 1, server_copied: 0, failed: 0 })
     expect(envBucket.get('e5.bin')?.toString()).toBe('fallback')
     expect(sourceSeen).toEqual(['e5', 'e5']) // asked again for the bytes
   })
 
-  it('a shared target copies server-side only from its own folder or the bucket root', async () => {
+  it('shared target: never copies from the bucket root or another app’s folder', async () => {
     process.env.HUB_SHARED_DEPLOYMENT = 'pool-a'
     process.env.HUB_URL = 'https://hub.example'
     process.env.HUB_DEPLOYMENT_TOKEN = 'd'.repeat(40)
     delete process.env.HUB_TOKEN
-    pullDeps.storage = () => envS3('shop-e1') as never
+    // The real per-app scope over this side's bucket.
+    pullDeps.storage = () => scopedStorage(envS3(), () => getTenantId() ?? null) as never
     envBucket.set('e6.bin', Buffer.from('root obj'))
     envBucket.set('apps/other-e2/e7.bin', Buffer.from('not ours'))
     objects.set('e6', Buffer.from('root obj'))
     objects.set('e7', Buffer.from('streamed'))
     rows.push(row('e6', 8, { storage: 's3' }), row('e7', 8, { storage: 's3' }))
     envSaid('e6', 'e6.bin')
-    envSaid('e7', 'apps/other-e2/e7.bin') // another app's folder: never copied from
+    envSaid('e7', 'apps/other-e2/e7.bin')
     const tenant = {
       id: 'shop-e1',
       slug: 'shop',
@@ -1085,13 +1142,19 @@ describe('pull: env object storage and session replays (0.3.215)', () => {
       poolMax: 1,
       hostnames: []
     }
-    const { run_id } = await withTenant(tenant as never, () => start())
-    const s = await withTenant(tenant as never, () => finished(run_id))
-    expect(s).toMatchObject({ state: 'done', copied: 2, server_copied: 1 })
-    expect(copies).toEqual([
-      { key: 'apps/shop-e1/e6.bin', raw: 'e6.bin', mime: 'application/octet-stream' }
-    ])
-    expect(envBucket.get('apps/shop-e1/e7.bin')?.toString()).toBe('streamed')
+    for (const sourceScope of ['root', 'other-e2']) {
+      copies.length = 0
+      envBucket.delete('apps/shop-e1/e6.bin')
+      envBucket.delete('apps/shop-e1/e7.bin')
+      const { run_id } = await withTenant(tenant as never, () =>
+        start({ source_scope: sourceScope })
+      )
+      const s = await withTenant(tenant as never, () => finished(run_id))
+      expect(s, sourceScope).toMatchObject({ state: 'done', copied: 2, server_copied: 0 })
+      expect(copies, sourceScope).toEqual([])
+      expect(envBucket.get('apps/shop-e1/e6.bin')?.toString()).toBe('root obj')
+      expect(envBucket.get('apps/shop-e1/e7.bin')?.toString()).toBe('streamed')
+    }
   })
 
   it('replays: the cold objects come from /replays/:id into the store the source names', async () => {

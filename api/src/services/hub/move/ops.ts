@@ -890,7 +890,15 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         ticket,
         mode,
         ...(objects ? { objects: true } : {}),
-        ...(everything ? { env_objects: true, replays: true } : {})
+        ...(everything
+          ? {
+              env_objects: true,
+              replays: true,
+              // Where the source keeps this app's objects in a bucket (the target rebuilds every
+              // server-side copy's source key from it, never from what the source sends).
+              source_scope: l.from.kind === 'shared' ? l.tenantId : 'root'
+            }
+          : {})
       }
       try {
         let start: () => Promise<{ run_id: string }>

@@ -123,7 +123,8 @@ describe('env S3 provider (0.3.215)', () => {
     )
     const ac = new AbortController()
     const n = await s3.copyFrom('apps/shop-e1/ab/r é.pdf', 'ab/r é.pdf', 'application/pdf', {
-      signal: ac.signal
+      signal: ac.signal,
+      sourceScope: 'root'
     })
     expect(n).toBe(42)
     const copy = sent.find((c) => c.name === 'CopyObjectCommand')
@@ -136,6 +137,33 @@ describe('env S3 provider (0.3.215)', () => {
     })
     expect(copy?.opts).toEqual({ abortSignal: ac.signal })
     expect(sent.at(-1)?.input).toEqual({ Bucket: 'files-bucket', Key: 'apps/shop-e1/ab/r é.pdf' })
+  })
+
+  it('copyFrom refuses a source outside the scope it is given, before any call', async () => {
+    const { s3, sent } = s3With(() => ({ ContentLength: 1 }))
+    const cases: Array<[string, unknown]> = [
+      ['../etc/passwd', 'root'],
+      ['a/./b', 'root'],
+      ['/abs', 'root'],
+      ['a\\b', 'root'],
+      ['a\u0000b', 'root'],
+      ['a\nb', 'root'],
+      ['apps/other-e2/x.pdf', 'root'], // the root form never reaches into apps/
+      ['x.pdf', { tenant: 'shop-e1' }], // a tenant scope needs apps/<tenant>/
+      ['apps/other-e2/x.pdf', { tenant: 'shop-e1' }],
+      ['apps/shop-e1/', { tenant: 'shop-e1' }],
+      ['apps/shop-e1/x.pdf', { tenant: '../x' }],
+      ['x.pdf', undefined]
+    ]
+    for (const [raw, scope] of cases)
+      await expect(
+        s3.copyFrom('dest.pdf', raw, 'x', { sourceScope: scope as never }),
+        `${raw} ${JSON.stringify(scope)}`
+      ).rejects.toMatchObject({ code: 'BAD_KEY' })
+    expect(sent).toEqual([])
+    expect(
+      await s3.copyFrom('d.pdf', 'apps/shop-e1/x.pdf', 'x', { sourceScope: { tenant: 'shop-e1' } })
+    ).toBe(1)
   })
 })
 
@@ -192,7 +220,12 @@ describe('env Azure provider (0.3.215)', () => {
     }))
     expect(az.storeId()).toMatch(/^[0-9a-f]{64}$/)
     expect(az.storeId()).not.toBe(azureWith(() => ({}), 'other').storeId())
-    expect(await az.copyFrom('apps/shop-e1/a.pdf', 'a.pdf', 'application/pdf')).toBe(7)
+    expect(
+      await az.copyFrom('apps/shop-e1/a.pdf', 'a.pdf', 'application/pdf', { sourceScope: 'root' })
+    ).toBe(7)
+    await expect(
+      az.copyFrom('d.pdf', 'apps/other-e2/a.pdf', 'x', { sourceScope: { tenant: 'shop-e1' } })
+    ).rejects.toMatchObject({ code: 'BAD_KEY' })
     expect(calls).toEqual([
       'copy apps/shop-e1/a.pdf <- https://acct.blob.core.windows.net/files/a.pdf',
       'type apps/shop-e1/a.pdf application/pdf'
@@ -201,7 +234,7 @@ describe('env Azure provider (0.3.215)', () => {
 })
 
 describe('the per-app scope on a shared deployment (0.3.215 methods)', () => {
-  it('copyFrom scopes the destination only; storeId passes through', async () => {
+  it('copyFrom scopes the destination and copies only from this app’s own folder', async () => {
     const seen: unknown[][] = []
     const base = {
       copyFrom: async (...args: unknown[]) => {
@@ -211,12 +244,28 @@ describe('the per-app scope on a shared deployment (0.3.215 methods)', () => {
       storeId: () => 'hash'
     }
     const scoped = scopedStorage(base, () => 'shop-e1')
-    await scoped.copyFrom('ab/r.pdf', 'ab/r.pdf', 'application/pdf')
-    expect(seen[0].slice(0, 3)).toEqual(['apps/shop-e1/ab/r.pdf', 'ab/r.pdf', 'application/pdf'])
+    const own = { sourceScope: { tenant: 'shop-e1' } as const }
+    await scoped.copyFrom('ab/r.pdf', 'apps/shop-e1/old/r.pdf', 'application/pdf', own)
+    expect(seen[0].slice(0, 3)).toEqual([
+      'apps/shop-e1/ab/r.pdf',
+      'apps/shop-e1/old/r.pdf',
+      'application/pdf'
+    ])
     expect(scoped.storeId()).toBe('hash')
-    await expect(scoped.copyFrom('../x', 'ab/r.pdf', 'x')).rejects.toMatchObject({
-      code: 'BAD_KEY'
-    })
+    const refused: Array<[string, unknown, unknown]> = [
+      ['../x', 'apps/shop-e1/r.pdf', own], // destination outside the scope
+      ['ab/r.pdf', 'ab/r.pdf', { sourceScope: 'root' }], // a shared bucket's root
+      ['ab/r.pdf', 'apps/other-e2/r.pdf', { sourceScope: { tenant: 'other-e2' } }],
+      ['ab/r.pdf', 'apps/other-e2/r.pdf', own],
+      ['ab/r.pdf', 'apps/shop-e1/../other-e2/r.pdf', own],
+      ['ab/r.pdf', 'apps/shop-e1/r.pdf', undefined]
+    ]
+    for (const [key, raw, opts] of refused)
+      await expect(
+        scoped.copyFrom(key, raw, 'x', opts as never),
+        `${key} ${raw} ${JSON.stringify(opts)}`
+      ).rejects.toMatchObject({ code: 'BAD_KEY' })
+    expect(seen).toHaveLength(1)
   })
 })
 

@@ -618,7 +618,7 @@ function warningsOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Warn
       add(
         'STORAGE_PREFIX_CHANGES',
         copiesEverything(input)
-          ? `${copyable} file(s) kept in S3 or Azure storage (saved in Settings or set by environment variables) are copied to a new folder (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). In the same bucket the bucket copies them itself. They are copied, not shared: the bucket holds both copies until the old ones are removed.`
+          ? `${copyable} file(s) kept in S3 or Azure storage (saved in Settings or set by environment variables) are copied to a new folder (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). Into a dedicated stack on the same bucket, the bucket copies them itself. They are copied, not shared: the bucket holds both copies until the old ones are removed.`
           : `${copyable} file(s) kept in S3 or Azure storage saved in Settings are copied to a new folder in the same bucket (a shared deployment keeps each app's files under apps/<app>/; elsewhere they sit at the bucket root). They are copied, not shared: the bucket holds both copies until the old ones are removed.`
       )
   }

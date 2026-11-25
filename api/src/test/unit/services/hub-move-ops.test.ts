@@ -223,6 +223,7 @@ function clients() {
           objects?: boolean
           env_objects?: boolean
           replays?: boolean
+          source_scope?: string
         }
       ) => {
         calls.push([
@@ -234,7 +235,8 @@ function clients() {
             ticket: req.ticket === TICKET,
             ...(req.objects ? { objects: true } : {}),
             ...(req.env_objects ? { env_objects: true } : {}),
-            ...(req.replays ? { replays: true } : {})
+            ...(req.replays ? { replays: true } : {}),
+            ...(req.source_scope ? { source_scope: req.source_scope } : {})
           }
         ])
         return { run_id: 'run-1' }
@@ -408,10 +410,39 @@ describe('pullFiles', () => {
       }
     )
     await ops.pullFiles('full')
+    // The source scope is the Hub's own: a shared source → its tenant id (never what it sends).
     expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({
       env_objects: true,
-      replays: true
+      replays: true,
+      source_scope: w.tenant
     })
+  })
+
+  it('a dedicated source at 0.3.215: the source scope is the bucket root', async () => {
+    const w = await setup(false)
+    TENANT = w.tenant
+    await db('nivaro_hub_environments')
+      .where({ id: w.envId })
+      .update({
+        hub_token: (await import('../../../services/hub/secrets.js')).sealSecret('t'.repeat(40))
+      })
+    const c = clients()
+    const ops = defaultMoveOps(
+      w.move,
+      { ...w.plan, version: '0.3.215' },
+      {
+        client: c.factory,
+        link: () =>
+          ({
+            fileTicket: async () => ({ ticket: TICKET, expires_at: '2026-11-23T00:00:00Z' }),
+            revokeTicket: async () => ({ revoked: true })
+          }) as never,
+        sleep,
+        now
+      }
+    )
+    await ops.pullFiles('full')
+    expect(c.calls.find((x) => x[1] === 'pullFiles')?.[2]).toMatchObject({ source_scope: 'root' })
   })
 
   // R2-M-6: a ticket a dead run could not revoke is revoked by the next run (heal + resume or
