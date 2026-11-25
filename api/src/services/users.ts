@@ -281,14 +281,11 @@ export async function findOrCreateFromOIDC(profile: {
   }
 
   // Nivaro Hub: an offboarded person's email is never made into a new account while the Hub
-  // still blocks it (services/hub/people/offboard.ts; Hub mode only, a no-op elsewhere).
+  // still blocks it (first Microsoft / SAML sign-in; services/hub/people/block.ts, Hub mode
+  // only, a no-op elsewhere). Throws 409 EMAIL_OFFBOARDED.
   {
-    const { emailUnderHubBlock, EMAIL_OFFBOARDED } = await import('./hub/people/offboard.js')
-    if (await emailUnderHubBlock(profile.email))
-      throw Object.assign(new Error(EMAIL_OFFBOARDED.error), {
-        statusCode: 403,
-        code: EMAIL_OFFBOARDED.code
-      })
+    const { assertEmailNotOffboarded } = await import('./hub/people/block.js')
+    await assertEmailNotOffboarded({ email: profile.email })
   }
   // nivaro_users.id is a uuid its default fills: MySQL reports no id for it.
   const id = await insertReturningId(db, 'nivaro_users', {
@@ -683,6 +680,17 @@ export async function updateUser(
     >
   >
 ) {
+  if (data.status === 'active') {
+    // Nivaro Hub: an account under a live offboard block is never made active again (judged on
+    // the row as it will be; services/hub/people/block.ts, Hub mode only). 409 EMAIL_OFFBOARDED.
+    const row = (await db('nivaro_users').where({ id }).first('id', 'email', 'status')) as
+      | { id: unknown; email: unknown; status: unknown }
+      | undefined
+    if (row && String(row.status ?? '') !== 'active') {
+      const { assertEmailNotOffboarded } = await import('./hub/people/block.js')
+      await assertEmailNotOffboarded({ id: row.id, email: row.email })
+    }
+  }
   const updates: Record<string, unknown> = { ...data, updated_at: new Date() }
   if (updates.preferences && typeof updates.preferences === 'object') {
     updates.preferences = JSON.stringify(updates.preferences)

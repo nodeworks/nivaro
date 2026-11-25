@@ -170,7 +170,7 @@ export const PEOPLE_COPY: Record<string, { title: string; hint?: string }> = {
   },
   IDENTITY_SHARED: {
     title: 'The list names another person too',
-    hint: 'An email or Microsoft id in it belongs to another active Hub account; the apps would suspend them as well. Fix the accounts first.'
+    hint: 'An email or Microsoft id in it belongs to another Hub account (active, suspended or waiting); the apps would suspend them as well. Change that account’s email first.'
   },
   LAST_HUB_ADMIN: {
     title: 'This is the Hub’s last administrator',

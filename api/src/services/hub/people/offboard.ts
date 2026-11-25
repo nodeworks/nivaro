@@ -4,6 +4,7 @@ import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
 import { logActivity } from '../../activity.js'
 import { type AccessDeps, askableEnvironments, askEnvironment, inPool } from './access.js'
+import { type BlockDeps, type BlockSubject, offboardBlocks } from './block.js'
 import type { PersonIdentity } from './directory.js'
 
 /**
@@ -13,7 +14,7 @@ import type { PersonIdentity } from './directory.js'
  *     indexed in nivaro_hub_offboard_ids, read by hubSigninBlocked on every Hub OpenID authorize
  *     + token), and the Hub's own account for them (when there is one) is suspended with every
  *     session and phone ended — refused OFFBOARD_SELF (the identity names the caller),
- *     IDENTITY_SHARED (it names another active Hub account) and LAST_HUB_ADMIN, all checked under
+ *     IDENTITY_SHARED (it names another Hub account, of any status) and LAST_HUB_ADMIN, all checked under
  *     the admin lock with the single-flight check.
  *  2. Every environment (not archived) is asked over its link to SUSPEND the matching accounts
  *     (services/hub-link/people.ts on the app: by email / Entra id only, never delete, refused
@@ -175,9 +176,11 @@ async function underAdminLock<T>(fn: (trx: Knex.Transaction) => Promise<T>): Pro
 const upperId = (v: unknown) => String(v ?? '').toUpperCase()
 
 /**
- * H2: the identity never names the caller, nor any OTHER active Hub account (an email or Entra
- * id that belongs to someone else would suspend them in every app). The person's own Hub account
- * (`hubUserId`) is the only account it may name.
+ * H2: the identity never names the caller, nor any OTHER Hub account of ANY status (an email or
+ * Entra id that belongs to someone else would suspend them in every app, and the sign-in block
+ * would hold against a suspended or not-yet-authorized holder the moment it is activated). The
+ * person's own Hub account (`hubUserId`) is the only account it may name; a run with no Hub
+ * account may name only emails / ids no Hub account holds.
  */
 async function identityRefusal(
   k: Knex,
@@ -209,7 +212,6 @@ async function identityRefusal(
   for (const email of identity.emails) {
     const rows = (await k('nivaro_users')
       .whereRaw(emailMatchSql(k), [email])
-      .where('status', 'active')
       .select('id')) as Array<{ id: unknown }>
     for (const r of rows) if (upperId(r.id) !== upperId(hubUserId)) others.add(upperId(r.id))
   }
@@ -219,7 +221,6 @@ async function identityRefusal(
         'entra_oid',
         identity.entra.map((x) => x.oid)
       )
-      .where('status', 'active')
       .select('id')) as Array<{ id: unknown }>
     for (const r of rows) if (upperId(r.id) !== upperId(hubUserId)) others.add(upperId(r.id))
   }
@@ -227,7 +228,7 @@ async function identityRefusal(
     throw new OffboardError(
       409,
       'IDENTITY_SHARED',
-      'An email or Microsoft id in this list belongs to another active Hub account: the apps would suspend them too.'
+      'An email or Microsoft id in this list belongs to another Hub account (active or not): the apps would suspend them too, and the block would hold against them.'
     )
 }
 
@@ -586,105 +587,12 @@ export async function runOffboard(id: number, deps: OffboardDeps = {}): Promise<
 }
 
 /**
- * Whether the Hub must refuse this person's sign-in now, by the indexed block entries
- * (nivaro_hub_offboard_ids) of blocked runs: their Hub account or their Entra object id always;
- * a listed email unless the account signing in is a DIFFERENT one that existed before the run
- * started (a real, older shared mailbox). An account made after the run started, or whose age
- * cannot be told, is refused. The stored identity is proven data only (directory.ts
- * identityOf). Fails CLOSED: a block table that cannot be read refuses the sign-in (only an
- * install without the tables, before migration 570, answers false).
+ * Whether the Hub must refuse this account's sign-in now (block.ts offboardBlocks: the run's
+ * account or Microsoft id always; a listed email unless the account is a proven different,
+ * older person with a Microsoft id of its own). Fails closed.
  */
-export async function hubSigninBlocked(
-  user: { id?: unknown; email?: unknown; entra_oid?: unknown; created_at?: unknown },
-  deps: { createdAt?: (userId: string) => Promise<unknown> } = {}
-): Promise<boolean> {
-  const id = user.id == null ? '' : upperId(user.id)
-  const email = typeof user.email === 'string' ? user.email.trim().toLowerCase() : ''
-  const oid = typeof user.entra_oid === 'string' ? user.entra_oid.trim().toLowerCase() : ''
-  try {
-    const hits = (await db(`${IDS} as i`)
-      .join(`${TABLE} as o`, 'o.id', 'i.offboard_id')
-      .where('o.blocked', true)
-      .where((w) => {
-        w.where((x) => x.where('i.kind', 'user').where('i.value', id || '\u0000'))
-        if (oid) w.orWhere((x) => x.where('i.kind', 'oid').where('i.value', oid))
-        if (email) w.orWhere((x) => x.where('i.kind', 'email').where('i.value', email))
-      })
-      .limit(20)
-      .select('i.kind', 'o.hub_user_id', 'o.started_at')) as Array<{
-      kind: string
-      hub_user_id: string | null
-      started_at: unknown
-    }>
-    if (hits.some((h) => h.kind === 'user' || h.kind === 'oid')) return true
-    const emailHits = hits.filter((h) => h.kind === 'email')
-    if (!emailHits.length) return false
-    const created =
-      user.created_at !== undefined
-        ? user.created_at
-        : id
-          ? await (deps.createdAt
-              ? deps.createdAt(id)
-              : db('nivaro_users')
-                  .where({ id: String(user.id) })
-                  .first('created_at')
-                  .then((r) => (r as { created_at?: unknown } | undefined)?.created_at))
-          : undefined
-    const ms = (v: unknown) => {
-      if (v == null) return Number.NaN
-      const d = v instanceof Date ? v : new Date(typeof v === 'number' ? v : String(v))
-      return d.getTime()
-    }
-    for (const h of emailHits) {
-      // The run's own person signing in under this email: refused.
-      if (h.hub_user_id && upperId(h.hub_user_id) === id) return true
-      const born = ms(created)
-      const started = ms(h.started_at)
-      // Made after the offboard started, or of unknown age: refused (fail closed).
-      if (!Number.isFinite(born) || !Number.isFinite(started) || born >= started) return true
-    }
-    return false
-  } catch {
-    try {
-      if (!(await db.schema.hasTable(IDS))) return false
-    } catch {
-      // cannot tell: fail closed below
-    }
-    return true
-  }
+export async function hubSigninBlocked(user: BlockSubject, deps: BlockDeps = {}): Promise<boolean> {
+  return offboardBlocks(user, deps)
 }
 
-/**
- * Whether `email` is under a live Hub sign-in block (a blocked offboard lists it). Account
- * creation and activation refuse such an email (routes/users.ts, services/users.ts) so nobody
- * re-creates the offboarded person's account to get past the block. Hub mode only; fails closed
- * once the tables exist.
- */
-export async function emailUnderHubBlock(email: unknown): Promise<boolean> {
-  if (typeof email !== 'string' || !email.trim()) return false
-  const { hubModeEnabled } = await import('../mode.js')
-  if (!hubModeEnabled()) return false
-  try {
-    const hit = await db(`${IDS} as i`)
-      .join(`${TABLE} as o`, 'o.id', 'i.offboard_id')
-      .where('o.blocked', true)
-      .where('i.kind', 'email')
-      .where('i.value', email.trim().toLowerCase())
-      .first('i.id')
-    return !!hit
-  } catch {
-    try {
-      if (!(await db.schema.hasTable(IDS))) return false
-    } catch {
-      // cannot tell
-    }
-    return true
-  }
-}
-
-/** The refusal an account create / activate answers for such an email (describeError words it). */
-export const EMAIL_OFFBOARDED = {
-  code: 'EMAIL_OFFBOARDED',
-  error: 'This email belongs to a person offboarded from every app.',
-  hint: 'Lift their block on the Hub’s People page first if they are coming back.'
-} as const
+export { assertEmailNotOffboarded, EMAIL_OFFBOARDED, EmailOffboardedError } from './block.js'

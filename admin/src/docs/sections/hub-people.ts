@@ -35,6 +35,11 @@ export const hubPeopleDocs: DocSection = {
           'Every environment but production',
           'Every environment'
         ],
+        [
+          'Record the connection of the app’s database (a database record on its own server)',
+          'Every environment but production',
+          'Every environment'
+        ],
         ['Edit stack settings, remove a stack, move, place, edit environments', 'No', 'Yes']
       ]
     },
@@ -73,10 +78,10 @@ export const hubPeopleDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        '1. The page lists every email and Microsoft id the apps will be asked to suspend; type the first email to confirm. If the list changed since the page showed it, the Hub refuses and shows the new one. The Hub refuses when the list names you, or another active Hub account.',
-        '2. The Hub stops signing them in at once: their Hub account (if they have one) is suspended with every Hub session and phone sign-in ended, and the run blocks Hub sign-in by their account, Microsoft id and (when it is theirs alone) email, so an account made again is refused too. Only one offboard of a person runs at a time.',
+        '1. The page lists every email and Microsoft id the apps will be asked to suspend; type the first email to confirm. If the list changed since the page showed it, the Hub refuses and shows the new one. The Hub refuses when the list names you, or any other Hub account (active, suspended or waiting for access).',
+        '2. The Hub stops signing them in at once: their Hub account (if they have one) is suspended with every Hub session and phone sign-in ended, and the run blocks Hub sign-in by their account, Microsoft id and email. An account holding a listed email signs in only when it is a proven different person: it existed before the offboard, it has a Microsoft id of its own that is not on the list, and the person offboarded had a Hub account. While the block holds, the Hub refuses to create, authorize or reactivate an account with a listed email, or move one to it, by any path (Users, SCIM, a first Microsoft or SAML sign-in): `EMAIL_OFFBOARDED`. Only one offboard of a person runs at a time.',
         '3. Every environment of every app (not archived) is asked to suspend their account. The app suspends it through its own user service, ends every session and phone sign-in there, and its API keys stop working with it. Nothing is deleted. The app logs it and tells its administrators the account was suspended by offboarding.',
-        '3. An app refuses to suspend its last active administrator (`LAST_ADMIN`). Make someone else an administrator there and retry.',
+        '4. An app refuses to suspend its last active administrator (`LAST_ADMIN`). Make someone else an administrator there and retry.',
         '5. Results come in one environment at a time: Suspended, Was suspended, No account, Refused, No link or Did not answer. Retry asks again only the environments that did not finish, and any added since.'
       ]
     },
@@ -92,7 +97,7 @@ export const hubPeopleDocs: DocSection = {
     { type: 'h2', id: 'hub-phone', text: 'On the phone' },
     {
       type: 'p',
-      text: 'Hub administrators and the owners of an app get a notification, in the app inbox and as a browser and phone push, when a deploy on that app finishes or fails. The Hub also sends auto-rollback, environment down / back up and drift notices when those checks are on. They follow each person’s Profile → Notification rules (category System) and quiet hours. A tap opens the app’s page in the Hub.'
+      text: 'Hub administrators and the owners of an app get a notification, in the app inbox and as a browser and phone push, when a deploy on that app finishes or fails. The Hub also sends auto-rollback, environment down / back up and drift notices when those checks are on, and the fleet alerts (uptime, versions, readiness) and the monthly uptime report (category Reports, also by email). They follow each person’s Profile → Notification rules and quiet hours, and each person gets each notice once. A tap opens the app’s page in the Hub.'
     },
     {
       type: 'p',

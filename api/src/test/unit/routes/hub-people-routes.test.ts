@@ -70,8 +70,9 @@ const m543 = await import('../../../db/migrations/543_hub_promotions.js')
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
 const m570 = await import('../../../db/migrations/570_hub_people_owner_policy.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
-const { emailUnderHubBlock, hubSigninBlocked, readOffboard } = await import(
-  '../../../services/hub/people/offboard.js'
+const { hubSigninBlocked, readOffboard } = await import('../../../services/hub/people/offboard.js')
+const { assertEmailNotOffboarded, emailOffboarded } = await import(
+  '../../../services/hub/people/block.js'
 )
 const { groupPeople } = await import('../../../services/hub/people/directory.js')
 
@@ -464,16 +465,15 @@ describe('offboard identity is proven data only', () => {
     expect(res.json().code).toBe('NO_IDENTITY')
   })
 
-  it('Hub sign-in block: a listed email spares only a DIFFERENT account older than the run', async () => {
-    const started = new Date('2026-11-01T10:00:00Z')
+  const blockRun = async (hubUserId: string | null) => {
     const [row] = await db('nivaro_hub_offboards')
       .insert({
-        person_key: 'u:X',
-        hub_user_id: 'XXXXXXXX-0000-4000-8000-000000000009',
+        person_key: hubUserId ? `u:${hubUserId}` : 'k:1',
+        hub_user_id: hubUserId,
         identity: JSON.stringify({ emails: ['shared@x.io'], entra: [{ oid: 'oid-z', tid: null }] }),
         status: 'done',
         blocked: true,
-        started_at: started
+        started_at: new Date('2026-11-01T10:00:00Z')
       })
       .returning('id')
     const offboard_id = typeof row === 'object' ? (row as { id: number }).id : row
@@ -481,19 +481,40 @@ describe('offboard identity is proven data only', () => {
       { offboard_id, kind: 'email', value: 'shared@x.io' },
       { offboard_id, kind: 'oid', value: 'oid-z' }
     ])
-    // A real, older shared mailbox (an account that existed before the run): not blocked.
+  }
+  const OLD = new Date('2026-01-01T00:00:00Z')
+
+  it('Hub sign-in block: a listed email spares only a proven DIFFERENT, older person', async () => {
+    await blockRun('XXXXXXXX-0000-4000-8000-000000000009')
+    // An older shared mailbox with a Microsoft id of its own (none of the run's): spared.
     expect(
       await hubSigninBlocked({
         id: 'a',
         email: 'shared@x.io',
-        created_at: new Date('2026-01-01T00:00:00Z')
+        entra_oid: 'oid-someone-else',
+        created_at: OLD
       })
     ).toBe(false)
-    // A second account made (or re-linked) after the offboard started: still blocked.
+    // An older account with NO Microsoft id: not proven different, blocked.
+    expect(
+      await hubSigninBlocked({ id: 'a', email: 'shared@x.io', entra_oid: null, created_at: OLD })
+    ).toBe(true)
+    // Read from the row when not passed: an older row without an oid is blocked too.
+    await db('nivaro_users').insert({
+      id: 'OLDROW',
+      email: 'shared@x.io',
+      status: 'active',
+      created_at: OLD
+    })
+    expect(await hubSigninBlocked({ id: 'OLDROW', email: 'shared@x.io' })).toBe(true)
+    await db('nivaro_users').where({ id: 'OLDROW' }).update({ entra_oid: 'oid-mailbox' })
+    expect(await hubSigninBlocked({ id: 'OLDROW', email: 'shared@x.io' })).toBe(false)
+    // A second account made (or re-linked) after the offboard started: still blocked, oid or not.
     expect(
       await hubSigninBlocked({
         id: 'b',
         email: 'Shared@x.io',
+        entra_oid: 'oid-b',
         created_at: new Date('2026-11-02T00:00:00Z')
       })
     ).toBe(true)
@@ -504,13 +525,41 @@ describe('offboard identity is proven data only', () => {
       await hubSigninBlocked({
         id: 'XXXXXXXX-0000-4000-8000-000000000009',
         email: 'shared@x.io',
-        created_at: new Date('2026-01-01T00:00:00Z')
+        entra_oid: 'oid-x',
+        created_at: OLD
       })
     ).toBe(true)
-    expect(await hubSigninBlocked({ id: 'a', entra_oid: 'OID-Z' })).toBe(true)
-    // Creating or activating an account with that email is refused while the block holds.
-    expect(await emailUnderHubBlock('SHARED@x.io')).toBe(true)
-    expect(await emailUnderHubBlock('other@x.io')).toBe(false)
+    expect(await hubSigninBlocked({ id: 'a', entra_oid: 'OID-Z', created_at: OLD })).toBe(true)
+    // Creating an account with that email (no row yet) is refused while the block holds.
+    expect(await emailOffboarded({ email: 'SHARED@x.io' })).toBe(true)
+    expect(await emailOffboarded({ email: 'other@x.io' })).toBe(false)
+    await expect(assertEmailNotOffboarded({ email: 'shared@x.io' })).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'EMAIL_OFFBOARDED'
+    })
+  })
+
+  it('Hub sign-in block: a run with no Hub account blocks EVERY holder of the email', async () => {
+    await blockRun(null)
+    expect(
+      await hubSigninBlocked({
+        id: 'a',
+        email: 'shared@x.io',
+        entra_oid: 'oid-someone-else',
+        created_at: OLD
+      })
+    ).toBe(true)
+    expect(await hubSigninBlocked({ id: 'c', email: 'other@x.io', created_at: OLD })).toBe(false)
+  })
+
+  it('the guard is Hub mode only', async () => {
+    await blockRun(null)
+    process.env.HUB = 'off'
+    try {
+      expect(await emailOffboarded({ email: 'shared@x.io' })).toBe(false)
+    } finally {
+      process.env.HUB = 'on'
+    }
   })
 })
 
@@ -521,6 +570,17 @@ describe('offboard refusals (H2, single flight)', () => {
     expect(r.statusCode).toBe(409)
     expect(r.json().code).toBe('IDENTITY_SHARED')
     expect((await db('nivaro_users').where({ id: DANA }).first()).status).toBe('active')
+    expect(await db('nivaro_hub_offboards').count({ n: '*' })).toEqual([{ n: 0 }])
+  })
+
+  it('IDENTITY_SHARED: a SUSPENDED (or waiting) account holding a listed email counts too', async () => {
+    await db('nivaro_users').insert({ id: VICTIM, email: 'dana@x.io', status: 'suspended' })
+    const r = await offboard(`u:${DANA}`, asAdmin, 'dana@x.io')
+    expect(r.json().code).toBe('IDENTITY_SHARED')
+    await db('nivaro_users').where({ id: VICTIM }).update({ status: 'invited', email: 'v@x.io' })
+    await db('nivaro_users').where({ id: VICTIM }).update({ entra_oid: 'oid-dana' })
+    const r2 = await offboard(`u:${DANA}`, asAdmin, 'dana@x.io')
+    expect(r2.json().code).toBe('IDENTITY_SHARED')
     expect(await db('nivaro_hub_offboards').count({ n: '*' })).toEqual([{ n: 0 }])
   })
 

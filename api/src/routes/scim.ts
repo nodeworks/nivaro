@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { joinDefaultChannelsSoon } from '../services/chat-default-joins.js'
+import { emailOffboarded } from '../services/hub/people/block.js'
 import { noteUserRoleChange } from '../services/security-alerts.js'
 import type { Role, User } from '../types.js'
 
@@ -21,6 +22,8 @@ const SCIM_USER_SCHEMA = 'urn:ietf:params:scim:schemas:core:2.0:User'
 const SCIM_LIST_SCHEMA = 'urn:ietf:params:scim:api:messages:2.0:ListResponse'
 const SCIM_ERROR_SCHEMA = 'urn:ietf:params:scim:api:messages:2.0:Error'
 const SCIM_PATCH_SCHEMA = 'urn:ietf:params:scim:api:messages:2.0:PatchOp'
+const OFFBOARDED_DETAIL =
+  'This email belongs to a person offboarded from every app (EMAIL_OFFBOARDED). Lift their block on the Hub first.'
 
 function scimError(reply: FastifyReply, status: number, detail: string) {
   return reply
@@ -149,6 +152,11 @@ export async function scimRoutes(app: FastifyInstance) {
     ).first()
     if (existing) return scimError(reply, 409, 'User already exists')
 
+    // Nivaro Hub: an email under a live offboard block is never given an active account
+    // (services/hub/people/block.ts, Hub mode only).
+    if (body.active !== false && (await emailOffboarded({ email: body.userName })))
+      return scimError(reply, 409, OFFBOARDED_DETAIL)
+
     const role = await resolveRoleFromGroups(body.groups)
 
     await db('nivaro_users').insert({
@@ -236,6 +244,17 @@ export async function scimRoutes(app: FastifyInstance) {
     if (updates.status === 'inactive') updates.static_token = null
 
     if (Object.keys(updates).length > 0) {
+      // Nivaro Hub: judged on the row as it will be (its next status and email): an account
+      // under a live offboard block is never made active, nor given a blocked email while active.
+      const nextStatus = String(updates.status ?? user.status ?? '')
+      const nextEmail = updates.email !== undefined ? updates.email : user.email
+      const becomesActive = updates.status === 'active' && String(user.status ?? '') !== 'active'
+      if (
+        nextStatus === 'active' &&
+        (becomesActive || updates.email !== undefined) &&
+        (await emailOffboarded({ id: user.id, email: nextEmail }))
+      )
+        return scimError(reply, 409, OFFBOARDED_DETAIL)
       updates.updated_at = new Date()
       await db('nivaro_users').where({ id }).update(updates)
       if (updates.role || updates.status === 'active')
