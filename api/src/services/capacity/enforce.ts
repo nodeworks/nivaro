@@ -2,7 +2,7 @@ import { IncomingMessage } from 'node:http'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
-import { carriesCredential } from '../../plugins/rate-limit.js'
+import { sessionUser } from '../../plugins/rate-limit.js'
 import { registerAppKeyed } from '../app-forget.js'
 import { tenantSource } from '../deployment-mode.js'
 import { getApp } from '../io-holder.js'
@@ -16,15 +16,16 @@ import type { AppLimits } from './limits.js'
  * with the app (TenantRecord.limits, services/capacity/limits.ts); nothing here runs on a
  * dedicated app or on Nivaro Cloud (no `limits` there).
  *
- *  - requests_per_minute: appRateLimitHook (an onRequest hook after the tenant hook). One fixed
- *    one-minute window per app, counted in Redis so every web process shares it
- *    (`nvr:applimit:rpm:<tenant>:<bucket>:<minute>`); when Redis does not answer within 250 ms
- *    the process counts alone for 10 s (fail-open: the limit then holds per process). Requests
- *    with a credential share the app's budget; the rest get a budget of the same size per
- *    address, so anonymous traffic never spends the signed-in one. Only requests that came over
- *    HTTP count (never batch-get's reads, MCP tool calls or app.inject). Past it: 429
- *    APP_RATE_LIMITED with Retry-After = seconds to the next minute. Probes, sign-in and the Hub
- *    links are never counted.
+ *  - requests_per_minute: appRateLimitPreHandler, the last preHandler of every route (so after
+ *    the route's authentication). Fixed one-minute windows counted in Redis so every web process
+ *    shares them (`nvr:applimit:rpm:<tenant>:<bucket>:<minute>`); when Redis does not answer
+ *    within 250 ms the process counts alone for 10 s (fail-open: the limit then holds per
+ *    process). Each VERIFIED caller (user or API key) gets the limit of its own, verified callers
+ *    together an app-wide ceiling of APP_CEILING_FACTOR times it, and each anonymous address
+ *    (no credential, or one that did not verify) the limit of its own, outside the ceiling.
+ *    Only requests that came over HTTP count (never batch-get's reads, MCP tool calls or
+ *    app.inject). Past it: 429 APP_RATE_LIMITED with Retry-After = seconds to the next minute.
+ *    Probes, sign-in and the Hub links are never counted.
  *  - jobs: tryAcquireAppJobSlot / releaseAppJobSlot around each app's turn of a scheduled
  *    fan-out (services/app-jobs.ts). A turn that finds the app full holds no lane: the fan-out
  *    comes back to the app after its other apps, for at most JOB_SLOT_WAIT_MS, then skips it
@@ -120,9 +121,9 @@ function countLocally(tenant: string, bucket: string, minute: number): number {
 }
 
 /**
- * This request's number in its bucket's minute (1 = the first). `bucket` = 'app' for requests
- * that carry a credential (the app's own budget), or `anon:<ip>` for the rest (a budget per
- * address, which never spends the signed-in one).
+ * This request's number in its bucket's minute (1 = the first). `bucket` = a verified caller
+ * (`u:<id>` / `k:<key id>`), an anonymous address (`anon:<ip>`), or `all` (the app-wide
+ * ceiling of verified callers).
  */
 export async function countAppRequest(
   tenant: string,
@@ -153,27 +154,88 @@ export async function countAppRequest(
   return countLocally(tenant, bucket, minute)
 }
 
-/** onRequest hook, registered after the tenant hook on a Hub shared deployment (server.ts). */
-export async function appRateLimitHook(req: FastifyRequest, reply: FastifyReply) {
+/** The app-wide ceiling on verified callers' requests, as a multiple of the per-caller limit:
+ *  high enough that no handful of callers can use it up, low enough to cap a whole app. */
+export const APP_CEILING_FACTOR = 10
+
+/**
+ * Who a request is, as the per-app limiter judges it — read AFTER the route's authentication
+ * (appRateLimitPreHandler runs as the route's last preHandler): a verified API key, else the
+ * verified user (bearer, session, OAuth), else the verified session; anything else — no
+ * credential, or one that did not verify — is anonymous and keyed by the client address. The
+ * address is req.ip, which follows TRUST_PROXY (lib/trust-proxy.ts): with TRUST_PROXY=true it is
+ * the left-most X-Forwarded-For entry, which only the edge proxy can make trustworthy.
+ */
+export function rateLimitPrincipal(req: FastifyRequest): { key: string; verified: boolean } {
+  const r = req as FastifyRequest & { apiKeyId?: number | null }
+  if (typeof r.apiKeyId === 'number' && Number.isFinite(r.apiKeyId))
+    return { key: `k:${r.apiKeyId}`, verified: true }
+  const uid = (req.user as { id?: unknown } | undefined)?.id ?? sessionUser(req)
+  if (typeof uid === 'string' && uid) return { key: `u:${uid.toLowerCase()}`, verified: true }
+  return { key: `anon:${String(req.ip ?? '').replace(/[^0-9a-fA-F.:]/g, '')}`, verified: false }
+}
+
+function tooMany(reply: FastifyReply, now: number, minute: number, message: string) {
+  const wait = Math.max(1, Math.ceil(((minute + 1) * 60_000 - now) / 1000))
+  reply.header('Retry-After', String(wait))
+  return reply.code(429).send({
+    statusCode: 429,
+    error: 'Too Many Requests',
+    message: `${message} Try again in ${wait} seconds.`,
+    code: APP_RATE_LIMITED
+  })
+}
+
+/**
+ * The per-app limiter, as the LAST preHandler of every route (registerAppRateLimit), so the
+ * caller is already verified: each verified caller (user or API key) and each anonymous address
+ * gets `requests_per_minute` of its own; verified callers together also share an app-wide
+ * ceiling of APP_CEILING_FACTOR times that. Anonymous requests never count toward the ceiling,
+ * so no anonymous flood (bogus credentials included) can lock signed-in people out, and no one
+ * caller can exhaust the others' budgets. A request the route refused before (a credential
+ * that failed: 401) never reaches here.
+ */
+export async function appRateLimitPreHandler(req: FastifyRequest, reply: FastifyReply) {
   if (!isExternalRequest(req) || !rateLimitCounts(req.url)) return
   const app = await currentAppLimits()
   const limit = app?.limits.requests_per_minute
   if (!app || !limit) return
   const now = Date.now()
   const minute = Math.floor(now / 60_000)
-  const signedIn = carriesCredential(req)
-  const bucket = signedIn ? 'app' : `anon:${String(req.ip ?? '').replace(/[^0-9a-fA-F.:]/g, '')}`
-  const n = await countAppRequest(app.id, minute, bucket)
-  if (n <= limit) return
-  const wait = Math.max(1, Math.ceil(((minute + 1) * 60_000 - now) / 1000))
-  reply.header('Retry-After', String(wait))
-  return reply.code(429).send({
-    statusCode: 429,
-    error: 'Too Many Requests',
-    message: signedIn
-      ? `This app has used its ${limit.toLocaleString('en-US')} requests for this minute. Try again in ${wait} seconds.`
-      : `Too many requests from this address for this app. Try again in ${wait} seconds.`,
-    code: APP_RATE_LIMITED
+  const who = rateLimitPrincipal(req)
+  if ((await countAppRequest(app.id, minute, who.key)) > limit)
+    return tooMany(
+      reply,
+      now,
+      minute,
+      who.verified
+        ? `You have used your ${limit.toLocaleString('en-US')} requests to this app for this minute.`
+        : 'Too many requests from this address to this app.'
+    )
+  if (!who.verified) return
+  const ceiling = limit * APP_CEILING_FACTOR
+  if ((await countAppRequest(app.id, minute, 'all')) > ceiling)
+    return tooMany(
+      reply,
+      now,
+      minute,
+      `This app has used its ${ceiling.toLocaleString('en-US')} requests for this minute.`
+    )
+}
+
+/**
+ * Appends the per-app limiter to every route registered after this call (server.ts, on a Hub
+ * shared deployment, before the routes): as the last preHandler it runs after the route's own
+ * authentication and inside the app's context.
+ */
+export function registerAppRateLimit(app: {
+  addHook(name: 'onRoute', fn: (route: { preHandler?: unknown }) => void): unknown
+}): void {
+  app.addHook('onRoute', (route) => {
+    const own = route.preHandler
+    const list = Array.isArray(own) ? own : own ? [own] : []
+    if (list.includes(appRateLimitPreHandler)) return
+    route.preHandler = [...list, appRateLimitPreHandler]
   })
 }
 
