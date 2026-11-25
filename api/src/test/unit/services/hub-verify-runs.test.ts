@@ -45,6 +45,7 @@ const MIGRATIONS = [
   '569_hub_data',
   '570_hub_people_owner_policy',
   '571_hub_app_templates',
+  '573_hub_change_ops',
   '574_hub_verify'
 ]
 const smoke = await import('../../../services/hub/verify/smoke.js')
@@ -880,6 +881,158 @@ describe('extension version manager', () => {
     expect(runs.filter((r) => r.trigger === 'extension').map((r) => r.deploy_id)).toEqual([
       out.deploy_id
     ])
+  })
+
+  describe('the change engine (deploy windows, checklist, outside the window)', () => {
+    /** An ISO weekday (1 = Monday … 7 = Sunday) that is not today. */
+    const otherDay = () => {
+      const d = new Date().getUTCDay()
+      const iso = d === 0 ? 7 : d
+      return ((iso - 1 + 3) % 7) + 1
+    }
+    beforeEach(async () => {
+      await db('nivaro_hub_deploy_windows').delete()
+      await db('nivaro_hub_checklist_items').delete()
+      await db('nivaro_hub_checklist_runs').delete()
+      await db('nivaro_hub_environments')
+        .where({ id: env.staging })
+        .update({
+          version_pin: '0.3.215',
+          extension_pins: JSON.stringify({ 'efp-ops': DIGEST('a') })
+        })
+    })
+    /** A weekly window for every environment of the app that is closed right now. */
+    const closedWindow = () =>
+      db('nivaro_hub_deploy_windows').insert({
+        app_id: appId,
+        name: 'Tuesday nights',
+        env_scope: 'all',
+        recurrence: 'weekly',
+        ranges: JSON.stringify([{ days: [otherDay()], from: '01:00', to: '01:30' }]),
+        time_zone: 'UTC',
+        enabled: true
+      })
+    const handOff = () =>
+      vi.fn(async (_envId: number, req: { hooks?: { onLocked?: () => Promise<void> } }) => {
+        await req.hooks?.onLocked?.()
+        return { deployId: 91, jobRunId: null }
+      })
+
+    it('outside a deploy window → refused OUTSIDE_WINDOW (the plan says so first)', async () => {
+      await closedWindow()
+      const plan = await ext.planExtensionPromote(env.staging, 'efp-ops', {})
+      expect(plan.blockers.map((b) => b.code)).toContain('OUTSIDE_WINDOW')
+      const apply = handOff()
+      await expect(
+        ext.promoteExtension(
+          env.staging,
+          'efp-ops',
+          { confirm: 'staging' },
+          { id: USER },
+          { apply }
+        )
+      ).rejects.toMatchObject({ code: 'OUTSIDE_WINDOW' })
+      expect(apply).not.toHaveBeenCalled()
+      expect(await pinsOf(env.staging)).toEqual({ 'efp-ops': DIGEST('a') })
+    })
+
+    it('production without its checklist ticked → refused, nothing committed', async () => {
+      await deployRow({ envId: env.production, version: '0.3.214', finishedAt: clock - 60 * MIN })
+      await db('nivaro_hub_checklist_items').insert({
+        app_id: appId,
+        environment_id: null,
+        text: 'Tell the service desk',
+        required: true,
+        tick_by: 'admin',
+        actions: 'extension_promote'
+      })
+      const commit = vi.fn(async () => ({ sha: 'a'.repeat(40), changed: true }))
+      const before = (await ext.listExtensionPromotions({})).length
+      await expect(
+        ext.promoteExtension(
+          env.production,
+          'efp-ops',
+          { from_env_id: env.development, confirm: 'production' },
+          { id: USER },
+          { commit, lock: testLock().lock as never, readFile: (async () => null) as never }
+        )
+      ).rejects.toMatchObject({ code: 'CHECKLIST_REQUIRED' })
+      expect(commit).not.toHaveBeenCalled()
+      expect((await ext.listExtensionPromotions({})).length).toBe(before)
+      // The checklist is ticked for this extension and image: the promote goes through.
+      const { checklistFor, createRun, tickRun } = await import(
+        '../../../services/hub/changes/checklist.js'
+      )
+      const target = { kind: 'environment' as const, envId: env.production }
+      const { entries } = await checklistFor(target, 'extension_promote')
+      const run = await createRun({
+        target,
+        action: 'extension_promote',
+        version: ext.extensionChecklistVersion('efp-ops', DIGEST('b')),
+        userId: USER,
+        entries
+      })
+      await tickRun(run.id, {
+        key: entries[0].key,
+        ticked: true,
+        note: null,
+        who: { id: USER, isAdmin: true, owns: new Set() },
+        whoName: 'Ada'
+      })
+      const out = await ext.promoteExtension(
+        env.production,
+        'efp-ops',
+        { from_env_id: env.development, confirm: 'production', checklist_run_id: run.id },
+        { id: USER },
+        {
+          commit,
+          deployJob: (async () => ({ status: 'success', job: {} })) as never,
+          lock: testLock().lock as never,
+          notify: vi.fn(),
+          readFile: (async () => null) as never
+        }
+      )
+      expect(out.via).toBe('gitlab')
+      const linked = await db('nivaro_hub_checklist_runs').where({ id: run.id }).first()
+      expect(linked).toMatchObject({ status: 'used', run_kind: 'extension', run_id: out.id })
+    })
+
+    it('an administrator’s outside-window reason → allowed, logged and told', async () => {
+      await closedWindow()
+      const { logActivity } = (await import('../../../services/activity.js')) as unknown as {
+        logActivity: ReturnType<typeof vi.fn>
+      }
+      logActivity.mockClear()
+      const apply = handOff()
+      const out = await ext.promoteExtension(
+        env.staging,
+        'efp-ops',
+        {
+          confirm: 'staging',
+          outsideWindow: { reason: 'Security fix for the vendor portal, cannot wait' }
+        },
+        { id: USER },
+        { apply: apply as never }
+      )
+      expect(out).toMatchObject({ via: 'docker', deploy_id: 91 })
+      expect(apply).toHaveBeenCalledWith(
+        env.staging,
+        expect.objectContaining({
+          outsideWindow: { reason: 'Security fix for the vendor portal, cannot wait' }
+        })
+      )
+      expect(logActivity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'hub-outside-window-start',
+          collection: 'nivaro_hub_extension_promotions',
+          item: String(out.id),
+          comment: expect.stringContaining('Security fix for the vendor portal')
+        })
+      )
+      await db('nivaro_hub_environments')
+        .where({ id: env.staging })
+        .update({ extension_pins: JSON.stringify({ 'efp-ops': DIGEST('a') }) })
+    })
   })
 
   it('refuses a shared one', async () => {

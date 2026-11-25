@@ -12,6 +12,7 @@ import { readReadiness } from '../services/readiness.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { NIVARO_VERSION } from '../version.js'
 import { hubLinkDataRoutes } from './hub-link-data.js'
+import { hubLinkSecurityRoutes } from './hub-link-security.js'
 import { hubLinkTemplateRoute } from './hub-link-template.js'
 import { runPreflight } from './preflight.js'
 
@@ -197,6 +198,9 @@ export async function hubLinkRoutes(app: FastifyInstance) {
 
   // Hub data care (0.3.215): /data/* — refresh keeps and files backups (routes/hub-link-data.ts).
   hubLinkDataRoutes(app)
+  // Hub security (0.3.215): /security/* — access-review reads, break-glass grants
+  // (routes/hub-link-security.ts).
+  hubLinkSecurityRoutes(app)
 
   app.get('/status', async (req, reply) => {
     // Hub release operations: ?recent_minutes=N (aggregate counts) and ?release_facts=1 (build

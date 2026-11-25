@@ -37,6 +37,13 @@ const ID_RE = /^[A-Za-z0-9-]{1,64}$/
 export interface PeopleQuery {
   emails: string[]
   entra: Array<{ oid: string; tid: string | null }>
+  /**
+   * One account by its id (an access review's removal): only alone — no emails / entra — and
+   * with `expect`, the account's email + Entra oid as the review read them. If either changed
+   * since, the suspend is refused 409 STALE (it may be another person now).
+   */
+  user_ids: string[]
+  expect?: { email: string | null; entra_oid: string | null }
 }
 
 export interface PersonAccount {
@@ -44,12 +51,17 @@ export interface PersonAccount {
   status: string
   role: string | null
   admin: boolean
-  matched_by: 'entra' | 'email'
+  matched_by: 'entra' | 'email' | 'id'
 }
 
 export type SuspendAnswer =
   | { ok: true; state: 'suspended' | 'already' | 'none'; accounts: PersonAccount[] }
-  | { ok: false; status: 400 | 409; code: 'BAD_PERSON' | 'LAST_ADMIN'; message: string }
+  | {
+      ok: false
+      status: 400 | 409
+      code: 'BAD_PERSON' | 'LAST_ADMIN' | 'STALE'
+      message: string
+    }
 
 function cleanEmail(v: unknown): string | null {
   if (typeof v !== 'string') return null
@@ -66,7 +78,19 @@ function cleanId(v: unknown): string | null {
 /** The body as a query, or null (nothing usable, or more than PEOPLE_MAX_IDS of either kind). */
 export function readPeopleQuery(body: unknown): PeopleQuery | null {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null
-  const b = body as { emails?: unknown; entra?: unknown }
+  const b = body as { emails?: unknown; entra?: unknown; user_ids?: unknown; expect?: unknown }
+  if (b.user_ids !== undefined) {
+    const ids = b.user_ids
+    if (!Array.isArray(ids) || ids.length !== 1 || b.emails !== undefined || b.entra !== undefined)
+      return null
+    const id = typeof ids[0] === 'string' && /^[A-Za-z0-9-]{1,64}$/.test(ids[0]) ? ids[0] : null
+    const e = b.expect as { email?: unknown; entra_oid?: unknown } | null | undefined
+    if (!id || !e || typeof e !== 'object') return null
+    const email = e.email == null ? null : cleanEmail(e.email)
+    const oid = e.entra_oid == null ? null : cleanId(e.entra_oid)
+    if ((e.email != null && !email) || (e.entra_oid != null && !oid)) return null
+    return { emails: [], entra: [], user_ids: [id], expect: { email, entra_oid: oid } }
+  }
   const rawEmails = b.emails === undefined ? [] : b.emails
   const rawEntra = b.entra === undefined ? [] : b.entra
   if (!Array.isArray(rawEmails) || !Array.isArray(rawEntra)) return null
@@ -87,7 +111,7 @@ export function readPeopleQuery(body: unknown): PeopleQuery | null {
     if (!entra.some((y) => y.oid === oid)) entra.push({ oid, tid })
   }
   if (!emails.length && !entra.length) return null
-  return { emails, entra }
+  return { emails, entra, user_ids: [] }
 }
 
 interface Row {
@@ -104,6 +128,22 @@ const truthy = (v: unknown) => v === true || v === 1 || v === '1'
 
 /** People accounts matching the query, each once (an Entra match wins over an email match). */
 export async function matchPeople(q: PeopleQuery, k: Knex = db): Promise<PersonAccount[]> {
+  if (q.user_ids.length) {
+    // One account by its id (an access-review removal): people accounts only.
+    const rows = (await k('nivaro_users as u')
+      .leftJoin('nivaro_roles as r', 'r.id', 'u.role')
+      .whereNull('u.account_kind')
+      .whereIn('u.id', q.user_ids)
+      .select('u.id', 'u.status', 'r.name as role_name', 'r.admin_access as admin_access')
+      .limit(5)) as Row[]
+    return rows.map((r) => ({
+      user_id: String(r.id),
+      status: String(r.status ?? ''),
+      role: r.role_name == null ? null : String(r.role_name),
+      admin: truthy(r.admin_access),
+      matched_by: 'id' as const
+    }))
+  }
   const hasEntra = q.entra.length > 0 && (await k.schema.hasColumn('nivaro_users', 'entra_oid'))
   // Nothing left to match on: never an empty condition (that would match everyone).
   if (!q.emails.length && !hasEntra) return []
@@ -150,15 +190,36 @@ export async function matchPeople(q: PeopleQuery, k: Knex = db): Promise<PersonA
   return out
 }
 
-/** Active administrator people (the infra-drift/first-admin rule), ids upper-cased. */
+/**
+ * Active administrator people (the infra-drift/first-admin rule), ids upper-cased. A break-glass
+ * grantee is never counted: their admin access is borrowed and ends by itself.
+ */
 async function activeAdminIds(k: Knex): Promise<string[]> {
-  const rows = (await k('nivaro_users as u')
+  const { withoutLiveGrantees } = await import('../break-glass-grants.js')
+  const q = k('nivaro_users as u')
     .join('nivaro_roles as r', 'r.id', 'u.role')
     .where('r.admin_access', true)
     .where('u.status', 'active')
     .whereNull('u.account_kind')
-    .select('u.id')) as Array<{ id: unknown }>
+    .select('u.id')
+  const rows = (await withoutLiveGrantees(q, k)) as Array<{ id: unknown }>
   return rows.map((r) => String(r.id).toUpperCase())
+}
+
+/** The account as it is now matches what the review read (email, Entra oid). */
+async function stillAsReviewed(
+  k: Knex,
+  id: string,
+  expect: NonNullable<PeopleQuery['expect']>
+): Promise<boolean> {
+  const hasOid = await k.schema.hasColumn('nivaro_users', 'entra_oid')
+  const r = (await k('nivaro_users')
+    .where({ id })
+    .first('email', ...(hasOid ? ['entra_oid'] : []))) as Record<string, unknown> | undefined
+  if (!r) return true // gone: matchPeople answers none
+  const email = typeof r.email === 'string' && r.email.trim() ? r.email.trim().toLowerCase() : null
+  const oid = typeof r.entra_oid === 'string' && r.entra_oid ? r.entra_oid.toLowerCase() : null
+  return email === expect.email && oid === expect.entra_oid
 }
 
 export interface SuspendDeps {
@@ -173,6 +234,7 @@ type SuspendOutcome =
   | { kind: 'none' }
   | { kind: 'already'; accounts: PersonAccount[] }
   | { kind: 'last_admin' }
+  | { kind: 'stale' }
   | { kind: 'done'; accounts: PersonAccount[]; leaving: Set<string>; ids: string[] }
 
 /**
@@ -186,8 +248,18 @@ async function suspendInTransaction(k: Knex, q: PeopleQuery): Promise<SuspendOut
   return k.transaction((trx) =>
     withLockWait(trx, async (): Promise<SuspendOutcome> => {
       await oldestAdminRoleQuery(trx)
+      if (q.user_ids.length && q.expect && !(await stillAsReviewed(trx, q.user_ids[0], q.expect)))
+        return { kind: 'stale' }
       const accounts = await matchPeople(q, trx)
       if (!accounts.length) return { kind: 'none' }
+      // A break-glass grant of a leaving account ends FIRST (its role back), in this transaction:
+      // an offboarded person never keeps borrowed admin, and the count below never sees it.
+      const { endLiveGrantsInTrx } = await import('../break-glass-grants.js')
+      await endLiveGrantsInTrx(
+        trx,
+        accounts.map((a) => a.user_id),
+        'offboarded'
+      )
       const toSuspend = accounts.filter((a) => a.status.toLowerCase() !== 'suspended')
       if (!toSuspend.length) return { kind: 'already', accounts }
       const leaving = new Set(toSuspend.map((a) => a.user_id.toUpperCase()))
@@ -205,6 +277,12 @@ async function suspendInTransaction(k: Knex, q: PeopleQuery): Promise<SuspendOut
   )
 }
 
+/** Why the Hub suspends (only the activity text differs): an access review's removal says so. */
+export function readSuspendReason(body: unknown): 'offboard' | 'access_review' {
+  const r = (body as { reason?: unknown } | null)?.reason
+  return r === 'access_review' ? 'access_review' : 'offboard'
+}
+
 /** Suspends every matched account (see the header). Never deletes; never touches a non-person. */
 export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Promise<SuspendAnswer> {
   const q = readPeopleQuery(body)
@@ -219,6 +297,20 @@ export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Prom
   const out = await suspendInTransaction(k, q)
   if (out.kind === 'none') return { ok: true, state: 'none', accounts: [] }
   if (out.kind === 'already') return { ok: true, state: 'already', accounts: out.accounts }
+  try {
+    const { clearMarkerIfNone } = await import('../break-glass-grants.js')
+    await clearMarkerIfNone(k)
+  } catch {
+    /* left set: the request path keeps joining */
+  }
+  if (out.kind === 'stale')
+    return {
+      ok: false,
+      status: 409,
+      code: 'STALE',
+      message:
+        'The account changed since it was reviewed (email or Microsoft identity); review it again'
+    }
   if (out.kind === 'last_admin')
     return {
       ok: false,
@@ -243,7 +335,10 @@ export async function suspendPeople(body: unknown, deps: SuspendDeps = {}): Prom
       user: null,
       collection: 'nivaro_users',
       item: id,
-      comment: 'Suspended by the Nivaro Hub (offboarded everywhere)',
+      comment:
+        readSuspendReason(body) === 'access_review'
+          ? 'Suspended by the Nivaro Hub (removed in an access review)'
+          : 'Suspended by the Nivaro Hub (offboarded everywhere)',
       origin: 'integration'
     })
   }

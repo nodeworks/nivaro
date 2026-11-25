@@ -35,6 +35,8 @@ export type FrozenAction =
   | 'extension_promote'
   /** Hub placement (review L1): placing an environment / changing its placement (no deploy). */
   | 'placement'
+  /** An access review's removals (services/hub/security/reviews.ts): accounts suspended. */
+  | 'access_change'
 
 export interface HubFreeze {
   id: number
@@ -152,7 +154,8 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
   move: 'Moves',
   config_promote: 'Config promotions',
   extension_promote: 'Extension promotions',
-  placement: 'Placement changes'
+  placement: 'Placement changes',
+  access_change: 'Access review removals'
 }
 
 export interface FreezeRefusal {

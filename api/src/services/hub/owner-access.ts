@@ -165,13 +165,30 @@ export const OWNER_UNGUARDED: Record<string, string> = {
     'a read: what a promotion or rollback of a version would change (GitLab read-only)',
   'POST /deploys/:id/release-notes':
     'works out and stores the release notes of a past run the caller may read; deploys nothing',
+  // Hub insight (routes/hub-insight.ts): the caller's own switch, and a read-only question.
+  'PUT /insight/digest/me': 'the caller’s own weekly digest switch; touches no app',
+  'POST /insight/ask': 'a read: read-only tools that re-enter as the caller; changes nothing',
   // Change operations (routes/hub-changes.ts): a pre-deploy checklist is opened and ticked by
   // whoever its items allow; nothing deploys, and the start itself stays owner-guarded.
   'POST /environments/:envId/checklist-runs':
     'opens the pre-deploy checklist of a start the caller may read; deploys nothing',
   'POST /checklist-runs/:id/tick':
     'ticks one checklist item; the route lets only the people the item names (admin, owner, named) tick it',
-  'POST /checklist-runs/:id/void': 'sets an open checklist aside (admins and the app’s owners)'
+  'POST /checklist-runs/:id/void': 'sets an open checklist aside (admins and the app’s owners)',
+  // Security (routes/hub-security.ts): access reviews and break-glass, nothing deploys.
+  'POST /apps/:id/access-reviews':
+    'an access review only reads who holds a role (owner of the app or admin, checked in the route)',
+  'POST /access-reviews/:id/decisions': 'owners decide keep / remove on their own app’s review',
+  'POST /access-reviews/:id/complete':
+    'removals only take access away, through the app’s suspend route (last-admin lock)',
+  'POST /access-reviews/:id/retry': 'the same removals again',
+  'POST /access-reviews/:id/cancel': 'stops a review; nothing in the app changes',
+  'POST /environments/:envId/break-glass':
+    'a request only; a Hub admin approves (own session only, checked in the route)',
+  'POST /break-glass/:id/approve':
+    'admin-only inside the route (self-approval only on call during an open incident)',
+  'POST /break-glass/:id/cancel': 'the requester withdraws their own pending request',
+  'POST /break-glass/:id/revoke': 'ending temporary admin early only takes access away'
 }
 
 export interface OwnerRefusal {

@@ -21,6 +21,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { ghostButton, StatusChip } from '../hub-parts'
+import { HealthScore, useHealthByEnv } from '../insight/HealthScore'
+import type { EnvHealth } from '../insight/insight-api'
 import { FederatedFleet } from '../placement/FederatedFleet'
 import { FleetSettingsCard } from './FleetSettingsCard'
 import { checkFleetNow, type FleetRow, fetchFleet, fleetKeys, pct } from './fleet-api'
@@ -104,6 +106,8 @@ export default function HubFleet() {
       { replace: true }
     )
   const [uptimeOf, setUptimeOf] = useState<FleetRow | null>(null)
+  // Hub insight: the health score per environment (one shared read; '—' until it answers).
+  const healthByEnv = useHealthByEnv(!!fleet.data)
   const [rulesOpen, setRulesOpen] = useState(false)
 
   const check = useMutation({
@@ -297,7 +301,7 @@ export default function HubFleet() {
               </p>
             )}
             <div className='overflow-x-auto rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
-              <table className='w-full min-w-[1080px] border-collapse text-[12px]'>
+              <table className='w-full min-w-[1160px] border-collapse text-[12px]'>
                 <thead>
                   <tr className='border-b border-slate-200 text-left text-[11px] font-medium text-slate-500 dark:border-border dark:text-muted-foreground'>
                     <SortHeader label='App / environment' col='app' sort={sort} onSort={sortBy} />
@@ -309,6 +313,11 @@ export default function HubFleet() {
                       dir='desc'
                     />
                     <th className='px-3 py-2 font-medium'>Health</th>
+                    <th className='px-3 py-2 font-medium'>
+                      <Link to='/hub/health' className='hover:underline'>
+                        Score
+                      </Link>
+                    </th>
                     <SortHeader label='Readiness' col='readiness' sort={sort} onSort={sortBy} />
                     <th className='px-3 py-2 font-medium'>Open issues</th>
                     <SortHeader
@@ -329,12 +338,13 @@ export default function HubFleet() {
                       row={r}
                       onOpen={() => navigate(`/hub?app=${r.app_id}`)}
                       onUptime={() => setUptimeOf(r)}
+                      health={healthByEnv?.get(r.environment_id) ?? null}
                     />
                   ))}
                   {shown.length === 0 && (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={10}
                         className='px-3 py-8 text-center text-slate-500 dark:text-muted-foreground'
                       >
                         Nothing matches these filters.
@@ -420,11 +430,13 @@ function SortHeader({
 function FleetTableRow({
   row: r,
   onOpen,
-  onUptime
+  onUptime,
+  health
 }: {
   row: FleetRow
   onOpen: () => void
   onUptime: () => void
+  health: EnvHealth | null
 }) {
   const behind = r.behind == null ? null : r.behind === 0 ? null : `${r.behind} behind`
   const sloTone =
@@ -528,6 +540,9 @@ function FleetTableRow({
         {r.state && r.probe_stale && (
           <p className='m-0 text-[11px] text-amber-800 dark:text-amber-300'>Not checked lately</p>
         )}
+      </td>
+      <td className='px-3 py-2'>
+        <HealthScore health={health} compact />
       </td>
       <td className='px-3 py-2 tabular-nums'>
         {r.readiness_score == null ? (

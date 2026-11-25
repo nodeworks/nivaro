@@ -110,6 +110,7 @@ import { hubPeopleRoutes } from './hub-people.js'
 import { hubPlacementRoutes } from './hub-placement.js'
 import { hubReleaseRoutes } from './hub-releases.js'
 import { hubScaleRoutes } from './hub-scale.js'
+import { hubSecurityRoutes } from './hub-security.js'
 import { hubSharedRoutes } from './hub-shared.js'
 import { hubSharedTenantsRoutes } from './hub-shared-tenants.js'
 import { hubSharedUpgradeRoutes } from './hub-shared-upgrade.js'
@@ -153,6 +154,7 @@ export async function hubRoutes(app: FastifyInstance) {
   hubDataRoutes(app) // data care: backups, restore drills, refreshes, move rehearsals
   hubScaleRoutes(app) // scaling: manual + automatic replicas and limits of Docker stacks
   hubPlacementRoutes(app) // hosts + regions, cost chargeback, read-only federation with Hubs
+  hubSecurityRoutes(app) // access reviews, compliance pack, image scan, TLS watch, break-glass
 }
 
 const APPS = 'nivaro_hub_apps'

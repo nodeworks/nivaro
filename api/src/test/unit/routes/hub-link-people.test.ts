@@ -130,7 +130,8 @@ describe('readPeopleQuery', () => {
     expect(readPeopleQuery({ entra: [{ oid: 'bad id!' }] })).toBeNull()
     expect(readPeopleQuery({ emails: [' A@X.io ', 'a@x.io'] })).toEqual({
       emails: ['a@x.io'],
-      entra: []
+      entra: [],
+      user_ids: []
     })
   })
 })

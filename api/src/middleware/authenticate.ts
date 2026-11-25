@@ -14,6 +14,7 @@ import {
 import { registerAppKeyed } from '../services/app-forget.js'
 import { rateWindowKey } from '../services/app-redis-keys.js'
 import { withAuthDeadline } from '../services/auth-deadline.js'
+import { effectiveRole, endLiveGrantsOf } from '../services/break-glass-grants.js'
 import { cacheSetting } from '../services/cache-config.js'
 import { registerCache } from '../services/cache-registry.js'
 import { appNowForAuth } from '../services/chaos/clock.js'
@@ -336,7 +337,17 @@ async function hydrateRole(
   user: User,
   opts?: { touch?: boolean; session?: boolean }
 ) {
-  const role = user.role ? await db<Role>('nivaro_roles').where({ id: user.role }).first() : null
+  // The role row WITH the account's Nivaro Hub break-glass grant, one statement
+  // (services/break-glass-grants.ts): a grant that has ended (or cannot be read) runs as the
+  // role it replaced whenever the current role carries admin access, and is ended for real in
+  // the background — the request check is the authority whether or not the expiry job ticks.
+  const eff = await effectiveRole<Role & Record<string, unknown>>(user)
+  if (eff.ended) {
+    endLiveGrantsOf(eff.ended)
+    if (eff.roleId !== (user.role ?? null)) user = { ...user, role: eff.roleId as User['role'] }
+  }
+  req.breakGlass = eff.live ? { ref: eff.live.ref, ends_at: eff.live.ends_at } : null
+  const role = (eff.role as Role | null) ?? null
   // A role with sign-in turned off (app_access false) admits no person by any
   // credential — the one place every sign-in path passes (services/users.ts
   // roleAllowsSignIn). A session ends here, so the next page asks for sign-in.
@@ -945,10 +956,10 @@ export async function isActiveAdmin(userId: string | null | undefined): Promise<
     | { id: string; role: string | null; is_redacted?: boolean | number | null }
     | undefined
   if (!user || user.is_redacted || !user.role) return false
-  const role = (await db('nivaro_roles').where({ id: user.role }).first('admin_access')) as
-    | Pick<Role, 'admin_access'>
-    | undefined
-  return roleIsAdmin(role)
+  // The same judgement as a request: an ended break-glass grant is not admin access.
+  const eff = await effectiveRole<Pick<Role, 'admin_access'> & Record<string, unknown>>(user)
+  if (eff.ended) endLiveGrantsOf(eff.ended)
+  return roleIsAdmin(eff.role)
 }
 
 export async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {

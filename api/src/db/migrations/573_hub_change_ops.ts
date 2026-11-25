@@ -67,7 +67,7 @@ export async function up(knex: Knex): Promise<void> {
       t.increments('id').primary()
       t.string('target_kind', 16).notNullable()
       t.integer('target_id').notNullable()
-      t.string('action', 16).notNullable()
+      t.string('action', 32).notNullable() // extension_promote is 17 characters
       t.string('version', 64).nullable()
       t.string('status', 16).notNullable().defaultTo('open')
       longText(t, knex, 'items').nullable()

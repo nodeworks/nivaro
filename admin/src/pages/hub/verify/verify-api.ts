@@ -223,7 +223,7 @@ export const refreshExtensions = (appId?: number) =>
 export const planExtension = (
   envId: number,
   extId: string,
-  body: { from_env_id?: number | null; pin?: string | null }
+  body: { from_env_id?: number | null; pin?: string | null; outside_window_reason?: string }
 ) =>
   api
     .post<{ data: ExtensionPlan }>(
@@ -235,13 +235,31 @@ export const planExtension = (
 export const promoteExtension = (
   envId: number,
   extId: string,
-  body: { from_env_id?: number | null; pin?: string | null; confirm: string }
+  body: {
+    from_env_id?: number | null
+    pin?: string | null
+    confirm: string
+    checklist_run_id?: number
+    outside_window_reason?: string
+  }
 ) =>
   api
     .post<{
       data: { id: number; via: PinSource; deploy_id: number | null; commit_sha: string | null }
     }>(`/hub/environments/${envId}/extensions/${encodeURIComponent(extId)}/promote`, body)
     .then((r) => r.data.data)
+
+/**
+ * The "version" an extension promote's pre-deploy checklist is ticked for: `<id>@<12 hex>` (the
+ * server's extensionChecklistVersion, services/hub/verify/extensions.ts).
+ */
+export function extensionChecklistVersion(extId: string, pin: string): string {
+  const at = pin.indexOf('@sha256:')
+  return `${extId}@${at >= 0 ? pin.slice(at + 8, at + 20) : pin.slice(0, 12)}`.slice(0, 64)
+}
+
+/** Window refusals the deploy-window notice shows (the plan's list leaves them out). */
+export const WINDOW_CODES = new Set(['OUTSIDE_WINDOW', 'WINDOW_INVALID'])
 
 /** `repo@sha256:abcdef…` → `repo · abcdef123456` (the full pin stays in the tooltip). */
 export function shortPin(pin: string | null): string | null {

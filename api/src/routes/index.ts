@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { noteReadDuration } from '../services/background-runs.js'
+import { installBreakGlassWriteGuard } from '../services/break-glass-guard.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint, isConfigWrite } from '../services/config-live.js'
 import { configWatchOnResponse, configWatchPreHandler } from '../services/config-watch.js'
@@ -173,6 +174,8 @@ import { hubDeploymentUsageRoutes, hubLinkUsageRoutes } from './hub-capacity-lin
 import { hubDeploymentLinkRoutes } from './hub-deployment-link.js'
 import { hubFleetRoutes } from './hub-fleet.js'
 import { hubIncidentRoutes } from './hub-incidents.js'
+import { hubInsightRoutes } from './hub-insight.js'
+import { hubInsightDeploymentRoutes, hubInsightLinkRoutes } from './hub-insight-link.js'
 import { hubLinkRoutes } from './hub-link.js'
 import { hubDeploymentBannerRoutes, hubLinkBannerRoutes } from './hub-link-banner.js'
 import { hubOidcRoutes } from './hub-oidc.js'
@@ -395,6 +398,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Every /api/hub route (any plugin, Hub mode only): API keys need a Hub scope, connected apps
   // only read and plan, View-as never writes (services/hub/api/gate.ts). Before any registration.
   installHubCredentialGate(app)
+  // A Nivaro Hub break-glass grantee may not turn borrowed admin into lasting admin: role, policy
+  // and account-role writes refuse BREAK_GLASS_ACTIVE (services/break-glass-guard.ts).
+  installBreakGlassWriteGuard(app)
   // #2759 — how long a cache-missing custom query / widget read takes, so a known-slow one can
   // offer "Run in background" (services/background-runs.ts).
   app.addHook('onResponse', noteReadDuration(app))
@@ -508,6 +514,9 @@ export async function registerRoutes(app: FastifyInstance) {
   // Hub ops (issue rollup, files usage): read-only aggregates over the hub / deployment link.
   await app.register(hubOpsLinkRoutes, { prefix: '/hub-link' })
   await app.register(hubOpsDeploymentRoutes, { prefix: '/hub-deployment' })
+  // Hub insight (usage counts under a privacy floor, dependency hosts): same mounts, same bearer.
+  await app.register(hubInsightLinkRoutes, { prefix: '/hub-link' })
+  await app.register(hubInsightDeploymentRoutes, { prefix: '/hub-deployment' })
   // Hub incident status banner (plain text, bearer-only): beside each link.
   await app.register(hubLinkBannerRoutes, { prefix: '/hub-link' })
   await app.register(hubDeploymentBannerRoutes, { prefix: '/hub-deployment' })
@@ -541,6 +550,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubAppLinkRoutes, { prefix: '/hub/app-link' })
   // Hub ops: cross-app issues, secret rotation helper, storage health (HUB=on only).
   await app.register(hubOpsRoutes, { prefix: '/hub' })
+  // Hub insight: usage, dependency map, health score, weekly digest, Ask the Hub (HUB=on only).
+  await app.register(hubInsightRoutes, { prefix: '/hub' })
   // Hub verification: post-deploy smoke checks, extension version manager (HUB=on only).
   await app.register(hubVerifyRoutes, { prefix: '/hub' })
   // Hub phase 7 (app side): GET /api/hub-switcher + readiness `hub-signin`; 404 without the link.

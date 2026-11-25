@@ -377,6 +377,17 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
   },
   {
     source: 'core',
+    id: 'core:break-glass-grants',
+    label: 'Break-glass grants of service and test accounts',
+    reason:
+      'A break-glass grant belongs to its account: the grants of accounts this environment keeps stay with them; every other account’s grants follow the source with the account.',
+    table: 'nivaro_break_glass_grants',
+    kind: 'rows',
+    key: ['id'],
+    where: `[user_id] IN (SELECT [id] FROM {{db}}.[nivaro_users] WHERE ${KEPT_ACCOUNTS_WHERE})`
+  },
+  {
+    source: 'core',
     id: 'core:api-keys',
     label: 'API keys of service and integration accounts',
     reason:
@@ -466,6 +477,14 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_uptime_hours',
       'nivaro_hub_fleet_alerts',
       'nivaro_hub_slo_reports',
+      // Hub insight (577): usage counts, dependency hosts, health history, digest switches/sends
+      'nivaro_hub_usage_days',
+      'nivaro_hub_usage_screens',
+      'nivaro_hub_dependencies',
+      'nivaro_hub_insight_state',
+      'nivaro_hub_health_scores',
+      'nivaro_hub_digest_prefs',
+      'nivaro_hub_digest_sends',
       // Hub incidents, on-call and status pages (576)
       'nivaro_hub_incidents',
       'nivaro_hub_incident_events',
@@ -477,7 +496,14 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_smoke_suites',
       'nivaro_hub_smoke_runs',
       'nivaro_hub_extension_sightings',
-      'nivaro_hub_extension_promotions'
+      'nivaro_hub_extension_promotions',
+      'nivaro_hub_access_reviews',
+      'nivaro_hub_access_review_items',
+      'nivaro_hub_security_settings',
+      'nivaro_hub_vuln_scans',
+      'nivaro_hub_vuln_findings',
+      'nivaro_hub_cert_checks',
+      'nivaro_hub_break_glass'
     ] as const
   ).map(
     (table): EnvKeepEntry => ({

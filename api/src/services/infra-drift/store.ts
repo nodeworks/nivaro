@@ -643,15 +643,20 @@ export async function activeAdminIds(k: Knex = db, pageSize = 500): Promise<stri
   for (let offset = 0; ; offset += pageSize) {
     let page: Array<{ id: string }>
     try {
-      page = (await k('nivaro_users as u')
-        .join('nivaro_roles as r', 'r.id', 'u.role')
-        .where('r.admin_access', true)
-        .where('u.status', 'active')
-        .whereNull('u.account_kind')
-        .orderBy('u.id', 'asc')
-        .offset(offset)
-        .limit(pageSize)
-        .select('u.id')) as Array<{ id: string }>
+      // Break-glass grantees are not administrators of this install (their access is borrowed).
+      const { withoutLiveGrantees } = await import('../break-glass-grants.js')
+      page = (await withoutLiveGrantees(
+        k('nivaro_users as u')
+          .join('nivaro_roles as r', 'r.id', 'u.role')
+          .where('r.admin_access', true)
+          .where('u.status', 'active')
+          .whereNull('u.account_kind')
+          .orderBy('u.id', 'asc')
+          .offset(offset)
+          .limit(pageSize)
+          .select('u.id'),
+        k
+      )) as Array<{ id: string }>
     } catch (err) {
       // Logged, then thrown: the caller leaves the findings unstamped so the next check retries.
       warn(`[infra-drift] reading administrators failed: ${(err as Error)?.message ?? err}`)

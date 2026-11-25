@@ -192,8 +192,38 @@ export const APPS_HUB: HubDef = {
       label: 'Fleet',
       hint: 'Every environment at a glance: version, health and uptime.'
     },
+    {
+      path: 'health',
+      label: 'Health',
+      hint: 'A 0–100 score per environment, and what lowers it.'
+    },
+    {
+      path: 'usage',
+      label: 'Usage',
+      hint: 'How many people use each app: counts only, under a privacy floor.'
+    },
+    {
+      path: 'dependencies',
+      label: 'Dependencies',
+      hint: 'What each app depends on, and what a change would touch.'
+    },
+    {
+      path: 'ask',
+      label: 'Ask the Hub',
+      hint: 'Questions about your apps, answered from Hub data (read-only).'
+    },
     { path: 'audit', label: 'Audit', hint: 'Every change made through the Hub, by whom and when.' },
-    { path: 'people', label: 'People', hint: 'Who can reach which app, and offboarding.' }
+    { path: 'people', label: 'People', hint: 'Who can reach which app, and offboarding.' },
+    {
+      path: 'access',
+      label: 'Access',
+      hint: 'Temporary admin access (break-glass) and access reviews of every app.'
+    },
+    {
+      path: 'security',
+      label: 'Security',
+      hint: 'Certificates and names, image vulnerabilities and the compliance pack.'
+    }
   ]
 }
 

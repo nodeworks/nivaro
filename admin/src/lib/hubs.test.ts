@@ -53,14 +53,26 @@ describe('hub registry', () => {
       'Storage',
       'Secrets',
       'Fleet',
+      // Hub insight (enhancements 36–40) next to the Fleet.
+      'Health',
+      'Usage',
+      'Dependencies',
+      'Ask the Hub',
       'Audit',
-      'People'
+      'People',
+      // Hub security (hub-enh/security): break-glass + access reviews, then certificates/scans.
+      'Access',
+      'Security'
     ])
+    expect(hubForPath('/hub/access')?.tab.label).toBe('Access')
+    expect(hubForPath('/hub/security')?.tab.label).toBe('Security')
     expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
     expect(hubForPath('/hub/releases')?.tab.label).toBe('Releases')
     expect(hubForPath('/hub/secrets')?.tab.label).toBe('Secrets')
     expect(hubForPath('/hub/fleet')?.tab.label).toBe('Fleet')
     expect(hubForPath('/hub/audit')?.tab.label).toBe('Audit')
+    expect(hubForPath('/hub/health')?.tab.label).toBe('Health')
+    expect(hubForPath('/hub/ask')?.tab.label).toBe('Ask the Hub')
     expect(hubForPath('/hub/on-call')?.tab.label).toBe('On-call')
     expect(hubForPath('/hub/people')?.tab.label).toBe('People')
     expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
