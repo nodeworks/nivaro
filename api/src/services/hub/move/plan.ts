@@ -8,7 +8,7 @@ import { COPYABLE_OBJECT_STORAGE } from '../../hub-transfer/copyable.js'
 import { MIN_SHARED_POOL_MAX } from '../drivers.js'
 import { holderOf, lockHolderRefusal, sharedHolderOf, sharedLockRefusal } from '../promote-lock.js'
 import { compareVersions } from '../promote-plan.js'
-import { sqliteSharedRefusal } from '../shared/sqlite-apps.js'
+import { sqliteSharedRefusal, sqliteStorageRefusal } from '../shared/sqlite-apps.js'
 import { routeActions } from './route-actions.js'
 import type {
   MoveBlockerCode,
@@ -152,6 +152,13 @@ export function sqliteMoveRefusal(
   routing: 'automatic' | 'manual'
 ): { code: MoveBlockerCode; text: string } | null {
   if (!sqliteMove(input)) return null
+  // L5: a dedicated source that runs on SQLite but whose environment names a server database
+  // record: the tenant list would name that server database, never the copied file.
+  if (input.database && !input.database.sqlite)
+    return {
+      code: 'SQLITE_MOVE',
+      text: 'This app runs on SQLite, but its environment names a server database record. Detach that record first (the move gives the app a SQLite record of its own).'
+    }
   if (routing === 'manual')
     return {
       code: 'SQLITE_MOVE',
@@ -180,6 +187,21 @@ export function sqliteMoveRefusal(
         code: 'SQLITE_ONE_PROCESS',
         text: `The target stack is size ${size}; a SQLite database allows one writer process, so its stack must be size small.`
       }
+  }
+  // M5 / H2: the file's volume must be local to one node (never NFS, never several nodes).
+  if (to.kind === 'shared' || to.kind === 'docker') {
+    const t = input.target_facts
+    const no = sqliteStorageRefusal(
+      to.kind === 'shared' ? to.shared.key : to.stack,
+      t.multi_node_unread
+        ? null
+        : {
+            uploads_network: t.uploads_network,
+            volume_driver: t.volume_driver,
+            multi_node: t.multi_node
+          }
+    )
+    if (no) return { code: no.code, text: no.message }
   }
   return null
 }

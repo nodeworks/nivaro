@@ -676,6 +676,9 @@ async function sharedTargetFacts(
     // An agent the Hub cannot read is unknown, not "one node" (N-2, P6-15).
     if (h) out.multi_node = multiNode(h)
     else out.multi_node_unread = true
+    // Hub gap sqlite (M5): what the agent says of its uploads volume (null = not said).
+    out.uploads_network = h && typeof h.uploads_network === 'boolean' ? h.uploads_network : null
+    out.volume_driver = h?.volume_driver ?? null
   }
 
   let rows: Awaited<ReturnType<typeof tenantsOf>> = []
@@ -920,6 +923,8 @@ async function dedicatedTargetFacts(
     driver?.kind === 'docker' ? await healthOf(ctx, driver) : { h: null, code: 'NO_DRIVER' }
   if (!h) return { ...out, reachable: false, error: code ?? 'AGENT_UNREACHABLE' }
   out.multi_node = multiNode(h)
+  out.uploads_network = typeof h.uploads_network === 'boolean' ? h.uploads_network : null
+  out.volume_driver = h.volume_driver ?? null
   if (side.stack) {
     const f = await stackFacts(ctx, side.driverId, side.stack)
     out.redis = f.redis

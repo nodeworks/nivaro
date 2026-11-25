@@ -205,14 +205,25 @@ export function holdSqliteFile(file: string): () => void {
     if (released) return
     released = true
     clearInterval(timer)
-    process.removeListener('exit', release)
+    heldLockReleases.delete(release)
     try {
       if (readFileSync(lock, 'utf8') === mine) unlinkSync(lock)
     } catch {}
   }
-  process.once('exit', release)
+  heldLockReleases.add(release)
+  // One exit listener for every held file (a shared deployment holds one per SQLite app).
+  if (!exitListening) {
+    exitListening = true
+    process.once('exit', () => {
+      for (const r of [...heldLockReleases]) r()
+    })
+  }
   return release
 }
+
+/** Releases of the lock files this process holds (one exit listener runs them all). */
+const heldLockReleases = new Set<() => void>()
+let exitListening = false
 
 /**
  * Why the SQLite driver cannot load, or null. better-sqlite3 is an OPTIONAL dependency (a native

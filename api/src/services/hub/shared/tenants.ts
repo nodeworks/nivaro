@@ -256,11 +256,13 @@ export async function tenantsBody(
     }
     let client: HubTenantWire['db']['client']
     let connection: string
+    let create = false
     try {
       // A server record's URL, or a SQLite record's file name (0.3.215).
       const c = await openDatabaseWire(recordId)
       client = c.client
       connection = c.connection
+      create = c.create === true
     } catch (err) {
       // The code only (NOT_READY, NO_CONNECTION, …): driver text could carry the connection.
       const raw = (err as { code?: unknown } | null)?.code
@@ -280,7 +282,7 @@ export async function tenantsBody(
       name: app.name,
       status: wireStatus,
       hostnames: environmentNames(env),
-      db: { client, connection }
+      db: { client, connection, ...(create ? { create: true } : {}) }
     }
     const pool = poolMaxOf(placement)
     if (pool !== null) wire.pool_max = pool

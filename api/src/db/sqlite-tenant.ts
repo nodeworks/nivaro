@@ -10,7 +10,8 @@
 //    that would open the same file anyway (an overlapping rolling update) is refused by the
 //    file's `<file>.lock` (claimSqliteFile) until the first lets go.
 //  - The file lives in the deployment's uploads volume, in the app's own folder OUTSIDE the
-//    stored-files key space: `<STORAGE_LOCAL_ROOT>/app-db/<tenant id>/<file>`. Under `apps/`
+//    stored-files key space: `/app/uploads/app-db/<tenant id>/<file>` (SQLITE_APPS_ROOT, pinned).
+//    Under `apps/`
 //    (services/storage/app-scope.ts) the raw file route, a storage listing or an orphan sweep could
 //    reach it. The Hub names only the file (`app.sqlite`); this process builds the path from the
 //    tenant id and refuses anything that would land outside that folder (sqliteTenantPath, and
@@ -18,7 +19,7 @@
 //  - Each app gets its own knex (better-sqlite3, the db/sqlite.ts patches): WAL, a few readers,
 //    one writer at a time per FILE (sqliteWriteLockFor), migrations without knex's per-migration
 //    transaction. Closing it (a move replacing the file) releases the file lock.
-import { lstatSync, mkdirSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import knex, { type Knex } from 'knex'
 import { isNivaroCloud } from '../services/deployment-mode.js'
@@ -32,9 +33,16 @@ import {
   sqliteDriverProblem,
   sqlitePoolMax
 } from './sqlite.js'
+import { sweepSqliteLeftovers } from './sqlite-transfer.js'
 
-/** The folder under STORAGE_LOCAL_ROOT that holds every SQLite app's own folder. */
-export const SQLITE_APPS_DIR = 'app-db'
+/**
+ * The folder that holds every SQLite app's own folder: pinned to the uploads volume's mount
+ * (`/app/uploads/app-db`, the same path a Hub Docker stack gets), independent of
+ * STORAGE_LOCAL_ROOT or a files subfolder — a setting that moved it would have every SQLite app
+ * reopen in an empty folder. NIVARO_SQLITE_APPS_DIR overrides it for tests and local development
+ * only.
+ */
+export const SQLITE_APPS_ROOT = '/app/uploads/app-db'
 
 /** The file name the Hub gives a SQLite app's database. */
 export const SQLITE_APP_FILE = 'app.sqlite'
@@ -50,7 +58,7 @@ export const SQLITE_APP_POOL_MAX = 3
 
 /** Refusals a caller can tell apart (never a path in the message). */
 export class SqliteTenantError extends Error {
-  readonly code: 'SQLITE_BAD_PATH' | 'SQLITE_FILE_BUSY' | 'SQLITE_NOT_HERE'
+  readonly code: 'SQLITE_BAD_PATH' | 'SQLITE_FILE_BUSY' | 'SQLITE_NOT_HERE' | 'SQLITE_FILE_MISSING'
   constructor(code: SqliteTenantError['code'], message: string) {
     super(message)
     this.name = 'SqliteTenantError'
@@ -74,10 +82,16 @@ export function sqliteTenantProblem(
   return driver() ? 'the SQLite driver (better-sqlite3) is not installed in this image' : null
 }
 
-/** Where every SQLite app's folder lives: `<STORAGE_LOCAL_ROOT>/app-db`, absolute. */
+/** Where every SQLite app's folder lives (SQLITE_APPS_ROOT), absolute. */
 export function sqliteAppsRoot(env: NodeJS.ProcessEnv = process.env): string {
-  return resolve(env.STORAGE_LOCAL_ROOT || './uploads', SQLITE_APPS_DIR)
+  return resolve(env.NIVARO_SQLITE_APPS_DIR || SQLITE_APPS_ROOT)
 }
+
+/**
+ * The marker a deployment leaves in an app's folder the one time it makes a NEW database file
+ * there (ruling H2): a file that goes missing after that is never made again.
+ */
+export const SQLITE_CREATED_MARKER = '.created'
 
 /**
  * The database file of tenant `tenantId` named `file`: `<root>/<tenantId>/<file>`. Throws
@@ -119,6 +133,10 @@ export function assertSqliteTenantPath(path: string, root: string = sqliteAppsRo
  * Make the app's folder, and refuse a folder or file that is a link to somewhere else (the folder
  * must really be `<root>/<tenant id>` once links are followed, the file must not be a link).
  */
+export function prepareSqliteFolder(path: string, root: string = sqliteAppsRoot()): void {
+  prepareFolder(path, root)
+}
+
 function prepareFolder(path: string, root: string): void {
   const base = resolve(root)
   const folder = resolve(path, '..')
@@ -166,7 +184,8 @@ export async function withSqliteFileReplaced<T>(path: string, fn: () => Promise<
 export function openSqliteTenantKnex(
   path: string,
   poolMax: number = SQLITE_APP_POOL_MAX,
-  root: string = sqliteAppsRoot()
+  root: string = sqliteAppsRoot(),
+  opts: { create?: boolean } = {}
 ): Knex {
   const problem = sqliteTenantProblem()
   if (problem) throw new SqliteTenantError('SQLITE_NOT_HERE', `${problem}.`)
@@ -177,6 +196,16 @@ export function openSqliteTenantKnex(
       "This app's database is being replaced by a move; trying again shortly."
     )
   prepareFolder(path, root)
+  // Ruling H2: a missing file is never silently made into a fresh, writable install. Only a
+  // database the Hub placed as NEW (`create`) is made, once, with a marker in its folder; a file
+  // missing after that (another node, a volume not mounted, a folder cleaned) is refused.
+  const marker = join(resolve(path, '..'), SQLITE_CREATED_MARKER)
+  const makeNew = !existsSync(path)
+  if (makeNew && (!opts.create || existsSync(marker)))
+    throw new SqliteTenantError(
+      'SQLITE_FILE_MISSING',
+      "This app's database file is missing on this deployment; it is not made again. Restore the file (or move the app here again) before it serves."
+    )
   if (!heldFiles.has(path)) {
     const taken = claimSqliteFile(path)
     if (taken)
@@ -185,6 +214,11 @@ export function openSqliteTenantKnex(
         'Another process still holds this app database (an update in progress); trying again shortly.'
       )
     heldFiles.set(path, holdSqliteFile(path))
+  }
+  sweepSqliteLeftovers(path)
+  if (makeNew) {
+    // The file itself is made by the first connection; the marker says it was, once.
+    writeFileSync(marker, JSON.stringify({ at: new Date().toISOString() }), { mode: 0o600 })
   }
   sqliteCompat()
   return knex({

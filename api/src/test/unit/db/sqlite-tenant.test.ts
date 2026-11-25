@@ -8,11 +8,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 const root = mkdtempSync(join(tmpdir(), 'nvr-sqlite-tenant-'))
 const saved = {
-  STORAGE_LOCAL_ROOT: process.env.STORAGE_LOCAL_ROOT,
+  NIVARO_SQLITE_APPS_DIR: process.env.NIVARO_SQLITE_APPS_DIR,
   HUB_SHARED_DEPLOYMENT: process.env.HUB_SHARED_DEPLOYMENT,
   NIVARO_ROLE: process.env.NIVARO_ROLE
 }
-process.env.STORAGE_LOCAL_ROOT = root
+process.env.NIVARO_SQLITE_APPS_DIR = join(root, 'app-db')
 process.env.HUB_SHARED_DEPLOYMENT = 'shared-lite'
 delete process.env.NIVARO_ROLE
 
@@ -79,8 +79,8 @@ describe('sqlite tenant: pools', () => {
   })
 
   it('opens one pool per file, WAL, and takes the file lock', async () => {
-    const k = ctx.getOrCreateTenantPool(a, 'sqlite')
-    expect(ctx.getOrCreateTenantPool(a, 'sqlite')).toBe(k)
+    const k = ctx.getOrCreateTenantPool(a, 'sqlite', undefined, { create: true })
+    expect(ctx.getOrCreateTenantPool(a, 'sqlite', undefined, { create: true })).toBe(k)
     await k.schema.createTable('x', (tb) => {
       tb.increments('id')
       tb.string('name', 20)
@@ -97,8 +97,8 @@ describe('sqlite tenant: pools', () => {
   })
 
   it('two apps never wait for each other: one write lock per file', async () => {
-    const ka = ctx.getOrCreateTenantPool(a, 'sqlite')
-    const kb = ctx.getOrCreateTenantPool(b, 'sqlite')
+    const ka = ctx.getOrCreateTenantPool(a, 'sqlite', undefined, { create: true })
+    const kb = ctx.getOrCreateTenantPool(b, 'sqlite', undefined, { create: true })
     for (const k of [ka, kb])
       await k.schema.createTableIfNotExists('y', (tb) => {
         tb.increments('id')
@@ -130,13 +130,13 @@ describe('sqlite tenant: pools', () => {
       JSON.stringify({ pid: 4242, host: 'another-container', started: new Date().toISOString() })
     )
     try {
-      expect(() => ctx.getOrCreateTenantPool(b, 'sqlite')).toThrow(
+      expect(() => ctx.getOrCreateTenantPool(b, 'sqlite', undefined, { create: true })).toThrow(
         expect.objectContaining({ code: 'SQLITE_FILE_BUSY' })
       )
     } finally {
       rmSync(`${b}.lock`, { force: true })
     }
-    expect(() => ctx.getOrCreateTenantPool(b, 'sqlite')).not.toThrow()
+    expect(() => ctx.getOrCreateTenantPool(b, 'sqlite', undefined, { create: true })).not.toThrow()
   })
 
   it('refuses a folder that links elsewhere', () => {
@@ -144,7 +144,12 @@ describe('sqlite tenant: pools', () => {
     try {
       symlinkSync(elsewhere, join(apps, 'lite-link'))
       expect(() =>
-        ctx.getOrCreateTenantPool(t.sqliteTenantPath('lite-link', 'app.sqlite'), 'sqlite')
+        ctx.getOrCreateTenantPool(
+          t.sqliteTenantPath('lite-link', 'app.sqlite'),
+          'sqlite',
+          undefined,
+          { create: true }
+        )
       ).toThrow(/link elsewhere/)
     } finally {
       rmSync(elsewhere, { recursive: true, force: true })
@@ -152,7 +157,37 @@ describe('sqlite tenant: pools', () => {
   })
 
   it('refuses a path outside the app folders even if it reached the pool', () => {
-    expect(() => ctx.getOrCreateTenantPool(join(root, 'stray.sqlite'), 'sqlite')).toThrow(/outside/)
+    expect(() =>
+      ctx.getOrCreateTenantPool(join(root, 'stray.sqlite'), 'sqlite', undefined, { create: true })
+    ).toThrow(/outside/)
+  })
+})
+
+describe('sqlite tenant: a missing file is never made again (H2)', () => {
+  it('without the Hub saying NEW, a missing file is refused SQLITE_FILE_MISSING (no file made)', () => {
+    const p = t.sqliteTenantPath('gone-e1', 'app.sqlite')
+    expect(() => ctx.getOrCreateTenantPool(p, 'sqlite')).toThrow(
+      expect.objectContaining({ code: 'SQLITE_FILE_MISSING' })
+    )
+    expect(existsSync(p)).toBe(false)
+  })
+
+  it('a NEW database is made once (with its marker); missing after that, it is refused even when NEW', async () => {
+    const p = t.sqliteTenantPath('new-e2', 'app.sqlite')
+    const k = ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { create: true })
+    await k.raw('SELECT 1')
+    expect(existsSync(p)).toBe(true)
+    expect(existsSync(join(apps, 'new-e2', t.SQLITE_CREATED_MARKER))).toBe(true)
+    await ctx.closeTenantPool(p)
+    rmSync(p)
+    expect(() => ctx.getOrCreateTenantPool(p, 'sqlite', undefined, { create: true })).toThrow(
+      expect.objectContaining({ code: 'SQLITE_FILE_MISSING' })
+    )
+    expect(existsSync(p)).toBe(false)
+  })
+
+  it('the folder is pinned, whatever STORAGE_LOCAL_ROOT says', () => {
+    expect(t.sqliteAppsRoot({ STORAGE_LOCAL_ROOT: '/somewhere/else' })).toBe('/app/uploads/app-db')
   })
 })
 
@@ -179,6 +214,7 @@ describe('sqlite tenant: the Hub list and the db-check', () => {
       () => here
     )!
     expect(r.dropped).toEqual([])
+    expect(r.tenants[0].dbCreate).toBeUndefined()
     expect(r.tenants.map((x) => [x.id, x.dbClient, x.dbConnection])).toEqual([
       ['one-e1', 'sqlite', join(apps, 'one-e1', 'app.sqlite')],
       ['two-e2', 'sqlite', join(apps, 'two-e2', 'app.sqlite')]
@@ -211,7 +247,7 @@ describe('sqlite tenant: the Hub list and the db-check', () => {
     })
     expect(existsSync(join(apps, 'check-e1', 'app.sqlite'))).toBe(false)
     const path = t.sqliteTenantPath('check-e1', 'app.sqlite')
-    const k = ctx.getOrCreateTenantPool(path, 'sqlite')
+    const k = ctx.getOrCreateTenantPool(path, 'sqlite', undefined, { create: true })
     await k.schema.createTable('nivaro_migrations', (tb) => {
       tb.increments('id')
       tb.string('name')

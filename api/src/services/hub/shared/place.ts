@@ -43,7 +43,20 @@ import { type HubEnvStatus, readEnvironmentStatus } from '../status.js'
 import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
 import { replicasHolding } from './sightings.js'
-import { SQLITE_PLACE_HINT, sqliteSharedRefusal } from './sqlite-apps.js'
+import {
+  SQLITE_PLACE_HINT,
+  type SqliteStorageFacts,
+  sqliteSharedRefusal,
+  sqliteStorageRefusal
+} from './sqlite-apps.js'
+
+/** The parts of an agent's health a SQLite placement reads. */
+type AgentHealthLike = {
+  uploads_network?: boolean
+  volume_driver?: string
+  swarm?: { nodes?: number | null }
+}
+
 import { patternCovers } from './stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
 import { tenantsBody } from './tenants.js'
@@ -791,6 +804,30 @@ async function checkAndWrite(
   const sqlite = isSqliteRecord(database)
   const sqliteNo = sqlite ? sqliteSharedRefusal(shared0) : null
   if (sqliteNo) throw refuse(sqliteNo.code, `${sqliteNo.message} ${SQLITE_PLACE_HINT}`)
+  // M5 / H2: the file's volume is local to one node, never NFS (the agent says; unknown refuses).
+  if (sqlite) {
+    let facts: SqliteStorageFacts | null = null
+    try {
+      const driver = shared0.driver_id != null ? await getDriver(shared0.driver_id) : null
+      if (driver?.kind === 'docker') {
+        const h = (await (deps.agentHealth ?? realAgentHealth)(
+          driver
+        )) as unknown as AgentHealthLike
+        facts = {
+          uploads_network: typeof h.uploads_network === 'boolean' ? h.uploads_network : null,
+          volume_driver: h.volume_driver ?? null,
+          multi_node:
+            typeof h.swarm?.nodes === 'number' && (h.volume_driver ?? 'local') === 'local'
+              ? h.swarm.nodes
+              : null
+        }
+      }
+    } catch {
+      facts = null
+    }
+    const storageNo = sqliteStorageRefusal(shared0.key, facts)
+    if (storageNo) throw refuse(storageNo.code, storageNo.message)
+  }
   const tenant = tenantIdFor(app, { id: envId })
 
   // Ruling P6-11 (I-2): the same running-stack check as an env PATCH of placement_id — a stack
@@ -1095,6 +1132,11 @@ async function runPlacement(
         error: null,
         finished_at: new Date()
       })
+      // Hub gap sqlite (H2): a NEW SQLite file was made once at this placement; from now on the
+      // record names an existing database, and the deployment never makes it again.
+      await trx('nivaro_hub_databases')
+        .where({ id: placed.input.database_id, engine: 'sqlite' })
+        .update({ adopted: true, updated_at: new Date() })
     })
     await logActivity({
       action: 'hub-place-shared-done',

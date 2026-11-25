@@ -122,6 +122,8 @@ export type MoveBlockerCode =
   | 'SQLITE_MOVE'
   | 'SQLITE_ONE_PROCESS'
   | 'SQLITE_SHARED_VERSION'
+  | 'SQLITE_ON_NFS'
+  | 'SQLITE_MULTI_NODE'
   | SharedReadinessCode
 
 /** What a move will cost or change. SIGNED_LINKS_RESET is the T12 carry. */
@@ -231,6 +233,10 @@ export interface MoveTargetFacts {
   multi_node: number | null
   /** A docker shared target's agent could not be read: the node count is unknown (N-2). */
   multi_node_unread?: boolean
+  /** Hub gap sqlite (M5): the target agent's uploads volume is NFS; null/absent = not said. */
+  uploads_network?: boolean | null
+  /** The target agent's volume driver; null/absent = not said. */
+  volume_driver?: string | null
   /** A Docker dedicated target: the ENCRYPTION_KEY fingerprint its stack settings hold. */
   stack_key_fp: string | null
   /** A Docker dedicated target: the size its stack settings ask for (hub gap sqlite). */

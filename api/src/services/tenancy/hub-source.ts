@@ -180,6 +180,9 @@ export async function startHubTenantSource(deps: Deps): Promise<TenantRegistry> 
       if (listed.has(t.id)) continue
       forgetAppState(t.id)
       fireAppLeft(t.id)
+      // Hub gap sqlite (M1): a file this process froze as a move's source is thawed when its app
+      // leaves; the app moving back later must be able to migrate and take writes here.
+      if (t.dbClient === 'sqlite') thawSqliteFile(t.dbConnection)
     }
     // Final review I-1: an app that (re)appears starts clean too, so a leave this process never
     // saw (it was not listed in between) cannot hand a returning app its old cached state.

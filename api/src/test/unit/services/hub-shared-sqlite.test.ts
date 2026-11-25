@@ -106,6 +106,12 @@ describe('the SQLite database record', () => {
   it('opens as its file name on the wire; the Hub never connects to it', async () => {
     expect(await Dbs.openDatabaseWire(liteRecord)).toEqual({
       client: 'sqlite',
+      connection: 'app.sqlite',
+      create: true
+    })
+    const moved = await Dbs.createSqliteDatabase(null, undefined, { existing: true })
+    expect(await Dbs.openDatabaseWire(moved.id)).toEqual({
+      client: 'sqlite',
       connection: 'app.sqlite'
     })
     await expect(Dbs.openDatabaseConnection(liteRecord)).rejects.toMatchObject({
@@ -128,7 +134,8 @@ describe('the tenants body', () => {
     const t = body.data.tenants.find(
       (x) => x.id === Store.tenantIdFor({ key: 'lite' }, { id: liteEnv })
     )
-    expect(t?.db).toEqual({ client: 'sqlite', connection: 'app.sqlite' })
+    // H2: a NEW record (never placed) lets the deployment make the file, once.
+    expect(t?.db).toEqual({ client: 'sqlite', connection: 'app.sqlite', create: true })
     const parsed = parseHubTenants(body, 'shared-lite', () => ({
       root: '/srv/up/app-db',
       problem: null

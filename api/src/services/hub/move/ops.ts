@@ -1062,7 +1062,7 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         const have = (await readMove(move.id))?.steps.sqlite_record
         if (!databaseRecordId(env?.db_ref) && !have) {
           const { createSqliteDatabase } = await import('../db/databases.js')
-          const rec = await createSqliteDatabase(null)
+          const rec = await createSqliteDatabase(null, undefined, { existing: true })
           await mergeSteps(move.id, (st) => ({ ...st, sqlite_record: rec.id }))
           log(`a SQLite database record (${rec.id}) is made for the app on its new home`)
         }
@@ -1079,10 +1079,18 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
       // Hub gap sqlite: a rollback before release throws the target's copy away while the app is
       // still listed there (best effort: an unlisted app's folder is never served again).
       const toShared = l.to.kind === 'shared' ? l.to.shared : null
-      if (plan.sqlite && toShared)
+      // L7: only the very file this move installed (its checksum) is discarded.
+      const copied = (await readMove(move.id))?.steps.db_copy?.sha256 ?? null
+      if (plan.sqlite && toShared && copied)
         await Promise.resolve()
-          .then(() => dbClient(clientFor(toShared)).discardDatabase(l.tenantId))
-          .then(() => log("the target's copy of the database is discarded"))
+          .then(() => dbClient(clientFor(toShared)).discardDatabase(l.tenantId, copied))
+          .then((r) =>
+            log(
+              r.discarded
+                ? "the target's copy of the database is discarded"
+                : "the target's database file is not the move's copy; it is kept"
+            )
+          )
           .catch((err) =>
             log(`the target's copy of the database was not discarded (${codeOf(err)})`, 'warn')
           )
@@ -1260,6 +1268,10 @@ export function defaultMoveOps(move: HubMoveRow, plan: MovePlan, deps: MoveOpsDe
         spec.hostnames = temp ? [temp] : []
         // Decision 19: boots in strict maintenance until the move releases it.
         spec.env.HUB_BOOT_MAINTENANCE = String(move.id)
+        // Hub gap sqlite (H2): the new home's first boot starts on an empty file, held in
+        // maintenance; db_copy replaces it before anything serves. Every later render refuses a
+        // missing file.
+        if (plan.sqlite && spec.env.DB_CLIENT === 'sqlite') spec.env.DB_SQLITE_MISSING = 'create'
       })
       await recordStack(to, plan.version, done, extensions)
       // R2-M-2: keep the pins this replaces with the move, so a rollback puts them back.

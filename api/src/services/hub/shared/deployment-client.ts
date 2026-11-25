@@ -189,7 +189,7 @@ export interface DeploymentClient {
   /** Hub gap sqlite: the app's database checksum now. */
   databaseSum?(tenantId: string): Promise<{ sha256: string; bytes: number }>
   /** Hub gap sqlite: a rollback before release throws the app's copy away. */
-  discardDatabase?(tenantId: string): Promise<{ discarded: boolean }>
+  discardDatabase?(tenantId: string, sha256: string | null): Promise<{ discarded: boolean }>
 }
 
 // ─── the call ───────────────────────────────────────────────────────────────────────────────
@@ -643,8 +643,11 @@ export function deploymentClient(
       return { sha256: b.sha256, bytes: b.bytes }
     },
 
-    async discardDatabase(tenantId) {
-      const a = await call(`${tenantPath(tenantId)}/database`, { method: 'DELETE' })
+    async discardDatabase(tenantId, sha256) {
+      const a = await call(`${tenantPath(tenantId)}/database`, {
+        method: 'DELETE',
+        body: { sha256 }
+      })
       if (!ok(a)) throw refusalOf(a, transferRefusal)
       return { discarded: (a.body as { discarded?: unknown } | null)?.discarded === true }
     },

@@ -991,7 +991,12 @@ describe('callback addresses (E2E B3)', () => {
 })
 
 describe('hub gap sqlite: a SQLite app moves with its database file copied', () => {
-  const liteTarget = { version: '0.3.215' }
+  const liteTarget = {
+    version: '0.3.215',
+    uploads_network: false,
+    volume_driver: 'local',
+    multi_node: null
+  }
   const lite = (o: Partial<MovePlanInput> = {}) =>
     input({
       to: sharedSide({ version_pin: '0.3.215' }),
@@ -1062,6 +1067,17 @@ describe('hub gap sqlite: a SQLite app moves with its database file copied', () 
     expect(codes(medium)).toContain('SQLITE_ONE_PROCESS')
     const gitlab = buildMovePlan(lite({ ...base, to: gitlabSide() }))
     expect(codes(gitlab)).toContain('SQLITE_MOVE')
+  })
+
+  it('refuses NFS or unknown uploads storage, several nodes, and a server database record (L5)', () => {
+    const nfs = lite({ target_facts: tgt({ ...liteTarget, db: null, uploads_network: true }) })
+    expect(codes(buildMovePlan(nfs))).toContain('SQLITE_ON_NFS')
+    const unknown = lite({ target_facts: tgt({ ...liteTarget, db: null, uploads_network: null }) })
+    expect(codes(buildMovePlan(unknown))).toContain('SQLITE_ON_NFS')
+    const nodes = lite({ target_facts: tgt({ ...liteTarget, db: null, multi_node: 3 }) })
+    expect(codes(buildMovePlan(nodes))).toContain('SQLITE_MULTI_NODE')
+    const server = lite({ database: { id: 21, ready: true } })
+    expect(codes(buildMovePlan(server))).toContain('SQLITE_MOVE')
   })
 
   it('a server database is unchanged: no sqlite flag, the usual steps', () => {

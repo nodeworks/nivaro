@@ -304,8 +304,13 @@ export function databaseEnvFor(
   secrets: Record<string, string>,
   record: DatabaseRecordEnv | null = null
 ): DatabaseEnv {
+  // Hub gap sqlite: the file in the app's own folder; a missing file is refused at boot (H2,
+  // db/index.ts) — only a move's first deploy of a new home lets it start empty (ops.ts).
   if (record?.client === 'sqlite' && record.file)
-    return { env: { DB_CLIENT: 'sqlite', DB_DATABASE: record.file }, secrets: {} }
+    return {
+      env: { DB_CLIENT: 'sqlite', DB_DATABASE: record.file, DB_SQLITE_MISSING: 'refuse' },
+      secrets: {}
+    }
   if (record) return { env: { DB_CLIENT: record.client }, secrets: { DB_URL: record.url } }
   const out: DatabaseEnv = { env: {}, secrets: {} }
   for (const [k, v] of Object.entries(settings)) {

@@ -288,9 +288,18 @@ Nivaro Cloud never serves SQLite. A Hub shared deployment does, when it is ONE p
 size small: one `all` service; a process with `NIVARO_ROLE` set drops SQLite apps from its list):
 
 - The Hub's tenant list names a SQLite app as `db: {client: 'sqlite', connection: 'app.sqlite'}`:
-  a file NAME only. The deployment keeps it at `<STORAGE_LOCAL_ROOT>/app-db/<tenant id>/<file>`,
-  outside the stored-files key space (`apps/<tenant id>/`), and refuses a name, a folder or a file
-  link that would leave that folder (`db/sqlite-tenant.ts`, checked again when the pool opens).
+  a file NAME only. The deployment keeps it at `/app/uploads/app-db/<tenant id>/<file>` (pinned;
+  `NIVARO_SQLITE_APPS_DIR` overrides it for tests and local development only), outside the
+  stored-files key space (`apps/<tenant id>/`), and refuses a name, a folder or a file link that
+  would leave that folder (`db/sqlite-tenant.ts`, checked again when the pool opens).
+- A missing file is never made into a fresh install. Only a database the Hub records as New sends
+  `create: true`, and the deployment makes it once (a `.created` marker in the folder); after its
+  first placement the record is marked existing. Otherwise the pool refuses to open
+  (`SQLITE_FILE_MISSING`, 503 to requests, the app's schema state fails). A Hub Docker stack gets
+  `DB_SQLITE_MISSING=refuse` (boot refuses a missing `DB_DATABASE`), except the first deploy of a
+  move's new home (`create`: it starts empty in maintenance until `db_copy` replaces it).
+- Never on network storage: SQLite moves and placements are refused when the agent reports an NFS
+  uploads volume, another volume driver, nothing at all, or several swarm nodes with local volumes.
 - Each app gets its own knex (better-sqlite3 with the `db/sqlite.ts` patches): WAL, a few
   readers, migrations without knex's per-migration transaction, and the `COLLATE NOCASE` pass
   after its migrations (`runMigrationsOn` runs it for every SQLite database). Writes take turns
@@ -301,11 +310,13 @@ size small: one `all` service; a process with `NIVARO_ROLE` set drops SQLite app
 - The deployment link's `db-check` takes `{client: 'sqlite', connection: <file>, tenant: <id>}`
   and reads the file read-only (no file yet = `absent`).
 - A move copies the file (`db_copy`, `db/sqlite-transfer.ts`, `services/hub-transfer/database.ts`):
-  the frozen source checkpoints (`wal_checkpoint(TRUNCATE)`), freezes the file (later writes get
-  `SQLITE_FROZEN`) and snapshots it; the target receives it with its size and sha256, checks it
-  read-only (`integrity_check`, the migrations ledger) and puts it in place (a shared app: pool
-  closed and reopened; a Docker app: staged, installed at the next boot). Automatic routing only,
-  onto a small shared deployment (0.3.215+) or a small Docker stack.
+  the frozen source freezes the file (later writes get `SQLITE_FROZEN`), checkpoints
+  (`wal_checkpoint(TRUNCATE)`, no busy handler blocking the event loop) and snapshots it; the
+  target receives it with its size and sha256 into `<file>.incoming-<id>`, checks it read-only in
+  a worker thread (`integrity_check`, the migrations ledger) and puts it in place (a shared app:
+  pool closed and reopened; a Docker app: staged, installed at the next boot after taking the file
+  lock). Free space is checked on both sides. Automatic routing only, onto a small shared
+  deployment (0.3.215+) or a small Docker stack.
 
 ## SQL Server-only features
 

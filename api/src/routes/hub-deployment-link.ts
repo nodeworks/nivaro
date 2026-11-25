@@ -330,7 +330,11 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
   // DELETE /apps/:id/database → {discarded}: a rollback before release throws the copy away.
   const databaseRefusal = (reply: FastifyReply, err: unknown, what: string) => {
     const e = err as { code?: unknown; statusCode?: unknown; message?: unknown; name?: unknown }
-    if (e?.name === 'DatabaseTransferError' || e?.name === 'SqliteTenantError')
+    if (
+      e?.name === 'DatabaseTransferError' ||
+      e?.name === 'SqliteTenantError' ||
+      e?.name === 'SqliteTransferError'
+    )
       return refuse(
         reply,
         typeof e.statusCode === 'number' ? e.statusCode : 409,
@@ -380,9 +384,9 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     const t = await tenantById(registry, req.params.id)
     if (!t) return reply.send({ discarded: false })
     const { discardDatabaseShared } = await import('../services/hub-transfer/database.js')
+    const sha = (req.body as { sha256?: unknown } | null)?.sha256
     try {
-      await discardDatabaseShared(t)
-      return reply.send({ discarded: true })
+      return reply.send(await discardDatabaseShared(t, typeof sha === 'string' ? sha : null))
     } catch (err) {
       return databaseRefusal(reply, err, 'the database copy could not be discarded')
     }

@@ -167,6 +167,11 @@ const SHARED: Record<string, string> = {
     'database files a move is replacing now, keyed by the file: each SQLite app has its own file',
   'db/sqlite-tenant.ts :: heldFiles':
     'lock releases keyed by the database file: each SQLite app has its own file (app-db/<tenant id>/)',
+  'db/sqlite-transfer.ts :: busyFiles':
+    'database files a copy is being made of now, keyed by the file: each SQLite app has its own file',
+  'db/sqlite.ts :: heldLockReleases':
+    'lock-file releases keyed by the database file (one per SQLite app), run at process exit',
+  'db/sqlite.ts :: exitListening': PROC,
   'db/sqlite.ts :: fileWriteLocks':
     'one write lock per database file: each SQLite app has its own file, so its own lock',
   'db/sqlite.ts :: likes': 'compiled LIKE patterns by pattern text; no app data',

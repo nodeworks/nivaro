@@ -35,7 +35,8 @@ export const TENANT_POOL_MAX = 5
 export function getOrCreateTenantPool(
   connectionString: string,
   client = 'pg',
-  max: number = TENANT_POOL_MAX
+  max: number = TENANT_POOL_MAX,
+  opts: { create?: boolean } = {}
 ): Knex {
   // SQLite is one file owned by one process (db/sqlite.ts): never a Nivaro Cloud tenant's
   // database. A Hub shared deployment of one process serves SQLite apps, each its own file in its
@@ -45,7 +46,7 @@ export function getOrCreateTenantPool(
       throw new Error('A cloud tenant cannot use SQLite: provision SQL Server, Postgres or MySQL.')
     let pool = pools.get(connectionString)
     if (!pool) {
-      pool = openSqliteTenantKnex(connectionString, max)
+      pool = openSqliteTenantKnex(connectionString, max, undefined, opts)
       pools.set(connectionString, pool)
     }
     return pool
@@ -145,11 +146,20 @@ export function runWithTenantDb(
 /** Run `fn` as a tenant (its pool, slug, id and optional verified origin) outside a request:
  *  crons, flows and the Hub's per-app jobs. The context ends when `fn` settles. */
 export function withTenant<T>(
-  t: { id: string; slug: string; dbClient: string; dbConnection: string; poolMax: number | null },
+  t: {
+    id: string
+    slug: string
+    dbClient: string
+    dbConnection: string
+    poolMax: number | null
+    dbCreate?: boolean
+  },
   fn: () => Promise<T>,
   origin?: string
 ): Promise<T> {
-  const db = getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined)
+  const db = getOrCreateTenantPool(t.dbConnection, t.dbClient, t.poolMax ?? undefined, {
+    create: t.dbCreate === true
+  })
   return store.run({ db, slug: t.slug, tenantId: t.id, ...(origin ? { origin } : {}) }, fn)
 }
 

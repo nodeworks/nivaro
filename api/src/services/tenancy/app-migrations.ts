@@ -422,8 +422,13 @@ async function runEnsure(t: TenantRecord, deps: AppSchemaDeps): Promise<AppSchem
       conn,
       nextTry: at + APP_SCHEMA_RETRY_MS
     }
+    if ((err as { code?: unknown } | null)?.code === 'SQLITE_FILE_MISSING')
+      // biome-ignore lint/suspicious/noConsole: an operator must see a missing database at once
+      console.error(
+        `[tenancy] app ${t.id}: its SQLite database file is MISSING on this deployment; it is not made again. The app answers 503 until the file is restored or the app is moved here again.`
+      )
     // biome-ignore lint/suspicious/noConsole: an operator must see a failed app in the server log
-    console.warn(`[tenancy] app ${t.id}: migrations failed — ${failed.error}`)
+    else console.warn(`[tenancy] app ${t.id}: migrations failed — ${failed.error}`)
     // A replica that failed after another finished (`ok` stored) does not overwrite that.
     const stored = await readStored(t.id)
     if (!(stored?.state === 'ok' && stored.conn === conn)) await writeStored(t.id, failed)

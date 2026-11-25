@@ -95,6 +95,10 @@ for example an NFS export). `GET /v1/health` reports `swarm.nodes` and
 `volume_driver`; the Hub's stack panel warns when the swarm has more than one
 node and volumes are local.
 
+The health answer also says `uploads_network` (true when `HUB_AGENT_VOLUME_OPTS_FILE` makes the
+uploads volume an NFS export). The Hub refuses SQLite apps (placements and moves) on such a
+volume, on another volume driver, and on an agent that does not report it (update the agent).
+
 ## Which env keys a stack may set
 
 A stack's settings and secrets become env vars and `/run/secrets` files, so the

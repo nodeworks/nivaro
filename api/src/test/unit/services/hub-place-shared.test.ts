@@ -1332,12 +1332,18 @@ describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => 
     )
     expect(reg).toMatchObject({ code: 'SQLITE_ONE_PROCESS', statusCode: 409 })
     // Docker at 0.3.210: too old to serve SQLite apps.
+    const localDisk = vi.fn(async () => ({
+      edge: 'traefik',
+      uploads_network: false,
+      volume_driver: 'local',
+      swarm: { nodes: 1 }
+    }))
     const tooOld = await newEnv(app.id)
     const old = await refusal(
       place(
         tooOld,
         { shared_id: dockerShared, database_id: await lite() },
-        { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: traefik }
+        { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: localDisk }
       )
     )
     expect(old).toMatchObject({ code: 'SQLITE_SHARED_VERSION', statusCode: 409 })
@@ -1350,13 +1356,29 @@ describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => 
         place(
           medium,
           { shared_id: dockerShared, database_id: await lite() },
-          { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: traefik }
+          { client: dockerClient(), startJobRun: fakeRun().start, agentHealth: localDisk }
         )
       )
       expect(split).toMatchObject({ code: 'SQLITE_ONE_PROCESS', statusCode: 409 })
       await db('nivaro_hub_shared_deployments')
         .where({ id: dockerShared })
         .update({ settings: JSON.stringify({ size: 'small' }) })
+      // M5: an NFS uploads volume, or an agent that does not say, is refused.
+      for (const h of [{ edge: 'traefik', uploads_network: true }, { edge: 'traefik' }]) {
+        const nfsEnv = await newEnv(app.id)
+        const nfs = await refusal(
+          place(
+            nfsEnv,
+            { shared_id: dockerShared, database_id: await lite() },
+            {
+              client: dockerClient(),
+              startJobRun: fakeRun().start,
+              agentHealth: vi.fn(async () => h)
+            }
+          )
+        )
+        expect(nfs).toMatchObject({ code: 'SQLITE_ON_NFS', statusCode: 409 })
+      }
       const small = await newEnv(app.id)
       const tenant = Store.tenantIdFor(app, { id: small })
       TENANTS = [tenant]
@@ -1376,14 +1398,19 @@ describe('final fix wave FW-1 — a Docker shared deployment (I-3, M-6)', () => 
       await place(
         small,
         { shared_id: dockerShared, database_id: record },
-        { client: fake.factory, startJobRun: fakeRun().start, agentHealth: traefik }
+        { client: fake.factory, startJobRun: fakeRun().start, agentHealth: localDisk }
       )
       await Place.awaitPlacement(small)
       expect(fake.client.dbCheck).toHaveBeenCalledWith({
         client: 'sqlite',
         connection: 'app.sqlite',
+        create: true,
         tenant
       })
+      // H2: once placed, the record names an existing file; the deployment never makes it again.
+      expect(
+        Boolean((await db('nivaro_hub_databases').where({ id: record }).first()).adopted)
+      ).toBe(true)
       const env = await db('nivaro_hub_environments').where({ id: small }).first()
       expect(env.status).toBe('active')
       expect(env.db_ref).toBe(`hub-db:${record}`)

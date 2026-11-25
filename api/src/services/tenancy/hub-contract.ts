@@ -25,7 +25,12 @@ export interface HubTenantWire {
   hostnames: string[]
   /** `sqlite` (0.3.215): `connection` is the database FILE NAME only (`app.sqlite`); the
    *  deployment keeps it in the app's own folder (db/sqlite-tenant.ts). */
-  db: { client: 'mssql' | 'pg' | 'mysql2' | 'mariadb' | 'sqlite'; connection: string }
+  db: {
+    client: 'mssql' | 'pg' | 'mysql2' | 'mariadb' | 'sqlite'
+    connection: string
+    /** SQLite only: the Hub placed this database as NEW; the deployment may make the file once. */
+    create?: boolean
+  }
   pool_max?: number
   /** Phase 6, optional: the environment's origin (`https://host[:port]`). A value that is not an
    *  http(s) origin is ignored (the tenant stays). */
@@ -185,6 +190,7 @@ function toRecord(t: unknown, sqliteHere: () => SqliteHere): TenantRecord | stri
     status: t.status,
     dbClient: client,
     dbConnection: connection,
+    ...(client === 'sqlite' && db?.create === true ? { dbCreate: true } : {}),
     poolMax,
     hostnames: hosts,
     ...(Object.keys(ports).length ? { originPorts: ports } : {}),

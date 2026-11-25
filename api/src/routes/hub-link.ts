@@ -415,6 +415,8 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     } catch (err) {
       if (err instanceof DatabaseTransferError)
         return fail(reply, err.statusCode, err.code, err.message)
+      if ((err as Error | null)?.name === 'SqliteTransferError')
+        return fail(reply, 409, String((err as { code?: unknown }).code), (err as Error).message)
       app.log.error({ err_name: (err as Error | null)?.name }, 'hub link: database copy failed')
       return fail(reply, 500, 'DATABASE_COPY_FAILED', 'The database copy failed here')
     }
@@ -436,6 +438,8 @@ export async function hubLinkRoutes(app: FastifyInstance) {
     } catch (err) {
       if (err instanceof DatabaseTransferError)
         return fail(reply, err.statusCode, err.code, err.message)
+      if ((err as Error | null)?.name === 'SqliteTransferError')
+        return fail(reply, 409, String((err as { code?: unknown }).code), (err as Error).message)
       return fail(reply, 503, 'DATABASE_UNREADABLE', 'The database could not be read here')
     }
   })

@@ -3,10 +3,13 @@ import { unlink } from 'node:fs/promises'
 import type { Knex } from 'knex'
 import { config } from '../../config.js'
 import { db } from '../../db/index.js'
-import { withSqliteFileReplaced } from '../../db/sqlite-tenant.js'
+import { claimSqliteFile, holdSqliteFile } from '../../db/sqlite.js'
+import { prepareSqliteFolder, withSqliteFileReplaced } from '../../db/sqlite-tenant.js'
 import {
   adoptedSqliteFile,
+  fileSum,
   installSqliteFile,
+  oneCopyAtATime,
   receiveSqliteFile,
   SQLITE_COPY_MAX_BYTES,
   SqliteTransferError,
@@ -14,6 +17,7 @@ import {
   snapshotSqliteDatabase,
   sqliteDatabaseSum,
   stageSqliteFile,
+  thawSqliteFile,
   verifySqliteFile
 } from '../../db/sqlite-transfer.js'
 import { closeTenantPool, getTenantDb } from '../../db/tenant-context.js'
@@ -43,6 +47,8 @@ export const SHA_HEADER = 'x-nivaro-sha256'
 export type DatabaseTransferCode =
   | 'NOT_SQLITE'
   | 'SOURCE_NOT_FROZEN'
+  | 'TARGET_NOT_FROZEN'
+  | 'SQLITE_FILE_BUSY'
   | 'BAD_SOURCE'
   | 'BAD_TICKET'
   | 'SOURCE_REFUSED'
@@ -116,6 +122,13 @@ export async function databaseSum(
 ): Promise<{ sha256: string; bytes: number }> {
   const src = sqliteDatabaseOf(tenant)
   if (!src) throw new DatabaseTransferError('NOT_SQLITE', "This app's database is not SQLite.")
+  // M6: only a source still held by the move; the sum freezes the file again (a source that
+  // restarted since the copy lost its in-memory freeze) and it stays frozen through retire.
+  if (!(await sourceFrozen(tenant)))
+    throw new DatabaseTransferError(
+      'SOURCE_NOT_FROZEN',
+      'This app is not in the move’s strict maintenance: its checksum is not answered.'
+    )
   return sqliteDatabaseSum(src.k, src.file)
 }
 
@@ -219,10 +232,14 @@ async function fetchVerified(
     )
     let verified: SqliteVerified
     try {
-      verified = verifySqliteFile(got.incoming)
+      // H1: in a worker thread, bounded in time — never on this process's event loop.
+      verified = await verifySqliteFile(got.incoming)
     } catch (err) {
       await unlink(got.incoming).catch(() => {})
       throw err
+    } finally {
+      // The read-only open of a WAL database leaves its -wal / -shm beside the copy.
+      for (const extra of ['-wal', '-shm']) await unlink(`${got.incoming}${extra}`).catch(() => {})
     }
     return { incoming: got.incoming, sha256: got.sha256, bytes: got.bytes, verified }
   } catch (err) {
@@ -232,8 +249,11 @@ async function fetchVerified(
 }
 
 /**
- * A shared deployment's app: the copy is checked, then the app's pool is closed and the copy put
- * in place while no pool may open on the file; the app's schema state and caches start again.
+ * A shared deployment's app (held in maintenance by the move — M2): the copy is checked in a
+ * worker, then the app's pool is closed and — holding the file's lock (no other process may own
+ * it) — the copy is put in place while no pool may open on the file; the file is thawed (this
+ * home is never the frozen source) and the app's schema state and caches start again. One pull per
+ * app at a time (M3, DATABASE_COPY_RUNNING).
  */
 export async function pullDatabaseShared(
   t: TenantRecord,
@@ -241,21 +261,49 @@ export async function pullDatabaseShared(
 ): Promise<DatabasePulled> {
   if (t.dbClient !== 'sqlite')
     throw new DatabaseTransferError('NOT_SQLITE', "This app's database is not SQLite.")
-  const got = await fetchVerified(req, t.dbConnection)
-  const { awaitAppSchemaRun, appDatabaseReplaced } = await import('../tenancy/app-migrations.js')
-  await withSqliteFileReplaced(t.dbConnection, async () => {
-    await awaitAppSchemaRun(t.id)
-    await closeTenantPool(t.dbConnection)
-    await installSqliteFile(got.incoming, t.dbConnection)
+  if (t.status !== 'maintenance')
+    throw new DatabaseTransferError(
+      'TARGET_NOT_FROZEN',
+      'This app is not held in maintenance by a move: its database is never replaced.'
+    )
+  const file = t.dbConnection
+  return oneCopyAtATime(file, async () => {
+    prepareSqliteFolder(file)
+    const got = await fetchVerified(req, file)
+    const { awaitAppSchemaRun, appDatabaseReplaced } = await import('../tenancy/app-migrations.js')
+    try {
+      await withSqliteFileReplaced(file, async () => {
+        await awaitAppSchemaRun(t.id)
+        await closeTenantPool(file)
+        // L7: no other live process may own this file while it is replaced.
+        const taken = claimSqliteFile(file)
+        if (taken)
+          throw new DatabaseTransferError(
+            'SQLITE_FILE_BUSY',
+            'Another process holds this app database; it is not replaced.',
+            503
+          )
+        const release = holdSqliteFile(file)
+        try {
+          await installSqliteFile(got.incoming, file)
+        } finally {
+          release()
+        }
+        thawSqliteFile(file)
+      })
+    } finally {
+      await unlink(got.incoming).catch(() => {})
+    }
+    await appDatabaseReplaced(t)
+    return { sha256: got.sha256, bytes: got.bytes, verified: got.verified }
   })
-  await appDatabaseReplaced(t)
-  return { sha256: got.sha256, bytes: got.bytes, verified: got.verified }
 }
 
 /**
- * A dedicated app: it cannot close its own database under itself. The checked copy is staged
- * (`<file>.incoming` + its marker) and the app restarts; its boot installs it
- * (db/sqlite-transfer.ts adoptStagedSqliteFile) before anything opens the database.
+ * A dedicated app (in the move's strict maintenance — M2): it cannot close its own database under
+ * itself. The checked copy is staged (`<file>.incoming-<id>` + its marker) and the app restarts;
+ * its boot installs it (db/sqlite-transfer.ts adoptStagedSqliteFile) before anything opens the
+ * database. One pull at a time (M3).
  */
 export async function pullDatabaseDedicated(
   req: DatabasePullRequest,
@@ -263,14 +311,28 @@ export async function pullDatabaseDedicated(
 ): Promise<DatabasePulled & { restarting: true }> {
   if (config.DB_CLIENT !== 'sqlite')
     throw new DatabaseTransferError('NOT_SQLITE', "This app's database is not SQLite.")
-  const got = await fetchVerified(req, config.DB_DATABASE)
-  await stageSqliteFile(config.DB_DATABASE, {
-    sha256: got.sha256,
-    bytes: got.bytes,
-    move_id: moveId
+  if (!(await databaseTransferDeps.strictMaintenance()))
+    throw new DatabaseTransferError(
+      'TARGET_NOT_FROZEN',
+      'This app is not in the move’s strict maintenance: its database is never replaced.'
+    )
+  const file = config.DB_DATABASE
+  return oneCopyAtATime(file, async () => {
+    const got = await fetchVerified(req, file)
+    await stageSqliteFile(file, {
+      sha256: got.sha256,
+      bytes: got.bytes,
+      move_id: moveId,
+      incoming: got.incoming
+    })
+    databaseTransferDeps.restart()
+    return {
+      sha256: got.sha256,
+      bytes: got.bytes,
+      verified: got.verified,
+      restarting: true as const
+    }
   })
-  databaseTransferDeps.restart()
-  return { sha256: got.sha256, bytes: got.bytes, verified: got.verified, restarting: true }
 }
 
 /** What a dedicated app adopted at its last boot (the Hub reads it back after the restart). */
@@ -284,21 +346,34 @@ export async function databaseAdopted(): Promise<{
 }
 
 /**
- * Rollback before release on a shared target (the copy is thrown away): the app's pool is
- * closed and its file removed. Only for an app the list holds in maintenance.
+ * Rollback before release on a shared target (the copy is thrown away): only for an app the list
+ * holds in maintenance, and only a file that IS the move's copy (L7: `sha256` of what db_copy
+ * installed) — a file that is anything else (an old home's own database) is never deleted.
  */
-export async function discardDatabaseShared(t: TenantRecord): Promise<void> {
-  if (t.dbClient !== 'sqlite') return
+export async function discardDatabaseShared(
+  t: TenantRecord,
+  sha256: string | null
+): Promise<{ discarded: boolean }> {
+  if (t.dbClient !== 'sqlite') return { discarded: false }
   if (t.status !== 'maintenance')
     throw new DatabaseTransferError(
-      'SOURCE_NOT_FROZEN',
+      'TARGET_NOT_FROZEN',
       'Only an app held in maintenance by a move has its copy discarded.'
     )
-  await withSqliteFileReplaced(t.dbConnection, async () => {
+  if (!sha256 || !/^[0-9a-f]{64}$/.test(sha256)) return { discarded: false }
+  return withSqliteFileReplaced(t.dbConnection, async () => {
     const { awaitAppSchemaRun } = await import('../tenancy/app-migrations.js')
     await awaitAppSchemaRun(t.id)
     await closeTenantPool(t.dbConnection)
-    for (const extra of ['', '-wal', '-shm', '-journal', '.incoming'])
+    let now: string | null = null
+    try {
+      now = (await fileSum(t.dbConnection)).sha256
+    } catch {
+      now = null
+    }
+    if (now !== sha256) return { discarded: false }
+    for (const extra of ['', '-wal', '-shm', '-journal'])
       await unlink(`${t.dbConnection}${extra}`).catch(() => {})
+    return { discarded: true }
   })
 }

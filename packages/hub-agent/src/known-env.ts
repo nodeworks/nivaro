@@ -68,6 +68,7 @@ export const KNOWN_ENV_KEYS: readonly string[] = [
   'DB_READ_HOST',
   'DB_READ_PORT',
   'DB_REQUEST_TIMEOUT_MS',
+  'DB_SQLITE_MISSING',
   'DB_SSL_CA',
   'DB_SSL_MODE',
   'DB_TRUST_SERVER_CERT',

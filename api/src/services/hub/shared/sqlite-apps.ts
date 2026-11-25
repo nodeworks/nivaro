@@ -70,6 +70,44 @@ export function sqliteSharedRefusal(
   return null
 }
 
+/** What a Docker agent says about its uploads volume, for a SQLite app's file. */
+export interface SqliteStorageFacts {
+  /** The uploads volume is an NFS export; null/undefined = the agent does not say (older). */
+  uploads_network?: boolean | null
+  /** HUB_AGENT_VOLUME_DRIVER; null/undefined = not said. */
+  volume_driver?: string | null
+  /** Swarm nodes when local volumes sit on more than one node, else null. */
+  multi_node?: number | null
+}
+
+/**
+ * Why a SQLite app's file cannot live on this agent's uploads volume, or null (M5, H2): never on
+ * an NFS export or a non-local volume driver (SQLite's WAL and its file locks are not safe on a
+ * network filesystem), never on a swarm of several nodes with local volumes (a task rescheduled
+ * to another node finds no file), and never when the agent does not say (unknown is never a pass).
+ */
+export function sqliteStorageRefusal(
+  key: string,
+  f: SqliteStorageFacts | null
+): { code: 'SQLITE_ON_NFS' | 'SQLITE_MULTI_NODE'; message: string } | null {
+  if (!f || typeof f.uploads_network !== 'boolean')
+    return {
+      code: 'SQLITE_ON_NFS',
+      message: `The Hub agent of ${key} does not say whether its uploads volume is on NFS (an older agent, or it did not answer), and SQLite is not safe on a network filesystem. Update the agent.`
+    }
+  if (f.uploads_network || (f.volume_driver && f.volume_driver !== 'local'))
+    return {
+      code: 'SQLITE_ON_NFS',
+      message: `${key} keeps its uploads on network storage (${f.uploads_network ? 'NFS' : `volume driver ${f.volume_driver}`}); SQLite's write-ahead log and file locks are not safe there.`
+    }
+  if (f.multi_node && f.multi_node > 1)
+    return {
+      code: 'SQLITE_MULTI_NODE',
+      message: `${key} runs on a swarm of ${f.multi_node} nodes with local volumes: a task moved to another node would find no database file.`
+    }
+  return null
+}
+
 /** The database record ids an environment's db_ref names that are SQLite records. */
 export async function sqliteRecordIds(recordIds: number[]): Promise<Set<number>> {
   if (!recordIds.length) return new Set()

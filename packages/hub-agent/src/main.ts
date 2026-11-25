@@ -91,6 +91,9 @@ export function baseHandlers(cfg: AgentConfig, facts: EngineFacts, engine?: Engi
         engine_api: facts.engineApi,
         swarm: { manager: true, node_id: facts.nodeId, nodes: await swarmNodes() },
         volume_driver: cfg.volumeDriver,
+        // Hub gap sqlite (M5): the uploads volume is an NFS export (HUB_AGENT_VOLUME_OPTS_FILE
+        // type nfs/nfs4). SQLite's WAL and locks are not safe there; the Hub refuses SQLite apps.
+        uploads_network: /^nfs4?$/i.test(String(cfg.volumeOpts?.type ?? '').trim()),
         images: cfg.images,
         host_suffixes: cfg.hostSuffixes,
         edge: cfg.edge,

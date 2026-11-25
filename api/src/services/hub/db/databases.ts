@@ -1107,7 +1107,9 @@ const sqliteFile = () =>
  */
 export async function createSqliteDatabase(
   by: string | null,
-  file: string = SQLITE_APP_FILE
+  file: string = SQLITE_APP_FILE,
+  /** A move's record for an existing file (never made new); a New SQLite database is not. */
+  opts: { existing?: boolean } = {}
 ): Promise<HubDatabase> {
   if (!SQLITE_FILE_RE.test(file))
     throw new HubDbError(
@@ -1125,7 +1127,9 @@ export async function createSqliteDatabase(
       login_name: null,
       connection: null,
       status: 'ready',
-      adopted: false,
+      // `adopted` = the record names a file that already exists (a move's, or a placement that
+      // made it): the deployment never makes such a file (H2). A New SQLite database is not yet.
+      adopted: opts.existing === true,
       created_by_hub: true,
       created_by: by,
       created_at: now(),
@@ -1142,11 +1146,16 @@ export async function createSqliteDatabase(
  */
 export async function openDatabaseWire(
   id: number
-): Promise<{ client: HubDbRecordEngine; connection: string }> {
+): Promise<{ client: HubDbRecordEngine; connection: string; create?: boolean }> {
   const row = await getRow(id)
   if (row && isSqliteRecord(row)) {
     if (row.status !== 'ready') throw new HubDbError('NOT_READY', 'The database is not ready yet.')
-    return { client: 'sqlite', connection: row.database_name }
+    // H2: only a NEW record (never placed yet) lets the deployment make the file, once.
+    return {
+      client: 'sqlite',
+      connection: row.database_name,
+      ...(row.adopted ? {} : { create: true })
+    }
   }
   const c = await openDatabaseConnection(id)
   return { client: c.engine, connection: connectionUrl(c) }

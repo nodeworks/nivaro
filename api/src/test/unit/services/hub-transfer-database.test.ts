@@ -11,10 +11,10 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest'
 
 const root = mkdtempSync(join(tmpdir(), 'nvr-db-transfer-'))
 const saved = {
-  STORAGE_LOCAL_ROOT: process.env.STORAGE_LOCAL_ROOT,
+  NIVARO_SQLITE_APPS_DIR: process.env.NIVARO_SQLITE_APPS_DIR,
   HUB_SHARED_DEPLOYMENT: process.env.HUB_SHARED_DEPLOYMENT
 }
-process.env.STORAGE_LOCAL_ROOT = root
+process.env.NIVARO_SQLITE_APPS_DIR = join(root, 'app-db')
 process.env.HUB_SHARED_DEPLOYMENT = 'shared-lite'
 
 const T = await import('../../../db/sqlite-tenant.js')
@@ -46,7 +46,8 @@ function tenant(id: string, status: TenantRecord['status'] = 'maintenance'): Ten
     dbClient: 'sqlite',
     dbConnection: T.sqliteTenantPath(id, 'app.sqlite'),
     poolMax: null,
-    hostnames: [`${id}.example.com`]
+    hostnames: [`${id}.example.com`],
+    dbCreate: true
   }
 }
 
@@ -164,15 +165,83 @@ describe('target: fetched, checked, put in place', () => {
 })
 
 describe('rollback before release: the copy is discarded', () => {
-  it('removes the app file of an app held in maintenance; refuses an active one', async () => {
+  it("removes only the move's own copy of an app held in maintenance; refuses an active one", async () => {
     const dst = tenant('dst-e6')
     await seed(dst, 1)
-    await expect(D.discardDatabaseShared({ ...dst, status: 'active' })).rejects.toMatchObject({
-      code: 'SOURCE_NOT_FROZEN'
+    await ctx.closeTenantPool(dst.dbConnection)
+    const sha = (await X.fileSum(dst.dbConnection)).sha256
+    await expect(D.discardDatabaseShared({ ...dst, status: 'active' }, sha)).rejects.toMatchObject({
+      code: 'TARGET_NOT_FROZEN'
     })
-    await D.discardDatabaseShared(dst)
     const { existsSync } = await import('node:fs')
+    // L7: a file that is not the move's copy (an old home's own) is kept.
+    expect(await D.discardDatabaseShared(dst, 'e'.repeat(64))).toEqual({ discarded: false })
+    expect(existsSync(dst.dbConnection)).toBe(true)
+    expect(await D.discardDatabaseShared(dst, null)).toEqual({ discarded: false })
+    expect(await D.discardDatabaseShared(dst, sha)).toEqual({ discarded: true })
     expect(existsSync(dst.dbConnection)).toBe(false)
     expect(existsSync(`${dst.dbConnection}.lock`)).toBe(false)
+  })
+})
+
+describe('a pull only replaces a frozen target, one at a time', () => {
+  it('an app not in maintenance is refused TARGET_NOT_FROZEN (its file untouched)', async () => {
+    const live = { ...tenant('dst-e7'), status: 'active' as const }
+    await expect(D.pullDatabaseShared(live, REQ)).rejects.toMatchObject({
+      code: 'TARGET_NOT_FROZEN'
+    })
+  })
+
+  it('a second pull of the same app while one runs is refused DATABASE_COPY_RUNNING', async () => {
+    const src = tenant('src-e8')
+    await seed(src, 2)
+    const snap = await ctx.withTenant(src, () => D.databaseSnapshot(src))
+    const dst = tenant('dst-e8')
+    await seed(dst, 0)
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    pullDeps.fetch = async () => {
+      await gate
+      return new Response(readFileSync(snap.path), {
+        status: 200,
+        headers: { 'content-length': String(snap.bytes), 'x-nivaro-sha256': snap.sha256 }
+      })
+    }
+    const first = ctx.withTenant(dst, () => D.pullDatabaseShared(dst, REQ))
+    await new Promise((r) => setTimeout(r, 20))
+    await expect(ctx.withTenant(dst, () => D.pullDatabaseShared(dst, REQ))).rejects.toMatchObject({
+      code: 'DATABASE_COPY_RUNNING'
+    })
+    release()
+    await expect(first).resolves.toMatchObject({ sha256: snap.sha256 })
+    rmSync(snap.path)
+    X.thawSqliteFile(src.dbConnection)
+    await ctx.closeTenantPool(src.dbConnection)
+    await ctx.closeTenantPool(dst.dbConnection)
+  })
+
+  it('the installed copy is thawed (M1) and its leftovers are gone', async () => {
+    const src = tenant('src-e9')
+    await seed(src, 1)
+    const snap = await ctx.withTenant(src, () => D.databaseSnapshot(src))
+    const dst = tenant('dst-e9')
+    await seed(dst, 0)
+    // The target path was frozen here before (it was a move's source once).
+    await ctx.withTenant(dst, () => D.databaseSnapshot(dst)).then((s) => rmSync(s.path))
+    expect(X.sqliteFileFrozen(dst.dbConnection)).toBe(true)
+    serve(snap)
+    await ctx.withTenant(dst, () => D.pullDatabaseShared(dst, REQ))
+    expect(X.sqliteFileFrozen(dst.dbConnection)).toBe(false)
+    const { readdirSync } = await import('node:fs')
+    const { dirname } = await import('node:path')
+    expect(readdirSync(dirname(dst.dbConnection)).filter((n) => n.includes('.incoming'))).toEqual(
+      []
+    )
+    rmSync(snap.path)
+    X.thawSqliteFile(src.dbConnection)
+    await ctx.closeTenantPool(src.dbConnection)
+    await ctx.closeTenantPool(dst.dbConnection)
   })
 })

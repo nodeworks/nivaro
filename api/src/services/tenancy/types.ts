@@ -8,6 +8,9 @@ export interface TenantRecord {
   status: 'active' | 'provisioning' | 'suspended' | 'maintenance' | (string & {})
   dbClient: string
   dbConnection: string
+  /** Hub gap sqlite (H2): the Hub placed this SQLite app's database as NEW — the deployment may
+   *  make its file once. Absent: a missing file is refused (SQLITE_FILE_MISSING). */
+  dbCreate?: boolean
   /** The tenant pool's own size; null = the default (TENANT_POOL_MAX). */
   poolMax: number | null
   hostnames: string[]

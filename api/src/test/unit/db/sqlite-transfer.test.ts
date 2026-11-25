@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -15,7 +23,9 @@ import {
   snapshotSqliteDatabase,
   sqliteDatabaseSum,
   sqliteFileFrozen,
+  sqliteTransferDeps,
   stageSqliteFile,
+  sweepSqliteLeftovers,
   thawSqliteFile,
   verifySqliteFile
 } from '../../../db/sqlite-transfer.js'
@@ -55,6 +65,14 @@ async function appDb(name: string): Promise<{ k: Knex; file: string }> {
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 
+/** Snapshot / incoming files left beside `file`. */
+const leftovers = (file: string) => {
+  const base = file.split('/').pop() as string
+  return readdirSync(dir).filter(
+    (n) => n.startsWith(`${base}.incoming`) || n.startsWith(`${base}.snapshot-`)
+  )
+}
+
 describe('source: freeze, checkpoint, snapshot', () => {
   it('the snapshot holds every row (the WAL emptied first) and hashes to what it reports', async () => {
     const { k, file } = await appDb('snap.sqlite')
@@ -62,7 +80,7 @@ describe('source: freeze, checkpoint, snapshot', () => {
       const snap = await snapshotSqliteDatabase(k, file, 'move 1')
       expect(snap.sha256).toBe(sha(readFileSync(snap.path)))
       expect(snap.bytes).toBe(readFileSync(snap.path).length)
-      const v = verifySqliteFile(snap.path)
+      const v = await verifySqliteFile(snap.path)
       expect(v).toEqual({ integrity: 'ok', migrations: 2, latest: '002_b.ts' })
       const copy = open(snap.path)
       expect((await copy('items').count({ n: '*' }))[0].n).toBe(50)
@@ -103,7 +121,7 @@ describe('source: freeze, checkpoint, snapshot', () => {
 })
 
 describe('target: receive, check, install', () => {
-  it('a copy that matches lands in <file>.incoming; install puts it in place', async () => {
+  it('a copy that matches lands in <file>.incoming-<id>; install puts it in place', async () => {
     const { k, file } = await appDb('src-ok.sqlite')
     const snap = await snapshotSqliteDatabase(k, file, 'move 3')
     thawSqliteFile(file)
@@ -115,8 +133,8 @@ describe('target: receive, check, install', () => {
       sha256: snap.sha256,
       bytes: snap.bytes
     })
-    expect(got.incoming).toBe(`${target}.incoming`)
-    expect(verifySqliteFile(got.incoming).migrations).toBe(2)
+    expect(got.incoming.startsWith(`${target}.incoming-`)).toBe(true)
+    expect((await verifySqliteFile(got.incoming)).migrations).toBe(2)
     await installSqliteFile(got.incoming, target)
     expect(existsSync(`${target}-wal`)).toBe(false)
     expect(existsSync(got.incoming)).toBe(false)
@@ -129,7 +147,7 @@ describe('target: receive, check, install', () => {
     await expect(
       receiveSqliteFile(Readable.from(body), target, { sha256: 'a'.repeat(64), bytes: 100 })
     ).rejects.toMatchObject({ code: 'SQLITE_CHECKSUM_MISMATCH' })
-    expect(existsSync(`${target}.incoming`)).toBe(false)
+    expect(leftovers(target)).toEqual([])
     await expect(
       receiveSqliteFile(Readable.from(body), target, { sha256: sha(body), bytes: 200 })
     ).rejects.toMatchObject({ code: 'SQLITE_SHORT_COPY' })
@@ -139,22 +157,18 @@ describe('target: receive, check, install', () => {
     await expect(
       receiveSqliteFile(Readable.from(body), target, { sha256: sha(body), bytes: 100 }, 10)
     ).rejects.toMatchObject({ code: 'SQLITE_TOO_LARGE', message: expect.stringMatching(/100/) })
-    expect(existsSync(`${target}.incoming`)).toBe(false)
+    expect(leftovers(target)).toEqual([])
   })
 
   it('the read-only check refuses a file that is not SQLite, a damaged one, and one with no ledger', async () => {
     const junk = join(dir, 'junk.sqlite')
     writeFileSync(junk, 'not a database at all, really not')
-    expect(() => verifySqliteFile(junk)).toThrow(
-      expect.objectContaining({ code: 'SQLITE_NOT_SQLITE' })
-    )
+    await expect(verifySqliteFile(junk)).rejects.toMatchObject({ code: 'SQLITE_NOT_SQLITE' })
     const empty = join(dir, 'noledger.sqlite')
     const k = open(empty)
     await k.schema.createTable('x', (t) => t.increments('id'))
     await k.destroy()
-    expect(() => verifySqliteFile(empty)).toThrow(
-      expect.objectContaining({ code: 'SQLITE_NO_LEDGER' })
-    )
+    await expect(verifySqliteFile(empty)).rejects.toMatchObject({ code: 'SQLITE_NO_LEDGER' })
     // Damaged pages: the file header stays, every later page header is overwritten.
     const { k: k2, file } = await appDb('damaged.sqlite')
     const snap = await snapshotSqliteDatabase(k2, file, 'move 4')
@@ -164,11 +178,9 @@ describe('target: receive, check, install', () => {
     for (let p = 1; p * 4096 < buf.length; p++) buf.fill(0xab, p * 4096, p * 4096 + 12)
     const bad = join(dir, 'damaged-copy.sqlite')
     writeFileSync(bad, buf)
-    expect(() => verifySqliteFile(bad)).toThrow(
-      expect.objectContaining({
-        code: expect.stringMatching(/SQLITE_NOT_INTACT|SQLITE_NOT_SQLITE/)
-      })
-    )
+    await expect(verifySqliteFile(bad)).rejects.toMatchObject({
+      code: expect.stringMatching(/SQLITE_NOT_INTACT|SQLITE_NOT_SQLITE/)
+    })
   })
 })
 
@@ -181,7 +193,12 @@ describe('a dedicated target: staged, adopted at boot', () => {
     const target = join(dir, 'stage-target.sqlite')
     writeFileSync(target, 'fresh empty install')
     const got = await receiveSqliteFile(Readable.from(readFileSync(snap.path)), target, snap)
-    await stageSqliteFile(target, { sha256: got.sha256, bytes: got.bytes, move_id: 9 })
+    await stageSqliteFile(target, {
+      sha256: got.sha256,
+      bytes: got.bytes,
+      move_id: 9,
+      incoming: got.incoming
+    })
     expect(adoptStagedSqliteFile(target)).toBe('adopted')
     expect((await fileSum(target)).sha256).toBe(snap.sha256)
     expect(await adoptedSqliteFile(target)).toMatchObject({ sha256: snap.sha256, move_id: 9 })
@@ -196,10 +213,141 @@ describe('a dedicated target: staged, adopted at boot', () => {
     const target = join(dir, 'stage-target2.sqlite')
     writeFileSync(target, 'the database as it is')
     const got = await receiveSqliteFile(Readable.from(readFileSync(snap.path)), target, snap)
-    await stageSqliteFile(target, { sha256: got.sha256, bytes: got.bytes, move_id: 10 })
+    await stageSqliteFile(target, {
+      sha256: got.sha256,
+      bytes: got.bytes,
+      move_id: 10,
+      incoming: got.incoming
+    })
     writeFileSync(got.incoming, 'tampered')
     expect(adoptStagedSqliteFile(target)).toBe('refused')
     expect(readFileSync(target, 'utf8')).toBe('the database as it is')
     expect(existsSync(got.incoming)).toBe(false)
+  })
+})
+
+describe('review fixes', () => {
+  it('no room on the volume: the snapshot and the receive are refused SQLITE_NO_SPACE, naming sizes', async () => {
+    const { k, file } = await appDb('nospace.sqlite')
+    const real = sqliteTransferDeps.freeBytes
+    sqliteTransferDeps.freeBytes = async () => 1024
+    try {
+      await expect(snapshotSqliteDatabase(k, file, 'move 7')).rejects.toMatchObject({
+        code: 'SQLITE_NO_SPACE',
+        message: expect.stringMatching(/1024 bytes free/)
+      })
+      await expect(
+        receiveSqliteFile(Readable.from(Buffer.from('abc')), file, {
+          sha256: 'a'.repeat(64),
+          bytes: 3
+        })
+      ).rejects.toMatchObject({ code: 'SQLITE_NO_SPACE' })
+      expect(leftovers(file)).toEqual([])
+    } finally {
+      sqliteTransferDeps.freeBytes = real
+      thawSqliteFile(file)
+      await k.destroy()
+    }
+  })
+
+  it('one snapshot per file at a time (DATABASE_COPY_RUNNING)', async () => {
+    const { k, file } = await appDb('once.sqlite')
+    try {
+      const a = snapshotSqliteDatabase(k, file, 'move 8')
+      await expect(snapshotSqliteDatabase(k, file, 'move 8')).rejects.toMatchObject({
+        code: 'DATABASE_COPY_RUNNING'
+      })
+      rmSync((await a).path)
+    } finally {
+      thawSqliteFile(file)
+      await k.destroy()
+    }
+  })
+
+  it('the release checksum freezes the file again (a source that restarted is frozen)', async () => {
+    const { k, file } = await appDb('refreeze.sqlite')
+    try {
+      expect(sqliteFileFrozen(file)).toBe(false)
+      await sqliteDatabaseSum(k, file)
+      expect(sqliteFileFrozen(file)).toBe(true)
+      await expect(k('items').insert({ v: 'x' })).rejects.toMatchObject({ code: 'SQLITE_FROZEN' })
+    } finally {
+      thawSqliteFile(file)
+      await k.destroy()
+    }
+  })
+
+  it('a long reader is waited for: the checkpoint retries inside its window, then gives up', async () => {
+    const { k, file } = await appDb('reader.sqlite')
+    const was = { ...sqliteTransferDeps }
+    sqliteTransferDeps.checkpointWaitMs = 300
+    sqliteTransferDeps.checkpointPollMs = 50
+    // A reader holding a read transaction open on its own connection keeps the WAL in use.
+    const driver = 'better-sqlite3'
+    const Database = (await import(driver)).default
+    const reader = new Database(file)
+    try {
+      await k('items').insert({ v: 'in wal' })
+      reader.prepare('BEGIN').run()
+      reader.prepare('SELECT COUNT(*) FROM items').get()
+      await k('items').insert({ v: 'after the reader' })
+      await expect(snapshotSqliteDatabase(k, file, 'move 9')).rejects.toMatchObject({
+        code: 'SQLITE_CHECKPOINT_BUSY'
+      })
+    } finally {
+      reader.prepare('ROLLBACK').run()
+      reader.close()
+      Object.assign(sqliteTransferDeps, was)
+      thawSqliteFile(file)
+      await k.destroy()
+    }
+  })
+
+  it("a crash's leftovers older than an hour are swept; a copy in flight and a staged one are kept", async () => {
+    const file = join(dir, 'sweep.sqlite')
+    writeFileSync(file, 'db')
+    const old = Date.now() / 1000 - 2 * 3600
+    for (const n of ['snapshot-aaa', 'incoming-bbb', 'incoming-staged']) {
+      writeFileSync(`${file}.${n}`, 'x')
+      utimesSync(`${file}.${n}`, old, old)
+    }
+    writeFileSync(`${file}.incoming-new`, 'x')
+    writeFileSync(
+      `${file}.incoming.json`,
+      JSON.stringify({
+        sha256: 'a'.repeat(64),
+        bytes: 1,
+        move_id: 1,
+        incoming: `${file}.incoming-staged`
+      })
+    )
+    expect(sweepSqliteLeftovers(file)).toBe(2)
+    expect(leftovers(file).sort()).toEqual(
+      [
+        'sweep.sqlite.incoming-new',
+        'sweep.sqlite.incoming-staged',
+        'sweep.sqlite.incoming.json'
+      ].sort()
+    )
+  })
+
+  it('boot after a crash between the rename and the marker: the copy in place is reported adopted', async () => {
+    const { k, file } = await appDb('crash-src.sqlite')
+    const snap = await snapshotSqliteDatabase(k, file, 'move 11')
+    thawSqliteFile(file)
+    await k.destroy()
+    const target = join(dir, 'crash-target.sqlite')
+    writeFileSync(target, readFileSync(snap.path))
+    writeFileSync(
+      `${target}.incoming.json`,
+      JSON.stringify({
+        sha256: snap.sha256,
+        bytes: snap.bytes,
+        move_id: 11,
+        incoming: `${target}.incoming-gone`
+      })
+    )
+    expect(adoptStagedSqliteFile(target)).toBe('adopted')
+    expect(await adoptedSqliteFile(target)).toMatchObject({ sha256: snap.sha256, move_id: 11 })
   })
 })

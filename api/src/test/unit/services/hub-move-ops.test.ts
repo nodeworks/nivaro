@@ -1131,8 +1131,8 @@ describe('hub gap sqlite: copyDatabase, sourceDatabaseSum, unplace', () => {
         c.calls.push([s.id, 'databaseSum'])
         return { sha256: SUM, bytes: 4096 }
       }),
-      discardDatabase: vi.fn(async () => {
-        c.calls.push([s.id, 'discardDatabase'])
+      discardDatabase: vi.fn(async (_tid: string, sha: string | null) => {
+        c.calls.push([s.id, 'discardDatabase', sha])
         return { discarded: true }
       })
     })) as never
@@ -1194,7 +1194,13 @@ describe('hub gap sqlite: copyDatabase, sourceDatabaseSum, unplace', () => {
     const rec = (await createSqliteDatabase(null)).id
     await db('nivaro_hub_moves')
       .where({ id: w.move.id })
-      .update({ steps: JSON.stringify({ ...w.move.steps, sqlite_record: rec }) })
+      .update({
+        steps: JSON.stringify({
+          ...w.move.steps,
+          sqlite_record: rec,
+          db_copy: { sha256: SUM, bytes: 1, migrations: 1, at: 'x' }
+        })
+      })
     const c = clients()
     const ops = defaultMoveOps(
       w.move,
@@ -1202,7 +1208,7 @@ describe('hub gap sqlite: copyDatabase, sourceDatabaseSum, unplace', () => {
       { client: withDb(c), sleep, now }
     )
     await ops.unplace()
-    expect(c.calls[0]).toEqual([w.b, 'discardDatabase'])
+    expect(c.calls[0]).toEqual([w.b, 'discardDatabase', SUM])
     expect(await db('nivaro_hub_databases').where({ id: rec }).first()).toBeUndefined()
     expect((await readMove(w.move.id))?.steps.sqlite_record).toBeUndefined()
   })

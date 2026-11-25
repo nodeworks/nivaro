@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
@@ -98,11 +98,18 @@ if (config.DB_CLIENT === 'sqlite') {
   // One process per database file: a second one (another API, a migrate run against a live
   // API) is refused here (db/sqlite.ts claimSqliteFile). Worker threads share their process's.
   if (isMainThread) {
-    // Hub gap sqlite: a Hub stack keeps the file in the app's own folder (made here), and a move
-    // may have staged a checked copy of the database for this boot to put in place.
-    if (config.DB_DATABASE && config.DB_DATABASE !== ':memory:') {
-      mkdirSync(dirname(resolve(config.DB_DATABASE)), { recursive: true })
-      const adopted = adoptStagedSqliteFile(config.DB_DATABASE)
+    // Hub gap sqlite: a Hub stack keeps the file in the app's own folder (made here). The file's
+    // lock is taken FIRST (M4: a second process never swaps the file under a live owner), then a
+    // checked copy a move staged is put in place, then — on a Hub stack (DB_SQLITE_MISSING=refuse)
+    // — a missing file is refused, never made into a fresh install (H2).
+    const file = config.DB_DATABASE
+    const real = !!file && file !== ':memory:' && !/^file::memory:/i.test(file)
+    if (real) mkdirSync(dirname(resolve(file)), { recursive: true })
+    const taken = claimSqliteFile(file)
+    if (taken) throw new Error(taken)
+    holdSqliteFile(file)
+    if (real) {
+      const adopted = adoptStagedSqliteFile(file)
       if (adopted !== 'none')
         // biome-ignore lint/suspicious/noConsole: an operator must see a database swap in the log
         console.warn(
@@ -110,10 +117,11 @@ if (config.DB_CLIENT === 'sqlite') {
             ? 'SQLite: the database copy a Hub move staged is now in place.'
             : 'SQLite: a staged database copy failed its checks and was removed; the database is unchanged.'
         )
+      if ((process.env.DB_SQLITE_MISSING ?? '').trim() === 'refuse' && !existsSync(file))
+        throw new Error(
+          'SQLite: the database file is missing (DB_DATABASE) and this Hub stack never makes a new one (DB_SQLITE_MISSING=refuse). Restore the file, or move the app here again.'
+        )
     }
-    const taken = claimSqliteFile(config.DB_DATABASE)
-    if (taken) throw new Error(taken)
-    holdSqliteFile(config.DB_DATABASE)
   }
   sqliteCompat()
 }
