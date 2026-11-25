@@ -62,6 +62,8 @@ import {
 import { GitlabWriteError } from '../services/hub/gitlab-write.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
 import { HUB_MASK, HubSecretError } from '../services/hub/secrets.js'
+import { templatePlanNotes, withTemplateNotes } from '../services/hub/templates/choice.js'
+import { TemplateError } from '../services/hub/templates/library.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
 
 /**
@@ -170,6 +172,7 @@ function refusal(reply: FastifyReply, err: unknown) {
       err.code === 'GITLAB_UNREACHABLE' ? 'GitLab did not answer' : err.message
     )
   if (err instanceof TargetMisconfiguredError) return fail(reply, 409, err.code, err.message)
+  if (err instanceof TemplateError) return fail(reply, err.status, err.code, err.message)
   reply.log.error({ err: (err as Error | null)?.name ?? typeof err }, 'hub route failed')
   return fail(reply, 500, 'HUB_ERROR', 'The Hub could not do that; see the server log.')
 }
@@ -723,17 +726,26 @@ async function readableEnvId(req: FastifyRequest): Promise<number | null> {
   return Number(row.id)
 }
 
+async function templateRefusal(reply: FastifyReply, input: unknown) {
+  const b = (await templatePlanNotes(input)).blockers[0]
+  return b ? fail(reply, 409, b.code, b.text) : null
+}
+
 function creationRoutes(app: FastifyInstance) {
   // A read: gathers and plans, never locks or writes (exempt from the maintenance freeze).
   app.post('/apps/create/plan', { preHandler: requireAdmin }, async (req, reply) =>
     guarded(reply, async () => {
       const input = body(req) as unknown as CreateAppInput
-      return { data: buildCreationPlan(input, await gatherCreationFacts(input)) }
+      const plan = buildCreationPlan(input, await gatherCreationFacts(input))
+      return { data: withTemplateNotes(plan, await templatePlanNotes(input)) }
     })
   )
 
   app.post('/apps/create', { preHandler: requireAdmin }, async (req, reply) =>
     guarded(reply, async () => {
+      // Hub enhancement 24: a picked template is judged first (and again inside the creation).
+      const refusal = await templateRefusal(reply, body(req))
+      if (refusal) return refusal
       const out = await startCreation(body(req) as unknown as CreateAppInput, { id: userId(req) })
       await logActivity({
         action: 'hub-create-start',

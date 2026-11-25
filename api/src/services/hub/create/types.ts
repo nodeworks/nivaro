@@ -19,6 +19,8 @@ export interface CreateAppInput {
   target_id: number
   version: string
   extensions?: string[]
+  /** Hub enhancement 24: a template from the library to install after the first admin. */
+  template_id?: number | null
   signin: { issuer: string; client_id: string; client_secret: string }
   environments: Array<{
     key: string
@@ -112,6 +114,7 @@ export type CreationStepKey =
   | 'name'
   | 'link'
   | 'admin'
+  | 'template'
 
 export const STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
   'database',
@@ -121,7 +124,9 @@ export const STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
   'deploy',
   'name',
   'link',
-  'admin'
+  'admin',
+  // Hub enhancement 24: the picked App Blueprint template (create/template-step.ts)
+  'template'
 ])
 
 export interface CreationStepState {

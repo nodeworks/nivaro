@@ -148,6 +148,8 @@ const m544 = await import('../../../db/migrations/544_hub_databases.js')
 const m545 = await import('../../../db/migrations/545_hub_creations.js')
 // X-4: hub tokens are written with their app-link lookup (551 adds the column).
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
+// Hub enhancement 24: the creation's last step reads its template install row (571).
+const m571 = await import('../../../db/migrations/571_hub_app_templates.js')
 const R = await import('../../../services/hub/create/run.js')
 const store = await import('../../../services/hub/create/store.js')
 const D = await import('../../../services/hub/db/databases.js')
@@ -414,6 +416,7 @@ beforeAll(async () => {
   await m544.up(db)
   await m545.up(db)
   await m551.up(db)
+  await m571.up(db)
   if (!(await db.schema.hasTable('nivaro_users')))
     await db.schema.createTable('nivaro_users', (t) => t.uuid('id').primary())
   await db('nivaro_users').insert({ id: OWNER })

@@ -250,7 +250,8 @@ describe('buildCreationPlan — a clean two-environment plan', () => {
       'deploy',
       'name',
       'link',
-      'admin'
+      'admin',
+      'template'
     ])
   })
 })
