@@ -29,6 +29,9 @@ describe('hub registry', () => {
       'Shared deployments',
       'Capacity',
       'Scaling',
+      // Hub placement (hub-enh/placement): hosts + regions, cost chargeback.
+      'Hosts',
+      'Costs',
       'Drivers',
       'Targets',
       'Templates',

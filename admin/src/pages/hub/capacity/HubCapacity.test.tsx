@@ -167,6 +167,8 @@ describe('movePrefill', () => {
     })
     expect(movePrefill(30, '?move=30&to=dedicated')).toEqual({ open: true, pick: '' })
     expect(movePrefill(31, '?move=30&to=shared:4')).toEqual({ open: false, pick: '' })
-    expect(movePrefill(30, '?move=30&to=new:1')).toEqual({ open: true, pick: '' })
+    // Hub placement (idea 48): the Hosts tab links with a new stack on a host picked.
+    expect(movePrefill(30, '?move=30&to=new:1')).toEqual({ open: true, pick: 'new:1' })
+    expect(movePrefill(30, '?move=30&to=new:x')).toEqual({ open: true, pick: '' })
   })
 })

@@ -21,6 +21,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { ghostButton, StatusChip } from '../hub-parts'
+import { FederatedFleet } from '../placement/FederatedFleet'
 import { FleetSettingsCard } from './FleetSettingsCard'
 import { checkFleetNow, type FleetRow, fetchFleet, fleetKeys, pct } from './fleet-api'
 import { UptimeSheet } from './UptimeSheet'
@@ -345,6 +346,7 @@ export default function HubFleet() {
             </div>
           </>
         )}
+        {isAdmin && <FederatedFleet />}
       </div>
       <UptimeSheet row={uptimeOf} onClose={() => setUptimeOf(null)} />
     </div>

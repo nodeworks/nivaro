@@ -459,6 +459,12 @@ function MoveForm({
   })
 
   const currentShared = current.data?.kind === 'shared' ? current.data.shared_deployment_id : null
+  // Hub placement (idea 48): a Docker stack moves to another stack of its own (another host).
+  const currentDocker =
+    current.data?.kind === 'dedicated' &&
+    drivers.data?.find((d) => d.id === current.data?.driver_id)?.kind === 'docker'
+  const isDockerPlacement = (p: Extract<HubPlacement, { kind: 'dedicated' }>) =>
+    drivers.data?.find((d) => d.id === p.driver_id)?.kind === 'docker'
   const options: ComboOption[] = [
     ...(shared.data ?? [])
       .filter((s) => s.status !== 'retired' && s.id !== currentShared)
@@ -467,12 +473,13 @@ function MoveForm({
         label: `Shared · ${s.key}`,
         hint: [s.name, s.version_pin].filter(Boolean).join(' · ')
       })),
-    // Back to a dedicated stack only from a shared deployment (dedicated → dedicated is not a
-    // move: the planner answers NOT_A_MOVE).
+    // Back to a dedicated stack from a shared deployment; between two dedicated placements only
+    // Docker stacks (the planner answers NOT_A_MOVE for a GitLab one).
     ...homes
-      .filter(() => currentShared != null)
+      .filter(() => currentShared != null || currentDocker)
       .map((h) => h.data)
       .filter((p): p is Extract<HubPlacement, { kind: 'dedicated' }> => p?.kind === 'dedicated')
+      .filter((p) => currentShared != null || isDockerPlacement(p))
       .map((p) => {
         const driver = drivers.data?.find((d) => d.id === p.driver_id)
         const where = p.target.stack ?? p.target.branch
@@ -485,8 +492,8 @@ function MoveForm({
         }
       }),
     // Never ran on a stack of its own (placed on shared from the start): a new stack on any
-    // Docker driver (ruling P6-17 gap a).
-    ...(currentShared != null
+    // Docker driver (ruling P6-17 gap a). A Docker stack: a new stack on any Docker host.
+    ...(currentShared != null || currentDocker
       ? (drivers.data ?? [])
           .filter((d) => d.kind === 'docker')
           .map((d) => ({

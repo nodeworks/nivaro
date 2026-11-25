@@ -98,6 +98,16 @@ export const APPS_HUB: HubDef = {
       hint: 'Replicas and limits per role, and the rules that scale them.'
     },
     {
+      path: 'hosts',
+      label: 'Hosts',
+      hint: 'Docker hosts grouped in regions, and what runs on each.'
+    },
+    {
+      path: 'costs',
+      label: 'Costs',
+      hint: 'A rough monthly cost per app, department and owner.'
+    },
+    {
       path: 'drivers',
       label: 'Drivers',
       hint: 'Where apps are deployed: a GitLab project or a Docker host the Hub agent runs.'
