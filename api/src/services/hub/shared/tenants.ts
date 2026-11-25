@@ -2,8 +2,7 @@ import { createHash } from 'node:crypto'
 import { db } from '../../../db/index.js'
 import type { HubTenantsResponse, HubTenantWire } from '../../tenancy/hub-contract.js'
 import { appFromRow, environmentFromRow, type HubApp } from '../apps.js'
-import { connectionUrl } from '../db/connection.js'
-import { openDatabaseConnection } from '../db/databases.js'
+import { openDatabaseWire } from '../db/databases.js'
 import { environmentNames } from '../docker/render-spec.js'
 import type { HubPlacementRow } from '../drivers.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
@@ -241,9 +240,10 @@ export async function tenantsBody(
     let client: HubTenantWire['db']['client']
     let connection: string
     try {
-      const c = await openDatabaseConnection(recordId)
-      client = c.engine
-      connection = connectionUrl(c)
+      // A server record's URL, or a SQLite record's file name (0.3.215).
+      const c = await openDatabaseWire(recordId)
+      client = c.client
+      connection = c.connection
     } catch (err) {
       // The code only (NOT_READY, NO_CONNECTION, …): driver text could carry the connection.
       const raw = (err as { code?: unknown } | null)?.code

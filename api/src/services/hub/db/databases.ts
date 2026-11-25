@@ -24,10 +24,16 @@ import type { Knex } from 'knex'
 import type { SslMode } from '../../../db/connection-url.js'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
+import { SQLITE_APP_FILE, SQLITE_FILE_RE } from '../../../db/sqlite-tenant.js'
 import { DB_IDENTITY_SQL, formatDbIdentity } from '../../db-identity.js'
 import { HubSecretError, maskSecret } from '../secrets.js'
 import type { HubDbCode } from './codes.js'
-import { connectionFromInput, type HubDbConnection, type HubDbEngine } from './connection.js'
+import {
+  connectionFromInput,
+  connectionUrl,
+  type HubDbConnection,
+  type HubDbEngine
+} from './connection.js'
 import { withDbLock } from './db-lock.js'
 import { generatePassword } from './names.js'
 import { assertDbName, assertLoginName, run } from './provision-common.js'
@@ -55,6 +61,18 @@ import {
 
 export { HubDbError } from './servers.js'
 
+/**
+ * The engine of a database RECORD: a server engine, or `sqlite` (0.3.215) — a SQLite app's file,
+ * kept by the Hub shared deployment the app is placed on (db/sqlite-tenant.ts). A sqlite record
+ * has no server, host, login or connection: `database_name` is the file name. The Hub never
+ * connects to it (no check, no connection, no drop); the deployment checks it over its link.
+ */
+export type HubDbRecordEngine = HubDbEngine | 'sqlite'
+
+/** Is this record a SQLite app's file? */
+export const isSqliteRecord = (r: { engine: string } | null | undefined): boolean =>
+  r?.engine === 'sqlite'
+
 /** `dropping` = fenced by a delete-with-drop: never attached, never opened. */
 export type HubDatabaseStatus = 'requested' | 'creating' | 'ready' | 'failed' | 'dropping'
 
@@ -68,7 +86,7 @@ export interface HubDatabase {
   id: number
   server_id: number | null
   server_name: string | null
-  engine: HubDbEngine
+  engine: HubDbRecordEngine
   host: string
   port: number | null
   database_name: string
@@ -101,7 +119,7 @@ export const dbRef = (id: number): string => `hub-db:${id}`
 interface DbRow {
   id: number
   server_id: number | null
-  engine: HubDbEngine
+  engine: HubDbRecordEngine
   host: string
   port: number | null
   database_name: string
@@ -138,8 +156,8 @@ function toRow(r: Record<string, unknown>): DbRow {
   return {
     id: Number(r.id),
     server_id: r.server_id === null || r.server_id === undefined ? null : Number(r.server_id),
-    engine: r.engine as HubDbEngine,
-    host: String(r.host),
+    engine: r.engine as HubDbRecordEngine,
+    host: String(r.host ?? ''),
     port: r.port === null || r.port === undefined ? null : Number(r.port),
     database_name: String(r.database_name),
     login_name: (r.login_name as string | null) ?? null,
@@ -819,6 +837,7 @@ export async function checkDatabaseIdentity(
   if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
   if (row.status === 'dropping')
     throw new HubDbError('DATABASE_DROPPING', 'This database is being dropped.')
+  if (isSqliteRecord(row)) throw sqliteFile()
   let opened: StoredConnection | null
   try {
     opened = openStored(row)
@@ -1072,6 +1091,67 @@ async function dropLocked(id: number): Promise<{ dropped: boolean }> {
   return { dropped: true }
 }
 
+// ─── SQLite (0.3.215) ────────────────────────────────────────────────────────
+
+const sqliteFile = () =>
+  new HubDbError(
+    'SQLITE_FILE',
+    'A SQLite database is a file its shared deployment keeps: the Hub has no connection to it. The deployment checks it when the app is placed.'
+  )
+
+/**
+ * Records a SQLite app's database: `ready` at once (nothing to provision — the shared deployment
+ * makes the file when the app first opens it), no server, no connection, `database_name` = the
+ * file name (SQLITE_APP_FILE). Only placing a new environment on a shared deployment of one
+ * process uses it (services/hub/shared/place.ts); a dedicated stack keeps its SQLite settings.
+ */
+export async function createSqliteDatabase(
+  by: string | null,
+  file: string = SQLITE_APP_FILE
+): Promise<HubDatabase> {
+  if (!SQLITE_FILE_RE.test(file))
+    throw new HubDbError(
+      'BAD_NAME',
+      'The file name must be a plain name ending .sqlite, .sqlite3 or .db.',
+      400
+    )
+  return db.transaction(async (trx) => {
+    const id = await insertReturningId(trx, TABLE, {
+      server_id: null,
+      engine: 'sqlite',
+      host: '',
+      port: null,
+      database_name: file,
+      login_name: null,
+      connection: null,
+      status: 'ready',
+      adopted: false,
+      created_by_hub: true,
+      created_by: by,
+      created_at: now(),
+      updated_at: now()
+    })
+    return mustAnswer(Number(id), trx)
+  })
+}
+
+/**
+ * The record in the deployment link's db-check / tenants shape: a server record's engine and
+ * connection URL, or a SQLite record's `{client: 'sqlite', connection: <file name>}` (the
+ * deployment puts the file in the app's own folder). Never answered over the API or logged.
+ */
+export async function openDatabaseWire(
+  id: number
+): Promise<{ client: HubDbRecordEngine; connection: string }> {
+  const row = await getRow(id)
+  if (row && isSqliteRecord(row)) {
+    if (row.status !== 'ready') throw new HubDbError('NOT_READY', 'The database is not ready yet.')
+    return { client: 'sqlite', connection: row.database_name }
+  }
+  const c = await openDatabaseConnection(id)
+  return { client: c.engine, connection: connectionUrl(c) }
+}
+
 // ─── Runner only ─────────────────────────────────────────────────────────────
 
 /** The ready database's connection, for the creation runner. Never answered over the API. */
@@ -1079,6 +1159,7 @@ export async function openDatabaseConnection(id: number): Promise<HubDbConnectio
   const row = await getRow(id)
   if (!row) throw new HubDbError('NOT_FOUND', 'Database not found.', 404)
   if (row.status !== 'ready') throw new HubDbError('NOT_READY', 'The database is not ready yet.')
+  if (isSqliteRecord(row)) throw sqliteFile()
   let stored: StoredConnection | null
   try {
     stored = openStored(row)

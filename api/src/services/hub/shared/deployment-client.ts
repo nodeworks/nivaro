@@ -171,7 +171,9 @@ export interface DeploymentClient {
   appStatus(tenantId: string): Promise<DeploymentAppStatus>
   firstAdmin(tenantId: string, body: unknown): Promise<{ user_id: string; created: boolean }>
   refresh(): Promise<void>
-  dbCheck(db: { client: string; connection: string }): Promise<DbCheckAnswer>
+  /** `tenant`: the app a SQLite file belongs to (0.3.215; the deployment keeps it in that app's
+   *  folder). Ignored for a server database. */
+  dbCheck(db: { client: string; connection: string; tenant?: string }): Promise<DbCheckAnswer>
   fileTicket(tenantId: string): Promise<{ ticket: string; expires_at: string }>
   pullFiles(tenantId: string, body: PullRequest): Promise<{ run_id: string }>
   pullStatus(tenantId: string, runId: string): Promise<PullStatus>
@@ -518,7 +520,14 @@ export function deploymentClient(
       try {
         a = await call(
           '/db-check',
-          { method: 'POST', body: { client: String(target?.client ?? ''), connection } },
+          {
+            method: 'POST',
+            body: {
+              client: String(target?.client ?? ''),
+              connection,
+              ...(typeof target?.tenant === 'string' ? { tenant: target.tenant } : {})
+            }
+          },
           { timeoutMs: SLOW_CALL_TIMEOUT_MS }
         )
       } catch (err) {

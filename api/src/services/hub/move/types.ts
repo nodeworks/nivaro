@@ -113,6 +113,8 @@ export type MoveBlockerCode =
   | 'STORAGE_COUNT_UNKNOWN'
   // Fix round 1 (P6-15: a check that could not run is never a pass).
   | 'GATHER_FAILED'
+  // Hub gap sqlite (0.3.215): a SQLite app placed on a shared deployment; its file is not moved.
+  | 'SQLITE_MOVE'
   | SharedReadinessCode
 
 /** What a move will cost or change. SIGNED_LINKS_RESET is the T12 carry. */
@@ -254,8 +256,9 @@ export interface MovePlanInput {
   names: string[]
   /** Those of them another Hub environment claims too. */
   names_taken: string[]
-  /** The Hub database record the environment's db_ref names. */
-  database: { id: number; ready: boolean } | null
+  /** The Hub database record the environment's db_ref names. `sqlite`: a SQLite app's file its
+   *  shared deployment keeps (0.3.215), which a move does not carry yet (SQLITE_MOVE). */
+  database: { id: number; ready: boolean; sqlite?: boolean } | null
   /** `unreadable`: an entry is stored but the Hub cannot open it (M-9). */
   app_key: { known: boolean; fp: string | null; unreadable?: boolean }
   locks: {

@@ -190,6 +190,13 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   // The placement and what holds it.
   if (from.kind === 'shared' && to.kind === 'shared' && from.shared.id === to.shared.id)
     add('SAME_PLACEMENT', `This environment already runs on ${sideName(to)}.`)
+  // Hub gap sqlite (0.3.215): the app's database is a file its shared deployment keeps. A move
+  // does not copy that file (the moves model one database both homes reach), so it is refused.
+  if (input.database?.sqlite)
+    add(
+      'SQLITE_MOVE',
+      `This app's database is a SQLite file ${sideName(from)} keeps in its volume. A move does not carry that file yet, so the app stays where it is.`
+    )
   if (input.locks.env !== null || input.locks.open_move)
     add('BUSY', busyText(input.locks.env, input.locks.open_move))
   for (const l of input.locks.shared) {
@@ -480,7 +487,7 @@ const READINESS_TITLES: Record<string, string> = {
   ROW_SCHEDULES: 'Schedules kept in table rows do not run on a shared deployment before 0.3.212',
   ISSUE_TRACKERS: 'Issue tracker sync does not run on a shared deployment yet',
   EXEC_SCRIPT_FLOWS: 'Flows that run scripts do not run on a shared deployment yet',
-  SQLITE: 'A SQLite database cannot be served by a shared deployment',
+  SQLITE: 'A move does not carry a SQLite database file yet',
   ENV_OBJECT_STORAGE: 'Files in object storage set by environment variables are not copied',
   DIRECTORY_SYNC: 'Directory sync is off on a shared deployment before 0.3.212',
   PHONE_PUSH: 'Phone push is off on a shared deployment before 0.3.212',

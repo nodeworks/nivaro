@@ -1304,6 +1304,45 @@ describe('final review I-4: an extension a placed app uses', () => {
   })
 })
 
+describe('hub gap sqlite: a deployment serving a SQLite app stays small', () => {
+  it('PATCH settings past small → 409 SQLITE_ONE_PROCESS naming the app; small stays allowed', async () => {
+    const made = await create({ key: 'shared-lite', mode: 'docker', driver_id: 3 })
+    await db('nivaro_hub_shared_deployments')
+      .where({ id: made.row.id })
+      .update({ version_pin: '0.3.215' })
+    await placeEnv(made.row.id, 31)
+    const [rec] = await db('nivaro_hub_databases')
+      .insert({
+        engine: 'sqlite',
+        host: '',
+        database_name: 'app.sqlite',
+        status: 'ready',
+        created_by_hub: true
+      })
+      .returning('id')
+    const recId = Number(typeof rec === 'object' ? (rec as { id: number }).id : rec)
+    await db('nivaro_hub_environments')
+      .where({ id: 31 })
+      .update({ db_ref: `hub-db:${recId}` })
+    const grow = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { settings: { size: 'medium' } }
+    })
+    expect(grow.statusCode).toBe(409)
+    expect(grow.json().code).toBe('SQLITE_ONE_PROCESS')
+    expect(grow.json().error).toContain('acme/env31')
+    const small = await app.inject({
+      method: 'PATCH',
+      url: `/api/hub/shared/${made.row.id}`,
+      headers: asAdmin,
+      payload: { settings: { size: 'small' } }
+    })
+    expect(small.statusCode).toBe(200)
+  })
+})
+
 describe('final review M-5: a rotated token no run has applied', () => {
   it('GET warns TOKEN_NOT_APPLIED until a successful run started after the rotation', async () => {
     const made = await create({ key: 'shared-m5', mode: 'docker', driver_id: 3 })

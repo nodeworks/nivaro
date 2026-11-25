@@ -555,6 +555,36 @@ describe('Task 14: the role split is a normal shared upgrade', () => {
       plan: JSON.stringify(plan)
     })
 
+  it('hub gap sqlite: a SQLite app keeps the deployment one process at 0.3.215 or later', async () => {
+    const lite = async (sharedId: number) => {
+      const { envIds } = await newApp(sharedId, [{ key: 'production', placed: true }])
+      const rec = await insertId('nivaro_hub_databases', {
+        engine: 'sqlite',
+        host: '',
+        database_name: 'app.sqlite',
+        status: 'ready',
+        created_by_hub: true
+      })
+      await db('nivaro_hub_environments')
+        .where({ id: envIds[0] })
+        .update({ db_ref: `hub-db:${rec}` })
+    }
+    const medium = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
+    await lite(medium)
+    const split = await Plan.planSharedUpgrade(medium, '0.3.215', 'upgrade', planDeps())
+    expect(codes(split.blockers)).toContain('SQLITE_ONE_PROCESS')
+    const small = await newShared({
+      settings: JSON.stringify({ size: 'small' }),
+      version_pin: '0.3.215'
+    })
+    await lite(small)
+    const back = await Plan.planSharedUpgrade(small, '0.3.214', 'rollback', planDeps())
+    expect(codes(back.blockers)).toContain('SQLITE_SHARED_VERSION')
+    const up = await Plan.planSharedUpgrade(small, '0.3.216', 'upgrade', planDeps())
+    expect(codes(up.blockers)).not.toContain('SQLITE_ONE_PROCESS')
+    expect(codes(up.blockers)).not.toContain('SQLITE_SHARED_VERSION')
+  })
+
   it('the plan lists the services it deploys; a first deploy has nothing to change from', async () => {
     const id = await newShared({ settings: JSON.stringify({ size: 'medium' }) })
     await newApp(id, [{ key: 'production', placed: true }])
@@ -1542,11 +1572,15 @@ describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
     expect(JSON.stringify(plan)).not.toContain('pw-a')
     expect(JSON.stringify(plan)).not.toContain('redis-shared-db')
     // Another database number on the same Redis: nothing shared.
-    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6' })
+    await Run.setSharedSecrets(id, {
+      REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/6'
+    })
     const ok = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(codes(ok.blockers)).not.toContain('REDIS_DB_SHARED')
     // A retired deployment holds nothing.
-    await Run.setSharedSecrets(id, { REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5' })
+    await Run.setSharedSecrets(id, {
+      REDIS_URL: 'redis://:pw-b@redis-shared-db.example.com:6379/5'
+    })
     await db('nivaro_hub_shared_deployments').where({ id: first }).update({ status: 'retired' })
     const retired = await Plan.planSharedUpgrade(id, '0.3.210', 'upgrade', planDeps())
     expect(codes(retired.blockers)).not.toContain('REDIS_DB_SHARED')
@@ -1554,7 +1588,7 @@ describe('one stack, one Redis database (REDIS_DB_SHARED)', () => {
 })
 
 describe('REDIS_DB_SHARED: ports and the Hub itself', () => {
-  it('rediss:// without a port is 6379; the Hub\'s own Redis database counts too', async () => {
+  it("rediss:// without a port is 6379; the Hub's own Redis database counts too", async () => {
     const { config } = await import('../../../config.js')
     const first = await newShared({ settings: JSON.stringify({ redis: 'external' }) })
     await Run.setSharedSecrets(first, { REDIS_URL: 'rediss://:a@tls-redis.example.com/7' })

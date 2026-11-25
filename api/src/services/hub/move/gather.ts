@@ -1103,7 +1103,13 @@ export async function gatherMovePlanInput(
     target,
     names,
     names_taken: names.filter((n) => others.has(n)),
-    database: record ? { id: record.id, ready: record.status === 'ready' } : null,
+    database: record
+      ? {
+          id: record.id,
+          ready: record.status === 'ready',
+          ...(record.engine === 'sqlite' ? { sqlite: true } : {})
+        }
+      : null,
     app_key: {
       known: !!appKey,
       fp: appKey ? keyFingerprint(appKey) : null,

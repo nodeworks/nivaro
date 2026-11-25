@@ -148,6 +148,7 @@ describe('buildMovePlan — one test per blocker', () => {
     ['EXTENSION_NOT_ALLOWED', input({ target_facts: tgt({ extensions: [] }) })],
     ['EXTENSION_VERSION_DIFFERS', input({ target_facts: tgt({ extension_pins: { x: PIN_B } }) })],
     ['NO_DATABASE_RECORD', input({ database: null })],
+    ['SQLITE_MOVE', input({ database: { id: 21, ready: true, sqlite: true } })],
     ['APP_KEY_UNKNOWN', input({ app_key: { known: false, fp: null } })],
     ['APP_KEY_MISMATCH', input({ source: src({ key_fp: 'b'.repeat(32) }) })],
     ['SIGNIN_VIA_HUB', input({ app: { ...input().app, signin_mode: 'hub' } })],
