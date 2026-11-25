@@ -4649,6 +4649,49 @@ export function cbvDerivedTouched(
   }
 }
 
+/**
+ * Takes the plain `$state` include picks (`_in` / `_eq`) out of a condition list and answers
+ * their step keys, or null when there were none. With "Being amended" on they are asked of
+ * the addendum's own pipeline instead of the record's.
+ */
+type StateCond = { path?: unknown; op?: unknown; value?: unknown; or?: unknown }
+
+/**
+ * Each plain `$state` include pick (`_in` / `_eq`) becomes "the record is in one of these
+ * steps OR it has an open addendum in one of them", in place. Excludes and nested paths stay.
+ */
+export function widenStatePicksToAddenda(conds: StateCond[]): void {
+  for (let i = 0; i < conds.length; i++) {
+    const c = conds[i]
+    if (!Array.isArray(c?.path) || c.path.length !== 1 || c.path[0] !== '$state') continue
+    if (c.op !== '_in' && c.op !== '_eq') continue
+    const raw = Array.isArray(c.value) ? c.value : [c.value]
+    const keys = [...new Set(raw.filter((v) => v != null && v !== '').map(String))]
+    if (keys.length === 0) continue
+    conds[i] = {
+      or: [
+        { path: ['$state'], op: '_in', value: keys },
+        { path: ['$addendums'], op: '_eq', value: { status: 'active', state: keys } }
+      ]
+    }
+  }
+}
+
+export function takeStatePicks(conds: StateCond[]): string[] | null {
+  const keys: string[] = []
+  let took = false
+  for (let i = conds.length - 1; i >= 0; i--) {
+    const c = conds[i]
+    if (!Array.isArray(c?.path) || c.path.length !== 1 || c.path[0] !== '$state') continue
+    if (c.op !== '_in' && c.op !== '_eq') continue
+    const vals = Array.isArray(c.value) ? c.value : [c.value]
+    for (const v of vals) if (v != null && v !== '') keys.push(String(v))
+    conds.splice(i, 1)
+    took = true
+  }
+  return took ? [...new Set(keys)] : null
+}
+
 export function CollectionBrowserView({
   collection,
   quickFilters = [],
@@ -5555,8 +5598,22 @@ export function CollectionBrowserView({
         ]
       })
     }
-    // Records being amended: an addendum still in flight (draft/submitted/review).
-    if (addendumsOnly) conds.push({ path: ['$addendums'], op: '_eq', value: 'active' })
+    // Records being amended: an addendum still in flight (draft/submitted/review). The
+    // addendum runs its own pipeline while the record stays put (an amended EFP workflow is
+    // Completed), so with this on a state pick means the ADDENDUM's step: "being amended,
+    // waiting on Level 1 approval" (services/virtual-filters.ts applyAddendumsFilter).
+    if (addendumsOnly) {
+      const addendumSteps = takeStatePicks(conds)
+      conds.push({
+        path: ['$addendums'],
+        op: '_eq',
+        value: addendumSteps ? { status: 'active', state: addendumSteps } : 'active'
+      })
+    } else if (meta?.addendums_enabled) {
+      // Without the switch a step pick means "waiting on this step": the record's own step OR
+      // an open addendum's (an approver filtering on Level 1 wants both, Rob 2026-11-25).
+      widenStatePicksToAddenda(conds as unknown as StateCond[])
+    }
     if (hierarchy.condition) conds.push(hierarchy.condition)
     if (riskFilter.length === 1) conds.push({ path: ['$at_risk'], op: '_eq', value: riskFilter[0] })
     else if (riskFilter.length > 1)
@@ -5572,6 +5629,7 @@ export function CollectionBrowserView({
     linkConds,
     cellExcludes,
     addendumsOnly,
+    meta?.addendums_enabled,
     hierarchy.condition,
     riskFilter
   ])

@@ -160,28 +160,70 @@ export function applyOriginFilter(q: QB, collection: string, f: OriginFilter | n
   else q.whereNotExists(exists)
 }
 
-/** 'active' = an addendum still in flight, 'none' = none in flight, 'any' = ever had one. */
+/**
+ * 'active' = an addendum still in flight, 'none' = none in flight, 'any' = ever had one.
+ *
+ * `{status?: 'active' | 'any', state: [...keys] | {_in: [...]}}` = an addendum (in flight by
+ * default) whose OWN pipeline sits in one of those steps. An addendum runs its own pipeline
+ * (instances on `nivaro_addendums`, item = the addendum id) while the record it amends stays
+ * where it was — on EFP every amended workflow is Completed — so "being amended and waiting on
+ * Level 1 approval" must ask the addendum's step, never the record's (Lindsey Pham, prod
+ * 2026-11-25: the record-state filter answered nothing). An empty or unreadable step list
+ * narrows to nothing.
+ */
 export function applyAddendumsFilter(q: QB, collection: string, rawValue: unknown): void {
   let v: unknown = rawValue
+  let stateKeys: string[] | null = null
   if (v && typeof v === 'object' && !Array.isArray(v)) {
     const o = v as Record<string, unknown>
-    v = o._eq ?? o._in ?? o.value
+    if ('state' in o) {
+      stateKeys = addendumStateKeys(o.state)
+      v = o.status ?? 'active'
+    } else v = o._eq ?? o._in ?? o.value
   }
   const want = String(Array.isArray(v) ? v[0] : (v ?? 'active'))
-  if (!['active', 'none', 'any'].includes(want)) {
+  if (!['active', 'none', 'any'].includes(want) || (stateKeys && want === 'none')) {
+    q.whereRaw('1 = 0')
+    return
+  }
+  if (stateKeys && stateKeys.length === 0) {
     q.whereRaw('1 = 0')
     return
   }
   const activeOnly = want !== 'any'
+  const keys = stateKeys
   const cb = function (this: QB) {
     this.select(db.raw('1'))
       .from('nivaro_addendums as adm')
       .where('adm.parent_collection', collection)
       .whereRaw(`adm.parent_id = ${idText(undefined, '??.??')}`, [collection, 'id'])
     if (activeOnly) this.whereNotIn('adm.status', ['approved', 'rejected'])
+    if (keys)
+      this.whereExists(function (this: QB) {
+        this.select(db.raw('1'))
+          .from('nivaro_workflow_instances as adwi')
+          .join('nivaro_workflow_states as adws', 'adwi.current_state', 'adws.id')
+          .where('adwi.collection', ADDENDUM_INSTANCES)
+          .whereRaw(`adwi.item = ${idText(undefined, '??.??')}`, ['adm', 'id'])
+          .whereIn('adws.key', keys)
+      })
   }
   if (want === 'none') q.whereNotExists(cb)
   else q.whereExists(cb)
+}
+
+/** The pipeline instances of addenda live under this collection (services/pipeline-subject.ts). */
+const ADDENDUM_INSTANCES = 'nivaro_addendums'
+
+/** Step keys from `["a","b"]`, `"a,b"`, `{_in: [...]}` or `{_eq: "a"}`; null parts dropped. */
+export function addendumStateKeys(raw: unknown): string[] {
+  let v: unknown = raw
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const o = v as Record<string, unknown>
+    v = o._in ?? o._eq ?? null
+  }
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : []
+  return [...new Set(list.map((x) => String(x ?? '').trim()).filter((x) => x && x.length <= 120))]
 }
 
 // ── at-risk rules ────────────────────────────────────────────────────────────

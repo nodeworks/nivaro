@@ -4189,13 +4189,25 @@ export async function applyConditions(
       type Branch =
         | { kind: 'path'; plan: NonNullable<PathPlan>; op: string; value: unknown }
         | { kind: 'risk'; rules: Awaited<ReturnType<typeof loadRiskRules>> }
+        | { kind: 'state'; op: string; value: unknown }
+        | { kind: 'addendums'; value: unknown }
       const branches: Branch[] = []
       for (const sub of cond.or) {
         if (!Array.isArray(sub.path) || sub.path.length === 0) continue
-        // `$at_risk` is the one virtual path an OR group understands (the
-        // highlight-rule pills OR their picks); other `$` paths are skipped.
+        // Virtual paths an OR group understands: `$at_risk` (the highlight-rule pills OR their
+        // picks), `$state` and `$addendums` (a step pick on a collection with addenda = "the
+        // record's own step OR an open addendum's", CBV 2026-11-25) — each through the same
+        // compiler as a top-level condition. Other `$` paths are skipped.
         if (sub.path[0] === '$at_risk' && sub.path.length === 1) {
           branches.push({ kind: 'risk', rules: await loadRiskRules(collection, sub.value) })
+          continue
+        }
+        if (sub.path[0] === '$state' && sub.path.length === 1) {
+          branches.push({ kind: 'state', op: sub.op || '_in', value: sub.value })
+          continue
+        }
+        if (sub.path[0] === ADDENDUMS_FIELD && sub.path.length === 1) {
+          branches.push({ kind: 'addendums', value: sub.value })
           continue
         }
         if (sub.path[0].startsWith('$')) continue
@@ -4212,6 +4224,9 @@ export async function applyConditions(
           this.orWhere(function () {
             if (b.kind === 'risk')
               applyRiskRules(this as QB, collection, b.rules, applyRuleConditions)
+            else if (b.kind === 'state')
+              applyStateFilter(this as QB, collection, { [b.op]: b.value })
+            else if (b.kind === 'addendums') applyAddendumsFilter(this as QB, collection, b.value)
             else applyPlannedCondition(this as QB, collection, b.plan, b.op, b.value, gate)
           })
         }
