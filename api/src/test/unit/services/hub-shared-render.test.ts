@@ -7,8 +7,8 @@ import {
   explicitHostsFor,
   patternCovers,
   type RenderSharedInput,
-  renderSharedSpec,
   recordedSharedRoles,
+  renderSharedSpec,
   SharedRenderError,
   sharedRealtimeFits,
   sharedRedisPrefix,
@@ -416,6 +416,17 @@ describe('deployment-wide variables (settings.env)', () => {
     )
     expect(spec.env.CREATE_SCOPE_GUARD).toBe('on')
     expect(spec.env.HUB_SHARED_DEPLOYMENT).toBe('shared-one')
+    expect(agent.validateStackSpec(spec, cfg('traefik')).ok).toBe(true)
+  })
+
+  it('the flow script switch (FLOW_SCRIPTS_ON_SHARED) is off unless saved, and reaches the stack when on', () => {
+    expect(
+      renderSharedSpec(input({ shared: shared({}) })).env.FLOW_SCRIPTS_ON_SHARED
+    ).toBeUndefined()
+    const spec = renderSharedSpec(
+      input({ shared: shared({ settings: { env: { FLOW_SCRIPTS_ON_SHARED: 'on' } } }) })
+    )
+    expect(spec.env.FLOW_SCRIPTS_ON_SHARED).toBe('on')
     expect(agent.validateStackSpec(spec, cfg('traefik')).ok).toBe(true)
   })
 

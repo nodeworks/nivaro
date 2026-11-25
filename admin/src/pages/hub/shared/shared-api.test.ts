@@ -1,7 +1,32 @@
 import { describe, expect, it } from 'vitest'
-import { extensionDrift, holdsLatest, reapplyWords, SHARED_COPY } from './shared-api'
+import {
+  extensionDrift,
+  flowScriptsSetting,
+  holdsLatest,
+  reapplyWords,
+  SHARED_COPY,
+  withFlowScripts
+} from './shared-api'
 
 describe('shared deployment helpers', () => {
+  it('turns the flow script switch on and off in settings.env, keeping every other setting', () => {
+    const base = { size: 'small', env: { CREATE_SCOPE_GUARD: 'on' } }
+    expect(flowScriptsSetting(base)).toBe(false)
+    expect(flowScriptsSetting({})).toBe(false)
+    const on = withFlowScripts(base, true)
+    expect(on).toEqual({
+      size: 'small',
+      env: { CREATE_SCOPE_GUARD: 'on', FLOW_SCRIPTS_ON_SHARED: 'on' }
+    })
+    expect(flowScriptsSetting(on)).toBe(true)
+    expect(withFlowScripts(on, false)).toEqual(base)
+    expect(
+      withFlowScripts({ size: 'small', env: { FLOW_SCRIPTS_ON_SHARED: 'on' } }, false)
+    ).toEqual({
+      size: 'small'
+    })
+  })
+
   it('says whether a replica holds the latest list, or that it cannot tell', () => {
     const s = { instance: 'w', version: null, etag: '"a"', at: '' }
     expect(holdsLatest(s, '"a"')).toBe(true)

@@ -17,6 +17,7 @@ import { chainFields } from './chain-columns.js'
 import { isMultiTenant, isNivaroCloud } from './deployment-mode.js'
 import { callExternalApi } from './external-apis.js'
 import { runIsolatedScript } from './flow-script-isolated.js'
+import { flowScriptsOnShared } from './flow-script-limits.js'
 import { runSandboxedScript } from './flow-script-sandbox.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import {
@@ -175,6 +176,9 @@ async function runCondition(op: FlowOperation, data: FlowData, ctx: ExecutionCon
 export const EXEC_SCRIPT_CLOUD_REFUSAL =
   'Script operations are not available on a cloud instance. Use a Transform, Condition or Item operation instead.'
 
+export const EXEC_SCRIPT_SHARED_OFF_REFUSAL =
+  'Script operations are off on this shared deployment. Its operator can turn them on; until then use a Transform, Condition or Item operation instead.'
+
 /** The exec-script operation (exported for tests). */
 export async function runExecScript(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
   const opts = parseOpts(op)
@@ -185,12 +189,21 @@ export async function runExecScript(op: FlowOperation, data: FlowData, ctx: Exec
 
   // C2 (security audit 2026-10-27): Nivaro Cloud tenants share one process with strangers — no
   // tenant runs code there. A Hub shared deployment runs each script in its own child process
-  // (flow-script-isolated.ts: permission model, empty env, no network, memory/time/slot caps).
+  // (flow-script-isolated.ts: permission model, empty env, no network, memory/time/slot caps), and
+  // only when its operator opted in (FLOW_SCRIPTS_ON_SHARED=on, flow-script-limits.ts).
   if (isNivaroCloud()) {
     ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script refused in cloud mode')
     return {
       status: 'reject' as const,
       output: { ...data, $error: EXEC_SCRIPT_CLOUD_REFUSAL }
+    }
+  }
+  const shared = isMultiTenant()
+  if (shared && !flowScriptsOnShared()) {
+    ctx.log.warn({ flowId: ctx.flowId, key: op.key }, 'exec-script off on this shared deployment')
+    return {
+      status: 'reject' as const,
+      output: { ...data, $error: EXEC_SCRIPT_SHARED_OFF_REFUSAL }
     }
   }
 
@@ -204,7 +217,7 @@ export async function runExecScript(op: FlowOperation, data: FlowData, ctx: Exec
   try {
     // Isolated node:vm context: data + log only, no process/require/timers (flow-script-sandbox);
     // on a shared deployment that context runs in a child process of its own.
-    const run = isMultiTenant() ? runIsolatedScript : runSandboxedScript
+    const run = shared ? runIsolatedScript : runSandboxedScript
     const output = (await run(code, data, scriptLog, timeoutMs)) as FlowData
 
     ctx.log.debug({ flowId: ctx.flowId, key: op.key }, 'Script executed')

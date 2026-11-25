@@ -234,6 +234,12 @@ export interface MoveTargetFacts {
    * a check that failed or could not be opened, or past the pass's 30 s budget).
    */
   identity_unchecked: number
+  /**
+   * A shared target: whether it runs flow script steps (its link status `flow_scripts`, the
+   * operator opt-in FLOW_SCRIPTS_ON_SHARED). Absent / false = off, as on a deployment before
+   * 0.3.215 that does not report it.
+   */
+  flow_scripts?: boolean
 }
 
 export interface MovePlanInput {

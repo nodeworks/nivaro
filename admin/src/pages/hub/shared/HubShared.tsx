@@ -22,9 +22,12 @@ import {
   DEFAULT_POOL_MAX,
   deleteShared,
   extensionDrift,
+  FLOW_SCRIPTS_KEY,
+  FLOW_SCRIPTS_RISK,
   fetchShared,
   fetchSharedList,
   fetchSharedStatus,
+  flowScriptsSetting,
   holdsLatest,
   linkProblem,
   MODE_WORDS,
@@ -44,10 +47,12 @@ import {
   sharedKeys,
   TONE,
   type Tone,
+  updateShared,
   WARNING_COPY,
   WIRE_TONE,
   WIRE_WORDS,
-  warningDetail
+  warningDetail,
+  withFlowScripts
 } from './shared-api'
 
 /**
@@ -444,6 +449,8 @@ function SharedDetailView({
 
       <Warnings notes={warningsOf(d, link.data)} />
 
+      <ScriptsCard row={row} link={link.data} retired={retired} />
+
       <AppsCard detail={d} link={link.data} />
 
       <ReplicasCard detail={d} />
@@ -697,6 +704,116 @@ function LinkCard({
             )}
           </div>
         ) : null}
+        {failure && <ErrorNotice description={failure} />}
+      </div>
+    </SectionCard>
+  )
+}
+
+/**
+ * Flow script steps (hub gap `exec`): an operator opt-in, off by default. A Docker deployment's
+ * switch is saved in its settings (FLOW_SCRIPTS_ON_SHARED in settings.env) and reaches the
+ * processes when the stack is applied again; a registered one is set where it runs. What the
+ * deployment reports now (its link status) is what a move plan reads.
+ */
+function ScriptsCard({
+  row,
+  link,
+  retired
+}: {
+  row: SharedDeployment
+  link: SharedLinkStatus | undefined
+  retired: boolean
+}) {
+  const qc = useQueryClient()
+  const [failure, setFailure] = useState<ErrorDescription | null>(null)
+  const saved = flowScriptsSetting(row.settings)
+  const live = link?.state === 'ok' ? link.flow_scripts === true : null
+  const save = useMutation({
+    mutationFn: (on: boolean) =>
+      updateShared(row.id, { settings: withFlowScripts(row.settings, on) }),
+    onSuccess: (r, on) => {
+      setFailure(null)
+      qc.setQueryData(sharedKeys.detail(row.id), (old: SharedDetail | undefined) =>
+        old ? { ...old, row: r.row } : old
+      )
+      void qc.invalidateQueries({ queryKey: sharedKeys.list() })
+      toast.success(
+        on
+          ? 'Script steps turned on: they run once the stack is applied again'
+          : 'Script steps turned off: they stop once the stack is applied again'
+      )
+    },
+    onError: (e) => setFailure(sharedError(e, 'Could not change the script setting'))
+  })
+  return (
+    <SectionCard
+      title='Flow script steps'
+      description='Off by default. When on, each script step of a flow runs in a sandbox process of its own.'
+    >
+      <div className='space-y-2 px-4 py-3 text-[12px] text-slate-700 dark:text-slate-300'>
+        <p className='m-0 flex items-start gap-1.5 text-amber-800 dark:text-amber-300'>
+          <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden />
+          {FLOW_SCRIPTS_RISK}
+        </p>
+        <p className='m-0 flex flex-wrap items-center gap-2'>
+          <span>On the deployment now:</span>
+          {live === null ? (
+            <Chip
+              tone='quiet'
+              tip='The deployment did not answer, or runs a version before 0.3.215.'
+            >
+              Unknown
+            </Chip>
+          ) : (
+            <Chip tone={live ? 'busy' : 'quiet'}>{live ? 'On' : 'Off'}</Chip>
+          )}
+          {row.mode === 'docker' && (
+            <>
+              <span className='text-slate-500 dark:text-muted-foreground'>· saved setting:</span>
+              <Chip tone={saved ? 'busy' : 'quiet'}>{saved ? 'On' : 'Off'}</Chip>
+            </>
+          )}
+        </p>
+        {row.mode === 'docker' ? (
+          !retired && (
+            <div className='flex flex-wrap items-center gap-2'>
+              {saved ? (
+                <button
+                  type='button'
+                  className={ghostButton}
+                  disabled={save.isPending}
+                  onClick={() => save.mutate(false)}
+                >
+                  Turn off
+                </button>
+              ) : (
+                <ConfirmButton
+                  onConfirm={() => save.mutate(true)}
+                  title='Turn on script steps'
+                  confirmLabel='Every app here is trusted: turn on?'
+                  disabled={save.isPending}
+                  className={ghostButton}
+                  armedClassName={cn(ghostButton, dangerArmed)}
+                >
+                  Turn on
+                </ConfirmButton>
+              )}
+              {saved !== (live ?? saved) && (
+                <span className='text-slate-500 dark:text-muted-foreground'>
+                  The saved setting reaches the processes when the stack is applied again (the next
+                  upgrade, or an upgrade to the version it runs).
+                </span>
+              )}
+            </div>
+          )
+        ) : (
+          <p className='m-0 text-slate-500 dark:text-muted-foreground'>
+            Whoever runs this deployment sets{' '}
+            <span className='font-mono'>{FLOW_SCRIPTS_KEY}=on</span> on every process of it to turn
+            them on.
+          </p>
+        )}
         {failure && <ErrorNotice description={failure} />}
       </div>
     </SectionCard>

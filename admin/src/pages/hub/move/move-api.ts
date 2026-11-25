@@ -842,7 +842,7 @@ export const MOVE_BLOCKER_COPY: Record<string, Copy> = {
   },
   EXEC_SCRIPT_FLOWS: {
     title: 'Some of the app’s flows run scripts',
-    hint: 'This shared deployment runs a version before 0.3.215, or one the Hub cannot read, which does not run flow scripts. Upgrade it (and the app) to 0.3.215 or later, or change or turn off those flows first.'
+    hint: 'This shared deployment does not run flow scripts: it runs a version before 0.3.215 (or one the Hub cannot read), or its operator has not turned script steps on (off by default; Shared deployments → the deployment → Flow script steps). Upgrade it (and the app) to 0.3.215 or later and turn script steps on there if every app on it is trusted, or change or turn off those flows first.'
   },
   SQLITE: {
     title: 'The app runs on SQLite',

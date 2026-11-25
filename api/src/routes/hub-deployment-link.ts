@@ -3,6 +3,7 @@ import { config } from '../config.js'
 import { getTenantDb, withTenant } from '../db/tenant-context.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, tenantSource } from '../services/deployment-mode.js'
+import { flowScriptsOnShared } from '../services/flow-script-limits.js'
 import { seedFirstAdmin } from '../services/hub-link/first-admin.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { poolCounters } from '../services/pool-attribution.js'
@@ -144,6 +145,7 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
       apps: tenants.map((t) => ({ id: t.id, schema: appSchemaFor(t.id) })),
       extensions,
       oidc: oidcIdentity(config.OIDC_ISSUER),
+      flow_scripts: flowScriptsOnShared(),
       process: {
         uptime_s: Math.round(process.uptime()),
         memory_mb: Math.round(process.memoryUsage().rss / 1048576),

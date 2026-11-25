@@ -112,6 +112,8 @@ export type SharedLinkStatus =
       extensions: string[]
       oidc: { issuer_host: string; tenant: string | null } | null
       process: Record<string, unknown>
+      /** Runs flow script steps (FLOW_SCRIPTS_ON_SHARED); absent before 0.3.215 (= off). */
+      flow_scripts?: boolean
     }
   | { state: 'unreachable'; code: string; message: string; checked_at: string }
 
@@ -147,6 +149,42 @@ export interface SharedInput {
   settings?: Record<string, unknown>
   /** Write-only (Task 5): the external Redis address. Never read back. */
   secrets?: { REDIS_URL: string | null }
+}
+
+/**
+ * Flow script steps on a shared deployment: an operator opt-in, off by default. The process
+ * reads FLOW_SCRIPTS_ON_SHARED; on a Docker deployment the Hub sets it from `settings.env`.
+ */
+export const FLOW_SCRIPTS_KEY = 'FLOW_SCRIPTS_ON_SHARED'
+
+export const FLOW_SCRIPTS_RISK =
+  'Scripts run without network access enforced by the operating system; turn on only when every app on this deployment is trusted.'
+
+const envOf = (settings: Record<string, unknown>): Record<string, unknown> => {
+  const env = settings?.env
+  return env && typeof env === 'object' && !Array.isArray(env)
+    ? (env as Record<string, unknown>)
+    : {}
+}
+
+/** The switch as the Hub stores it (a Docker deployment's settings.env). */
+export function flowScriptsSetting(settings: Record<string, unknown>): boolean {
+  const v = String(envOf(settings)[FLOW_SCRIPTS_KEY] ?? '')
+    .trim()
+    .toLowerCase()
+  return v === 'on' || v === 'true' || v === '1'
+}
+
+/** The settings to save to turn the switch on or off (every other setting kept). */
+export function withFlowScripts(
+  settings: Record<string, unknown>,
+  on: boolean
+): Record<string, unknown> {
+  const env = { ...envOf(settings) }
+  if (on) env[FLOW_SCRIPTS_KEY] = 'on'
+  else delete env[FLOW_SCRIPTS_KEY]
+  const { env: _old, ...rest } = settings ?? {}
+  return Object.keys(env).length ? { ...rest, env } : rest
 }
 
 /** Whether the deployment has an external Redis address stored (GET shows only that). */

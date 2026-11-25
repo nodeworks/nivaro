@@ -15,7 +15,9 @@ import { currentTenantKey } from './tenant-rooms.js'
 /**
  * The flow `exec-script` operation on a Hub shared deployment (hub gap `exec`): one process
  * serves many apps there, so a script step runs in its OWN short-lived child process, never in
- * the shared one. Each run:
+ * the shared one — and only when the operator turned script steps on for the deployment
+ * (FLOW_SCRIPTS_ON_SHARED, off by default; flow-script-limits.ts flowScriptsOnShared, checked by
+ * flow-executor.ts). Each run:
  *
  *  - starts a fresh `node` (process.execPath, no native module, works on the slim image) with
  *    the permission model on (`--permission`, OS/C++ level): no file read or write, no child

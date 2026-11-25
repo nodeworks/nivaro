@@ -162,7 +162,11 @@ function report(o: Record<string, unknown> = {}) {
 }
 
 function fakeClient(
-  o: { identityOf?: (connection: string) => string | null; fail?: boolean } = {}
+  o: {
+    identityOf?: (connection: string) => string | null
+    fail?: boolean
+    flowScripts?: boolean
+  } = {}
 ) {
   const dbChecks: string[] = []
   return {
@@ -177,7 +181,8 @@ function fakeClient(
           apps: [],
           extensions: ['x'],
           oidc: { issuer_host: 'login.microsoftonline.com', tenant: 'corp' },
-          process: {}
+          process: {},
+          ...(o.flowScripts === undefined ? {} : { flow_scripts: o.flowScripts })
         }
       }),
       appStatus: vi.fn(async (id: string) => ({
@@ -319,6 +324,21 @@ describe('checkMoveTarget', () => {
 })
 
 describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
+  it("reads the target's script-step switch from its link status (on and off)", async () => {
+    for (const on of [true, false]) {
+      const sharedId = await newShared()
+      const dbId = await newDb()
+      const placement = await dockerPlacement(`scripts-${on}`)
+      const e = await newEnv({ placement_id: placement, db_ref: `hub-db:${dbId}` })
+      const input = await Gather.gatherMovePlanInput(
+        e.id,
+        { kind: 'shared', shared_id: sharedId, pool_max: 4 },
+        deps({ client: fakeClient({ flowScripts: on }).factory })
+      )
+      expect(input.target_facts.flow_scripts).toBe(on)
+    }
+  })
+
   it('gathers both sides and the plan has only the readiness blocker', async () => {
     const sharedId = await newShared()
     const dbId = await newDb()
@@ -344,7 +364,9 @@ describe('gatherMovePlanInput — to_shared from a Docker stack', () => {
       reachable: true,
       version: '0.3.210',
       pool: { used: 0, budget: 60, asked: 4 },
-      db: { reachable: true, identity: IDENTITY }
+      db: { reachable: true, identity: IDENTITY },
+      // A status without the field (a deployment before 0.3.215) reads as scripts off.
+      flow_scripts: false
     })
     expect(d.readiness).toHaveBeenCalledWith(expect.anything(), HUB_TOKEN)
 

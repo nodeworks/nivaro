@@ -430,7 +430,10 @@ function blockersOf(input: MovePlanInput, routing: 'automatic' | 'manual'): Bloc
   if (kind === 'to_shared')
     for (const r of readinessFor(input))
       if (isReadinessBlocker(r.code, input))
-        add(r.code, `${readinessTitle(r.code)}: ${clean(r.detail)}`)
+        add(
+          r.code,
+          `${r.code === 'EXEC_SCRIPT_FLOWS' ? execScriptBlockerTitle(input) : readinessTitle(r.code)}: ${clean(r.detail)}`
+        )
 
   return out
 }
@@ -456,17 +459,30 @@ const PER_APP_SINCE_SHARED_FEATURES: readonly SharedReadinessCode[] = [
 const OLDER_TARGET_BLOCKERS: readonly SharedReadinessCode[] = ['STAGED_IMPORTS', 'ROW_SCHEDULES']
 
 /**
- * Hub gap `exec`: from this version a shared deployment runs flow script steps per app, each in a
- * child process of its own (services/flow-script-isolated.ts). An app before it reports
- * EXEC_SCRIPT_FLOWS as a blocker, one from it as a warning; either way it blocks only a target
- * before this version, and is a warning (the script limits) on one from it.
+ * Hub gap `exec`: from this version a shared deployment can run flow script steps per app, each in
+ * a child process of its own (services/flow-script-isolated.ts) — but only when its operator turned
+ * them on (FLOW_SCRIPTS_ON_SHARED, off by default: Node 22 cannot cut the network at the OS level).
+ * An app before it reports EXEC_SCRIPT_FLOWS as a blocker, one from it as a warning; either way it
+ * blocks unless the target runs this version AND reports script steps on (its link status
+ * `flow_scripts`), and is a warning (the script limits) when both hold.
  */
 export const EXEC_SCRIPT_SINCE = '0.3.215'
 
+const targetRunsScripts = (input: MovePlanInput) =>
+  targetRunsSince(input.target_facts.version, EXEC_SCRIPT_SINCE) &&
+  input.target_facts.flow_scripts === true
+
 const isReadinessBlocker = (code: SharedReadinessCode, input: MovePlanInput) =>
   code === 'EXEC_SCRIPT_FLOWS'
-    ? !targetRunsSince(input.target_facts.version, EXEC_SCRIPT_SINCE)
+    ? !targetRunsScripts(input)
     : SHARED_READINESS_BLOCKERS.includes(code) || OLDER_TARGET_BLOCKERS.includes(code)
+
+/** EXEC_SCRIPT_FLOWS as a blocker: an older target, or one whose operator left scripts off. */
+function execScriptBlockerTitle(input: MovePlanInput): string {
+  return targetRunsSince(input.target_facts.version, EXEC_SCRIPT_SINCE)
+    ? 'Flows that run scripts are off on this shared deployment: its operator has not turned script steps on (FLOW_SCRIPTS_ON_SHARED)'
+    : readinessTitle('EXEC_SCRIPT_FLOWS')
+}
 
 /**
  * The target runs SHARED_FEATURES_SINCE or later. A version the Hub cannot read (none, not

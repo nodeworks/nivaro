@@ -203,6 +203,26 @@ describe('GET /status', () => {
     expect(res.body).not.toContain('Pa55word')
     expect(res.body).not.toContain(KEY_A)
   })
+
+  it('reports whether it runs flow script steps: off by default, on with FLOW_SCRIPTS_ON_SHARED=on', async () => {
+    const before = process.env.FLOW_SCRIPTS_ON_SHARED
+    try {
+      const a = await build()
+      delete process.env.FLOW_SCRIPTS_ON_SHARED
+      const off = await a.inject({
+        method: 'GET',
+        url: '/api/hub-deployment/status',
+        headers: auth
+      })
+      expect(off.json().flow_scripts).toBe(false)
+      process.env.FLOW_SCRIPTS_ON_SHARED = 'on'
+      const on = await a.inject({ method: 'GET', url: '/api/hub-deployment/status', headers: auth })
+      expect(on.json().flow_scripts).toBe(true)
+    } finally {
+      if (before === undefined) delete process.env.FLOW_SCRIPTS_ON_SHARED
+      else process.env.FLOW_SCRIPTS_ON_SHARED = before
+    }
+  })
 })
 
 describe('GET /apps/:id/status', () => {

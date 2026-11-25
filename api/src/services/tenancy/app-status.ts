@@ -64,6 +64,9 @@ export interface DeploymentStatus {
   extensions: string[]
   oidc: { issuer_host: string; tenant: string | null } | null
   process: Record<string, unknown>
+  /** Whether this deployment runs flow script steps (FLOW_SCRIPTS_ON_SHARED, an operator opt-in).
+   *  Absent on a deployment before 0.3.215: read as off. */
+  flow_scripts?: boolean
 }
 
 /** How long one app's preflight run is reused, and how long a status call waits for each part
