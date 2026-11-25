@@ -17,6 +17,7 @@ import { runPreflight } from './preflight.js'
  *
  *   GET /api/hub-link/status → { version, environment, instance,
  *                                preflight: { status, failing }, readiness_score,
+ *                                open_issues (0.3.215+: issue-log rows open or in progress),
  *                                maintenance, retired,
  *                                process: { uptime_s, memory_mb, pool } }
  *
@@ -117,6 +118,22 @@ async function readinessScore(): Promise<number | null> {
   }
 }
 
+/** Open + in-progress issue-log rows (a count only, never a title); null past the bound or on
+ *  a read error. The Hub's fleet page shows it (services/hub/fleet). */
+async function openIssueCount(): Promise<number | null> {
+  try {
+    const { db } = await import('../db/index.js')
+    const read = db('nivaro_issues')
+      .whereIn('status', ['open', 'in_progress'])
+      .count<Array<{ n: number | string }>>({ n: '*' })
+      .then((rows) => Number(rows[0]?.n ?? 0))
+    const n = await bounded(read, boundMs)
+    return n === TIMED_OUT || !Number.isFinite(n) ? null : n
+  } catch {
+    return null
+  }
+}
+
 function poolFigures(): { used: number; free: number; pending: number } | null {
   try {
     const p = poolCounters('main')
@@ -173,10 +190,11 @@ export async function hubLinkRoutes(app: FastifyInstance) {
   })
 
   app.get('/status', async (_req, reply) => {
-    const [preflight, readiness_score, maintenance] = await Promise.all([
+    const [preflight, readiness_score, maintenance, open_issues] = await Promise.all([
       preflightSummary(app),
       readinessScore(),
-      maintenanceOn()
+      maintenanceOn(),
+      openIssueCount()
     ])
     reply.header('Cache-Control', 'no-store')
     return reply.send({
@@ -185,6 +203,7 @@ export async function hubLinkRoutes(app: FastifyInstance) {
       instance: instanceKey(),
       preflight,
       readiness_score,
+      open_issues,
       // Hub phase 6: whether the maintenance freeze is on here (null = could not be read), and
       // whether this app is retired (moved away; ruling B9: a move back checks it is false).
       maintenance,

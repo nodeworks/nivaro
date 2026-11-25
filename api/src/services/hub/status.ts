@@ -34,6 +34,10 @@ export interface HubEnvStatus {
   error?: string
   /** Ids of the app's failing preflight checks (hub link only; absent when none). */
   failing?: string[]
+  /** Hub link only: the app's cached readiness score (0–100); absent when it gave none. */
+  readiness_score?: number
+  /** Hub link only: the app's open issue count (apps from 0.3.215); absent when it gave none. */
+  open_issues?: number
 }
 
 /** The fields of a nivaro_hub_environments row the status read needs. */
@@ -111,6 +115,11 @@ function failingIds(raw: unknown): string[] {
     .map((v) => v.trim())
     .filter((v) => v.length > 0 && v.length <= FAILING_ID_MAX)
     .slice(0, FAILING_MAX)
+}
+
+/** A whole number 0..max from an app's answer, else undefined (never trusts other shapes). */
+function countOf(v: unknown, max: number): number | undefined {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= max ? v : undefined
 }
 
 function baseOf(raw: string): string | null {
@@ -192,16 +201,25 @@ async function readLinked(
   const body = (res.body ?? {}) as {
     version?: unknown
     preflight?: { status?: unknown; failing?: unknown }
+    readiness_score?: unknown
+    open_issues?: unknown
   }
   const preflight = str(body.preflight?.status)
   const failing = failingIds(body.preflight?.failing)
+  const score =
+    typeof body.readiness_score === 'number'
+      ? countOf(Math.round(body.readiness_score), 100)
+      : undefined
+  const issues = countOf(body.open_issues, 1_000_000)
   return {
     state: preflight === 'ok' || preflight === 'warn' ? 'ok' : 'degraded',
     version: str(body.version),
     preflight,
     checked_at: at(),
     source: 'hub-link',
-    ...(failing.length ? { failing } : {})
+    ...(failing.length ? { failing } : {}),
+    ...(score !== undefined ? { readiness_score: score } : {}),
+    ...(issues !== undefined ? { open_issues: issues } : {})
   }
 }
 
