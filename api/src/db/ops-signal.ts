@@ -20,6 +20,7 @@ export type OpsWriteTopic =
   | 'dead-letters'
   | 'mail-log'
   | 'trackers'
+  | 'hub'
 
 const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }> = [
   { re: /\bnivaro_issues\b/i, topics: ['issues'] },
@@ -46,7 +47,16 @@ const RULES: Array<{ re: RegExp; topics: OpsWriteTopic[]; updateOnly?: boolean }
   { re: /\bnivaro_mail_log\b/i, topics: ['mail-log'] },
   // GitLab issue links (rt-fix C, M4): the state a tracker chip shows. The outbox is left out on
   // purpose — its cron rewrites rows every minute and a pending create polls on its own.
-  { re: /\bnivaro_tracker_(?:links|link_members)\b/i, topics: ['trackers'] }
+  { re: /\bnivaro_tracker_(?:links|link_members)\b/i, topics: ['trackers'] },
+  // Nivaro Hub (2026-11-25): any Hub table — apps, environments, deploys and their heartbeats,
+  // creations, moves, stacks, fleet status, incidents… — so every open Hub page re-reads instead
+  // of waiting for its poll (the fleet strip showed "0 up" for a minute after a restart). The
+  // raw sample tables are left out: written every minute per environment, nothing shows them
+  // as they land (the fleet status row they feed is listed).
+  {
+    re: /\bnivaro_hub_(?!uptime_samples\b|uptime_hours\b|capacity_samples\b|usage_days\b|usage_screens\b)[a-z0-9_]+\b/i,
+    topics: ['hub']
+  }
 ]
 
 const WRITE_RE = /^\s*(insert|update|delete|merge)\b/i

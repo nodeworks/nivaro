@@ -130,6 +130,7 @@ import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
 import { HubFleetStrip } from '@/components/hub-brand/HubFleetStrip'
 import { HubTopBar } from '@/components/hub-brand/HubTopBar'
+import { useHubLive } from '@/components/hub-brand/use-hub-live'
 import { NOTIF_ROUTES, NotificationBell } from '@/components/notification-bell'
 import { KeyboardShortcuts } from '@/components/shortcuts-overlay'
 import { TeamChatDock } from '@/components/team-chat'
@@ -402,6 +403,9 @@ export function AppLayout() {
   }, [authUser])
 
   const location = useLocation()
+  // Hub pages re-read on every Hub write (the `hub` ops topic); the standalone Hub's fleet strip
+  // shows on every page, so there it is always on.
+  useHubLive(hubProduct || location.pathname.startsWith('/hub'))
   // A popped-out record (#2131) is the record page alone — no navigation chrome.
   const [popout] = useState(isRecordPopout)
   // Real-user monitoring: one 'load' event per page load, one 'route' event

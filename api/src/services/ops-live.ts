@@ -39,6 +39,7 @@ export type OpsTopic =
   | 'submissions'
   | 'mail-log'
   | 'trackers'
+  | 'hub'
 
 /**
  * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
@@ -78,7 +79,11 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   // rt-fix C (M4 / admin #10): a GitLab issue link changed state (closed, reopened, relabelled,
   // linked, unlinked). Pokes only: every chip re-reads GET /trackers/links/for, which judges the
   // source as the viewer. Sign-in only — the poke names nothing.
-  trackers: 'auth'
+  trackers: 'auth',
+  // Nivaro Hub (2026-11-25): a Hub table was written. Pokes only — every Hub page re-reads
+  // through its own route, which judges admins vs app owners. Sign-in only: the poke names
+  // no app, environment or person.
+  hub: 'auth'
 }
 
 /**
