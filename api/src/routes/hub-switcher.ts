@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
+import { tenantOrigin } from '../db/tenant-context.js'
 import { requireAuth } from '../middleware/authenticate.js'
-import { hubLinkToken, hubUrl } from '../services/hub/mode.js'
+import { tenantSource } from '../services/deployment-mode.js'
+import { appHubLink } from '../services/hub/mode.js'
 import { hubSigninConfig, hubSigninProblems } from '../services/hub-signin/config.js'
 import { fetchSwitcher, type LinkDeps } from '../services/hub-signin/link-client.js'
 import { hubProbeReason, hubSigninUp } from '../services/hub-signin/probe.js'
@@ -12,19 +14,20 @@ import { registerReadinessCheck } from '../services/readiness.js'
  *   GET /api/hub-switcher   (signed in) → { data: { apps, unavailable } }
  *
  * The other apps this person uses through the Hub (services/hub-signin/link-client.ts). 404 unless
- * HUB_URL and HUB_TOKEN are set (feature `hub_switcher` in /api/app-info; never on a
- * multi-tenant deployment).
+ * the app has a Hub link (appHubLink: HUB_URL + HUB_TOKEN on a dedicated app; on a Hub shared
+ * deployment the app's own token from the Hub's tenant list; never in Nivaro Cloud) — feature
+ * `hub_switcher` in /api/app-info.
  * Only a person on their own browser session gets a list: View-as, API keys, OAuth/MCP, phone
  * and static-token callers get `{ apps: [], unavailable: false }` and the Hub is never asked.
  *
  * Also registers the readiness check `hub-signin` (group Sign-in): passes with no Hub sign-in env
  * set, warns naming what is missing, when the Hub does not answer (with the Hub's reason) or when
- * ADMIN_URL / PUBLIC_URL is an origin the Hub has not registered; never fails (people can always
- * sign in directly with Microsoft).
+ * ADMIN_URL / PUBLIC_URL (on a Hub shared deployment: the app's own origin) is an origin the Hub
+ * has not registered; never fails (people can always sign in directly with Microsoft).
  */
 
 export function hubSwitcherEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !!hubUrl(env) && !!hubLinkToken(env)
+  return appHubLink(env) !== null
 }
 
 /** An Entra v1 issuer (https://sts.windows.net/<tenant>/): its tokens differ from v2.0 ones. */
@@ -36,8 +39,13 @@ function entraV1Issuer(raw: string | undefined): boolean {
   }
 }
 
-/** The app origins people sign in on (ADMIN_URL, PUBLIC_URL), each once. */
+/** The app origins people sign in on (ADMIN_URL, PUBLIC_URL), each once. On a Hub shared
+ *  deployment those are the deployment's: the app's own origin is probed instead. */
 function appOrigins(env: NodeJS.ProcessEnv): string[] {
+  if (tenantSource(env) === 'hub') {
+    const own = tenantOrigin()
+    return own ? [own] : []
+  }
   const out: string[] = []
   for (const raw of [env.ADMIN_URL, env.PUBLIC_URL]) {
     try {

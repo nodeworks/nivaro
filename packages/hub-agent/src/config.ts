@@ -9,6 +9,7 @@
 import { createHash } from 'node:crypto'
 import { parsePinned } from './image-ref.js'
 import { operatorPrefixConflict } from './spec.js'
+import { isNfsOpts, nfsExport, PIN_LABEL_PART_RE, redisVolumeDefault } from './volumes.js'
 
 export class ConfigError extends Error {
   readonly code: string
@@ -42,8 +43,27 @@ export type AgentConfig = {
   publishPorts: [number, number] | null
   /** `<repo>[:<tag>]@sha256:<64 hex>` or null (bundled Redis not offered). */
   redisImage: string | null
+  /** The uploads volumes' driver and options. An NFS `device` here is the export ROOT (0.2.3). */
   volumeDriver: string
   volumeOpts: Record<string, string>
+  /**
+   * HUB_AGENT_REDIS_VOLUME_DRIVER / _OPTS_FILE (0.2.3): bundled Redis's volume. Default: the
+   * uploads driver and options, except `local` with none when those mount NFS (Redis never on
+   * NFS). NFS options are refused here (REDIS_VOLUME_OPTS_BAD).
+   */
+  redisVolumeDriver: string
+  redisVolumeOpts: Record<string, string>
+  /**
+   * HUB_AGENT_VOLUME_EXPORT_MOUNT (0.2.3): where the agent's own container sees the NFS export
+   * root, so it can check (and make) each stack's folder before a deploy. null = not mounted:
+   * a stack on the export is refused (EXPORT_MOUNT_MISSING) rather than deployed blind.
+   */
+  exportMount: string | null
+  /**
+   * HUB_AGENT_REDIS_PIN_LABEL (0.2.3, `key=value`): bundled Redis runs only on nodes carrying
+   * that node label. null = not pinned (default).
+   */
+  redisPinLabel: { key: string; value: string } | null
   extensionsRoot: string
   extensionsHostRoot: string
   extensionsShared: boolean
@@ -180,6 +200,30 @@ export function volumeOptsSafe(opts: Record<string, unknown>): boolean {
 }
 
 /**
+ * NFS options naming the server in the device (`nas01:/volume1`, the `mount -t nfs` form) become
+ * Docker's form: `device: ":/volume1"` with `addr=nas01` in `o` (0.2.3). An `addr=` in `o` that
+ * names another host is ambiguous: VOLUME_OPTS_BAD. Other options are returned as they are.
+ */
+export function normaliseNfsDevice(opts: Record<string, string>): Record<string, string> {
+  if (!isNfsOpts(opts) || typeof opts.device !== 'string') return opts
+  const m = /^([A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\]):(\/.*)$/.exec(opts.device)
+  if (!m) return opts
+  const host = m[1].replace(/^\[|\]$/g, '')
+  const parts = String(opts.o ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)
+  const addr = parts.find((x) => /^addr=/i.test(x))
+  if (addr && addr.slice(5).toLowerCase() !== host.toLowerCase())
+    throw new ConfigError('VOLUME_OPTS_BAD')
+  return {
+    ...opts,
+    o: addr ? parts.join(',') : [`addr=${host}`, ...parts].join(','),
+    device: `:${m[2]}`
+  }
+}
+
+/**
  * HUB_AGENT_CA_BUNDLE_FILE: read once, ≤ CA_BUNDLE_MAX_BYTES, at least one whole CERTIFICATE
  * block and no private key. Anything else is CA_BUNDLE_BAD (code only, never the contents).
  */
@@ -282,8 +326,54 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     if (!isPlainObject(optsRaw) || Object.values(optsRaw).some((v) => typeof v !== 'string')) {
       throw new ConfigError('VOLUME_OPTS_BAD')
     }
-    volumeOpts = optsRaw as Record<string, string>
+    volumeOpts = normaliseNfsDevice(optsRaw as Record<string, string>)
     if (!volumeOptsSafe(volumeOpts)) throw new ConfigError('VOLUME_OPTS_BAD')
+    // NFS through Docker's local driver needs `device: ":/<export>"` (0.2.3): without one every
+    // stack would share whatever the mount lands on, so it is refused, not guessed.
+    if (volumeDriver === 'local' && isNfsOpts(volumeOpts) && nfsExport({ volumeOpts }) === null)
+      throw new ConfigError('VOLUME_OPTS_BAD')
+  }
+
+  // Bundled Redis (0.2.3): its own driver and options, never NFS.
+  let redis = redisVolumeDefault(volumeDriver, volumeOpts)
+  const redisDriverRaw = env.HUB_AGENT_REDIS_VOLUME_DRIVER?.trim()
+  const redisOptsRaw = readJson(
+    readFile,
+    env.HUB_AGENT_REDIS_VOLUME_OPTS_FILE,
+    'REDIS_VOLUME_OPTS_BAD'
+  )
+  if (redisDriverRaw || redisOptsRaw !== undefined) {
+    let opts: Record<string, string> = {}
+    if (redisOptsRaw !== undefined) {
+      if (
+        !isPlainObject(redisOptsRaw) ||
+        Object.values(redisOptsRaw).some((v) => typeof v !== 'string')
+      ) {
+        throw new ConfigError('REDIS_VOLUME_OPTS_BAD')
+      }
+      opts = redisOptsRaw as Record<string, string>
+    }
+    if (!volumeOptsSafe(opts) || isNfsOpts(opts)) throw new ConfigError('REDIS_VOLUME_OPTS_BAD')
+    redis = { driver: redisDriverRaw || 'local', opts }
+  }
+
+  // The export root as the agent sees it: only with an NFS export, absolute, no `..`.
+  const exportMountRaw = env.HUB_AGENT_VOLUME_EXPORT_MOUNT?.trim() || null
+  if (exportMountRaw !== null) {
+    if (!extensionRootOk(exportMountRaw)) throw new ConfigError('VOLUME_EXPORT_MOUNT_BAD')
+    if (nfsExport({ volumeOpts }) === null) throw new ConfigError('VOLUME_EXPORT_MOUNT_BAD')
+  }
+  const exportMount = exportMountRaw ? exportMountRaw.replace(/\/+$/, '') : null
+
+  let redisPinLabel: AgentConfig['redisPinLabel'] = null
+  const pinRaw = env.HUB_AGENT_REDIS_PIN_LABEL?.trim()
+  if (pinRaw) {
+    const eq = pinRaw.indexOf('=')
+    const key = eq > 0 ? pinRaw.slice(0, eq) : ''
+    const value = eq > 0 ? pinRaw.slice(eq + 1) : ''
+    if (!PIN_LABEL_PART_RE.test(key) || !PIN_LABEL_PART_RE.test(value))
+      throw new ConfigError('REDIS_PIN_LABEL_BAD')
+    redisPinLabel = { key, value }
   }
 
   const extensionsRoot = env.HUB_AGENT_EXTENSIONS_ROOT?.trim() || DEFAULT_EXTENSIONS_ROOT
@@ -330,6 +420,10 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     redisImage,
     volumeDriver,
     volumeOpts,
+    redisVolumeDriver: redis.driver,
+    redisVolumeOpts: redis.opts,
+    exportMount,
+    redisPinLabel,
     extensionsRoot,
     extensionsHostRoot,
     extensionsShared,

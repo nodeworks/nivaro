@@ -25,7 +25,10 @@ const { stepTemplate, TEMPLATE_STARTS, templateRefusalText } = await import(
   '../../../services/hub/create/template-step.js'
 )
 const { STEPS } = await import('../../../services/hub/create/steps.js')
-const { STEP_ORDER } = await import('../../../services/hub/create/types.js')
+const { DOCKER_STEP_ORDER, SHARED_STEP_ORDER, STEP_ORDER } = await import(
+  '../../../services/hub/create/types.js'
+)
+const { destSteps } = await import('../../../services/hub/create/docker-steps.js')
 
 const readRow = vi.mocked(choice.readTemplateInstall)
 const setRow = vi.mocked(choice.setTemplateInstall)
@@ -78,6 +81,11 @@ describe('Template step', () => {
     expect(STEP_ORDER.at(-1)).toBe('template')
     expect(STEP_ORDER.indexOf('admin')).toBe(STEP_ORDER.length - 2)
     expect(STEPS.template).toBe(stepTemplate)
+    // Docker creations too (after their admin step); a shared creation has no app of its own.
+    expect(DOCKER_STEP_ORDER.at(-1)).toBe('template')
+    expect(DOCKER_STEP_ORDER.at(-2)).toBe('admin')
+    expect(destSteps().template).toBe(stepTemplate)
+    expect(SHARED_STEP_ORDER).not.toContain('template')
   })
 
   it('no template picked → done at once; a done row stays done (no call)', async () => {

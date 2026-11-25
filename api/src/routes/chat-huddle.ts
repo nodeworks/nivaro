@@ -79,6 +79,8 @@ export async function chatHuddleRoutes(app: FastifyInstance) {
   app.post('/settings/turn-health/run', { preHandler: requireAdmin }, async (_req, reply) => {
     // Cloud mode: only the platform's servers are ever dialled; none set = nothing to probe.
     if (!iceProbeAllowed()) return reply.code(404).send({ error: 'Not found' })
+    // A shared deployment dials an app's servers only through the checked, pinned resolver
+    // (huddle-destinations.ts guardedIceLookup); a refused address is that url's failed result.
     const r = await runHuddleProbe({ redis: app.redis as unknown as ProbeRedis })
     return reply.send({
       data: r.skipped ? { skipped: true } : { skipped: false, sample: r.sample }

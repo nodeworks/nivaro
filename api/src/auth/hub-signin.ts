@@ -78,8 +78,11 @@ export class HubSigninError extends Error {
 const AVAILABILITY_ERRORS = new Set(['server_error', 'temporarily_unavailable'])
 
 // ─── Discovery (5 min per issuer + client) ───────────────────────────────────
+// Keyed by issuer + client id + a tag of the secret: on a Hub shared deployment every app has its
+// own client, so each app has its own entry (and a rotated secret a new one).
 
 const DISCOVERY_TTL_MS = 5 * 60_000
+const DISCOVERY_MAX = 512
 /** openid-client's per-request budget for discovery and the token exchange (seconds). */
 const HUB_REQUEST_TIMEOUT_S = 5
 let hubRequestTimeoutS = HUB_REQUEST_TIMEOUT_S
@@ -109,6 +112,7 @@ async function hubDiscovery(cfg: HubSigninConfig): Promise<oidc.Configuration> {
   if (!jwks || new URL(jwks).origin !== cfg.hubUrl) {
     throw new Error('The Hub discovery document names keys on another origin.')
   }
+  if (discoveries.size >= DISCOVERY_MAX && !discoveries.has(key)) discoveries.clear()
   discoveries.set(key, { at: Date.now(), conf })
   return conf
 }
@@ -328,6 +332,12 @@ function classifyGrantError(err: unknown): HubSigninError {
   // answering this app right now — direct sign-in once, never a security refusal.
   if (err instanceof oidc.ResponseBodyError) {
     if (unavailableStatus(err.status)) return new HubSigninError('HUB_UNREACHABLE')
+    // 0.3.215 (review I3): the Hub no longer takes this app's secret — rotated while the person
+    // was at the Hub, before the app (a shared deployment's list) has the new one. Not this
+    // person's fault and not a forged callback: one hop to direct sign-in, nothing marked down
+    // (the probe answers CLIENT_AUTH_FAILED until the app has the new secret).
+    if (err.error === 'invalid_client')
+      return new HubSigninError('HUB_REFUSED', { availability: true, hubError: err.error })
     return new HubSigninError('HUB_REFUSED', { hubError: err.error })
   }
   if (isNetworkError(err)) return new HubSigninError('HUB_UNREACHABLE')

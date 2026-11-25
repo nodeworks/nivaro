@@ -29,6 +29,7 @@ import {
   sharedPoolMax,
   updatePlacement
 } from '../drivers.js'
+import { hubTokenColumns } from '../link-token.js'
 import { moveOpenRefusal } from '../move-open.js'
 import { HEARTBEAT_FRESH_MS, withoutFreshHeartbeat } from '../promote-heal.js'
 import {
@@ -43,6 +44,7 @@ import {
 import { type HubEnvStatus, readEnvironmentStatus } from '../status.js'
 import { APP_KEY_UNKNOWN_MESSAGE } from './app-key-check.js'
 import { DeploymentLinkError, deploymentClient } from './deployment-client.js'
+import { runsSharedHubSignin, SHARED_HUB_SIGNIN_SINCE } from './hub-signin-floor.js'
 import { replicasHolding } from './sightings.js'
 import { patternCovers } from './stack-render.js'
 import { getShared, openAppKey, type SharedDeployment, setAppKey, tenantIdFor } from './store.js'
@@ -329,13 +331,18 @@ export async function patchSharedPlacement(
 
 // ── the checks ─────────────────────────────────────────────────────────────────────────────
 
-/** Has the environment ever served? Answers the refusal, or null when it never did. */
-async function servedRefusal(envId: number): Promise<PlaceSharedError | null> {
+/**
+ * Has the environment ever served? Answers the refusal, or null when it never did. `creation`:
+ * the caller IS the environment's creation (gap `create`, placeForCreation), so its own open
+ * creation row is no refusal.
+ */
+async function servedRefusal(envId: number, creation = false): Promise<PlaceSharedError | null> {
   if (await db(DEPLOYS).where({ environment_id: envId, status: 'success' }).first('id'))
     return refuse(
       'USE_MOVE',
       'This environment has already served a version. Move it to the shared deployment instead.'
     )
+  if (creation) return null
   const creations = (await db(CREATIONS)
     .where({ environment_id: envId })
     .select('status')) as Array<{ status: string }>
@@ -369,7 +376,7 @@ function sharedStateRefusal(shared: SharedDeployment): PlaceSharedError | null {
 const SHARED_DEPLOYS = 'nivaro_hub_shared_deploys'
 
 /** The explicit names the newest successful run of the deployment routed (beside its pattern). */
-async function lastRoutedNames(sharedId: number): Promise<string[]> {
+export async function lastRoutedNames(sharedId: number): Promise<string[]> {
   const row = (await db(SHARED_DEPLOYS)
     .where({ shared_deployment_id: sharedId, status: 'success' })
     .orderBy('id', 'desc')
@@ -734,7 +741,8 @@ async function checkAndWrite(
   envId: number,
   input: PlaceSharedInput,
   by: string | null,
-  deps: PlaceSharedDeps
+  deps: PlaceSharedDeps,
+  opts: { creation?: boolean } = {}
 ): Promise<Placed> {
   const env = (await db(ENVS).where({ id: envId }).first()) as Record<string, unknown> | undefined
   if (!env) throw refuse('NOT_FOUND', 'No such environment.', 404)
@@ -756,7 +764,7 @@ async function checkAndWrite(
       'USE_MOVE',
       `This environment is ${String(env.status)}: only a new environment is placed. Move it instead.`
     )
-  const served = await servedRefusal(envId)
+  const served = await servedRefusal(envId, opts.creation === true)
   if (served) throw served
 
   const app = await readApp(Number(env.app_id))
@@ -766,10 +774,13 @@ async function checkAndWrite(
   const stateRefusal = sharedStateRefusal(shared0)
   if (stateRefusal) throw stateRefusal
   await assertDockerReady(shared0, env, deps)
-  if (app.signin_mode === 'hub')
+  // From SHARED_HUB_SIGNIN_SINCE a shared deployment signs each app in through the Hub with the
+  // app's own client from the tenant list (no client yet: its people sign in directly until one
+  // is made on the Sign-in tab — nobody signs in to a new environment before it is placed).
+  if (app.signin_mode === 'hub' && !runsSharedHubSignin(shared0.version_pin))
     throw refuse(
       'SIGNIN_VIA_HUB',
-      'This app signs in through the Hub, which a shared deployment does not offer yet. Switch it to direct sign-in first.'
+      `This app signs in through the Hub, which a shared deployment offers from ${SHARED_HUB_SIGNIN_SINCE} (${shared0.key} runs ${shared0.version_pin ?? 'a version the Hub cannot read'}). Upgrade it, or switch the app to direct sign-in first.`
     )
   const missing = app.extensions.filter((x) => !shared0.extensions.includes(x))
   if (missing.length)
@@ -928,7 +939,12 @@ async function runPlacement(
   lock: PromoteLock,
   token: string,
   by: string | null,
-  deps: PlaceSharedDeps
+  deps: PlaceSharedDeps,
+  /**
+   * Gap `create` (placeForCreation): `ownLock` = the caller holds the environment's lock and
+   * releases it itself; `rethrow` = a failed run throws (PlaceSharedError) after its bookkeeping.
+   */
+  opts: { ownLock?: boolean; rethrow?: boolean } = {}
 ): Promise<void> {
   const sleep = deps.sleep ?? realSleep
   const now = deps.now ?? Date.now
@@ -1071,7 +1087,21 @@ async function runPlacement(
     // 6. Serving: the environment and its run record move together (I-1).
     stillOurs()
     const version = servedVersion ?? placed.shared.version_pin ?? ''
+    // The app's own hub token (sign-in reports and the app switcher, per app on shared): a served
+    // environment without one gets one here (a later move keeps it). Sealed before the write; a
+    // Hub that cannot seal leaves the app without a switcher, never fails the placement.
+    let linkToken: ReturnType<typeof hubTokenColumns> | null = null
+    try {
+      linkToken = hubTokenColumns(randomBytes(32).toString('hex'))
+    } catch {
+      linkToken = null
+    }
     await db.transaction(async (trx) => {
+      if (linkToken)
+        await trx(ENVS)
+          .where({ id: envId })
+          .where((q) => q.whereNull('hub_token').orWhere('hub_token', ''))
+          .update(linkToken)
       await trx(ENVS)
         .where({ id: envId, status: 'provisioning' })
         .update({ status: 'active', updated_at: new Date() })
@@ -1113,10 +1143,69 @@ async function runPlacement(
       })
       .catch(() => undefined)
     await run.fail(new Error(`${code}: ${text}`))
+    if (opts.rethrow) throw new PlaceSharedError(code, text)
   } finally {
     clearInterval(renew)
-    await lock.release(envId, token)
+    if (!opts.ownLock) await lock.release(envId, token)
   }
+}
+
+/**
+ * Gap `create` (0.3.215): place-shared as a creation's `place` step. The creation leg already
+ * holds the environment's lock (holder `creation`) and its job run, so every check and step 1 run
+ * here under that lock, and the run (list, replicas, schema, first administrator, `active`) runs
+ * inline: its lines go to the creation's log, and a refusal or a failed run throws
+ * PlaceSharedError (the step fails; Retry places again, as placing an environment again does).
+ * A placement that already ran to the end (the leg stopped before it recorded the step) answers
+ * `already: true` and changes nothing.
+ */
+export async function placeForCreation(
+  envId: number,
+  rawInput: PlaceSharedInput,
+  by: string | null,
+  o: {
+    lock: PromoteLock
+    token: string
+    log: (line: string, level?: 'info' | 'warn' | 'error') => void
+    deps?: PlaceSharedDeps
+  }
+): Promise<{ already: boolean }> {
+  const deps = o.deps ?? {}
+  const input = checkPlaceInput(rawInput)
+  const env = (await db(ENVS).where({ id: envId }).first('status', 'placement_id')) as
+    | { status: string; placement_id: number | null }
+    | undefined
+  if (!env) throw refuse('NOT_FOUND', 'No such environment.', 404)
+  if (env.status === 'active' && env.placement_id != null) {
+    const p = await getPlacement(Number(env.placement_id))
+    const served = await db(DEPLOYS)
+      .where({ environment_id: envId, kind: 'shared', status: 'success' })
+      .whereNull('shared_deploy_id')
+      .first('id')
+    if (p?.kind === 'shared' && p.shared_deployment_id === input.shared_id && served)
+      return { already: true }
+  }
+  await recoverInterruptedPlacements({ envId, ownLock: true })
+  const placed = await checkAndWrite(envId, input, by, deps, { creation: true })
+  o.log(
+    `1. placed on ${placed.shared.key} (pool ${input.pool_max ?? DEFAULT_POOL_MAX}, version ${placed.shared.version_pin ?? 'not yet known'})`
+  )
+  await logActivity({
+    action: 'hub-place-shared',
+    user: by,
+    collection: ENVS,
+    item: String(envId),
+    comment: JSON.stringify({ shared: placed.shared.key, database: input.database_id })
+  }).catch(() => null)
+  const run: JobRunHandle = {
+    id: null,
+    progress() {},
+    log: (line, level) => o.log(line, level === 'warn' || level === 'error' ? level : 'info'),
+    complete: async () => undefined,
+    fail: async () => undefined
+  }
+  await runPlacement(placed, run, o.lock, o.token, by, deps, { ownLock: true, rethrow: true })
+  return { already: false }
 }
 
 async function kick(client: ReturnType<typeof deploymentClient>, run: JobRunHandle) {

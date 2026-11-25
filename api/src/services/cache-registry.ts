@@ -45,11 +45,13 @@ export function bustAllCaches(): string[] {
   return names
 }
 
-/** Clear here, then tell every other process on this database. */
+/** Clear here, then tell every other process on this database (a Hub shared deployment: every
+ *  other process of the deployment, for the current app — services/app-config-epoch.ts). */
 export async function bustEverywhere(
   name: string
 ): Promise<{ busted: string[]; epoch: number | null }> {
   const busted = name === '__all__' ? bustAllCaches() : bustCache(name) ? [name] : []
   const epoch = busted.length ? await bumpConfigEpoch() : null
+  if (busted.length) (await import('./app-config-epoch.js')).announceAppConfigChange()
   return { busted, epoch }
 }

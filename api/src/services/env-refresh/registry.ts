@@ -425,6 +425,25 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_shared_deployments',
       'nivaro_hub_shared_deploys',
       'nivaro_hub_moves',
+      'nivaro_hub_capacity_samples',
+      'nivaro_hub_app_limits',
+      'nivaro_hub_rebalances',
+      // Hub release operations (565): trains, schedules, freezes, rollback rules and watches,
+      // release notes, learned version facts
+      'nivaro_hub_trains',
+      'nivaro_hub_schedules',
+      'nivaro_hub_freezes',
+      'nivaro_hub_rollback_rules',
+      'nivaro_hub_rollback_watches',
+      'nivaro_hub_release_notes',
+      'nivaro_hub_version_facts',
+      'nivaro_hub_issue_groups',
+      'nivaro_hub_ops_health',
+      'nivaro_hub_secret_policies',
+      'nivaro_hub_secrets',
+      'nivaro_hub_secret_rotations',
+      'nivaro_hub_backup_policies',
+      'nivaro_hub_data_runs',
       'nivaro_hub_app_templates',
       'nivaro_hub_template_installs'
     ] as const
@@ -439,12 +458,14 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       kind: 'table',
       ...(table === 'nivaro_hub_drivers' ? { secret_columns: ['secret'] } : {}),
       ...(table === 'nivaro_hub_environments'
-        ? { secret_columns: ['hub_token', 'encryption_key'] }
+        ? { secret_columns: ['hub_token', 'hub_token_prev', 'encryption_key'] }
         : {}),
       ...(table === 'nivaro_hub_stack_settings' ? { secret_columns: ['secrets'] } : {}),
       ...(table === 'nivaro_hub_oidc_keys' ? { secret_columns: ['private_jwk'] } : {}),
       ...(table === 'nivaro_hub_oidc_clients' ? { secret_columns: ['client_secret'] } : {}),
       ...(table === 'nivaro_hub_apps' ? { secret_columns: ['oidc_secret'] } : {}),
+      ...(table === 'nivaro_hub_backup_policies' ? { secret_columns: ['target_secret'] } : {}),
+      ...(table === 'nivaro_hub_data_runs' ? { secret_columns: ['keep_secret'] } : {}),
       ...(table === 'nivaro_hub_db_servers' ? { secret_columns: ['admin_secret'] } : {}),
       ...(table === 'nivaro_hub_databases' ? { secret_columns: ['connection'] } : {}),
       ...(table === 'nivaro_hub_targets' ? { secret_columns: ['secret'] } : {}),

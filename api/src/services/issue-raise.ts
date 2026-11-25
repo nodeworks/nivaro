@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import { runInBackgroundPool } from '../db/pool-context.js'
-import { isMultiTenant } from './deployment-mode.js'
+import { isNivaroCloud, perAppJobs } from './deployment-mode.js'
 
 /**
  * The issue-write funnel. Every code path that creates an issue or bumps / changes one calls
@@ -116,14 +116,22 @@ export function noteIssueWrite(
   kind: IssueWriteKind,
   opts: { fingerprint?: string | null; hits?: IssueHit[]; count?: number } = {}
 ): void {
-  const cloud = isMultiTenant()
-  // Cloud: no counters (tracker-prune never runs there, final review M5) and, with no listener
-  // (GitLab sync is off in cloud), nothing to tell — skip the lookup too.
+  const cloud = isNivaroCloud()
+  // Nivaro Cloud: no counters (tracker-prune never runs there, final review M5) and, with no
+  // listener (GitLab sync is off there), nothing to tell — skip the lookup too. A Hub shared
+  // deployment counts per app (the rows land in the writer's own database) like self-hosted.
   if (cloud && listeners.size === 0) return
   // The funnel runs on the background pool: it fires on every 5xx and client crash, and must
   // never take a connection a request is waiting for (final review M6).
   void runInBackgroundPool(async () => {
     try {
+      // A Hub shared deployment has no background pool: an app with GitLab sync off (the only
+      // reader of the counters and the only listener) does no work here at all, so an error
+      // storm never doubles its statements on its small pool.
+      if (perAppJobs()) {
+        const { trackersEnabled } = await import('./trackers/feature.js')
+        if (!(await trackersEnabled())) return
+      }
       let id = issueId != null && Number.isFinite(Number(issueId)) ? Number(issueId) : null
       let fingerprint = opts.fingerprint ?? null
       // Neither id nor fingerprint: a lookup would match `fingerprint IS NULL` — the newest

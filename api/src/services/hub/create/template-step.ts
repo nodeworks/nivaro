@@ -13,13 +13,8 @@
 // The hub token is opened for the calls only and added to ctx.secrets (scrubbed from every note,
 // log line and error); the bundle travels in the body, never a note.
 import { openSecret } from '../secrets.js'
-import {
-  readTemplateInstall as readInstallRow,
-  setTemplateInstall,
-  TEMPLATE_MIN_VERSION
-} from '../templates/choice.js'
-import { readTemplateBundle } from '../templates/library.js'
-import { type StepContext, StepFailure, type StepResult } from './steps.js'
+import { TEMPLATE_MIN_VERSION } from '../templates/min-version.js'
+import { type BaseStepContext, StepFailure, type StepResult } from './steps.js'
 import { readTemplateInstall, startTemplateInstall } from './template-client.js'
 
 /** Codes worth asking again for (the app busy, frozen for a moment, restarting, or cut off). */
@@ -65,7 +60,13 @@ export function templateRefusalText(code: string, collections?: string[]): strin
   return `The app did not install the template (${code}).`
 }
 
-export async function stepTemplate(ctx: StepContext): Promise<StepResult> {
+export async function stepTemplate(ctx: BaseStepContext): Promise<StepResult> {
+  // Loaded on use: the library reaches the blueprint installer, which the creation steps' other
+  // importers (move, shared routing) must not load at module time.
+  const { readTemplateInstall: readInstallRow, setTemplateInstall } = await import(
+    '../templates/choice.js'
+  )
+  const { readTemplateBundle } = await import('../templates/library.js')
   const choice = await readInstallRow(ctx.env.id)
   if (!choice) return { status: 'done', note: 'No template.' }
   if (choice.status === 'done')

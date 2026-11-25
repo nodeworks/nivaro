@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Hub shared deployments, Task 6: the Monday AI summary runs inside each app's daily-digest
 // fan-out; its audience reads that app's own administrators (copied apps, same user id). The
-// Traffic Map digest stays off on a shared deployment (its links and opt-out live on the Traffic
-// Map page, which a shared deployment refuses), and Nivaro Cloud sends neither.
+// Traffic Map digest does the same since the per-app Traffic Map (the page and its digest opt-in
+// work inside each app); Nivaro Cloud sends neither.
 
 const h = vi.hoisted(() => ({
   users: new Map<string, Array<{ id: string; preferences: string }>>(),
@@ -79,11 +79,11 @@ afterEach(() => {
 })
 
 describe('digest audiences on a shared deployment', () => {
-  it('the traffic digest stays off: no audience in any app, no database read', async () => {
+  it("the traffic digest reads each app's own opted-in admins, in that app's database", async () => {
     useEnv(SHARED)
-    expect(await inApp('A', () => trafficDigestAudience())).toEqual([])
-    expect(await inApp('B', () => trafficDigestAudience())).toEqual([])
-    expect(h.reads).toEqual([])
+    expect(await inApp('A', () => trafficDigestAudience())).toEqual(['ADMIN-1'])
+    expect(await inApp('B', () => trafficDigestAudience())).toEqual(['ADMIN-1', 'ADMIN-2'])
+    expect(new Set(h.reads.map((r) => r.tenant))).toEqual(new Set(['A', 'B']))
   })
 
   it("the Monday AI summary reads each app's own opted-in admins", async () => {

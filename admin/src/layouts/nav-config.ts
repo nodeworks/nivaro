@@ -105,6 +105,27 @@ export type NavCategory = {
   items: NavItem[]
 }
 
+/**
+ * The pages a standalone Hub shows (server feature `hub_only`: HUB=on and no app data of its
+ * own, api services/hub/standalone.ts). Everything else in the sidebar reads data a Hub never
+ * holds, so it is left out there. A Hub that is also an app keeps the full sidebar.
+ */
+export const HUB_ONLY_NAV: ReadonlySet<string> = new Set([
+  '/',
+  '/hub',
+  '/users',
+  '/roles',
+  '/security-center',
+  '/activity',
+  '/health',
+  '/issues',
+  '/jobs',
+  '/database',
+  '/api-keys',
+  '/docs',
+  '/settings'
+])
+
 export const navCategories: NavCategory[] = [
   {
     id: 'home',

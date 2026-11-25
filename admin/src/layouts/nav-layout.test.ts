@@ -96,6 +96,27 @@ describe('permittedCategories', () => {
     expect(apps?.key).toBe('/hub')
     expect(apps?.to).toBe('/hub')
   })
+
+  it('a standalone Hub (hub_only) keeps only Hub pages', () => {
+    const withData: NavCategory[] = [
+      {
+        id: 'content',
+        icon: Icon,
+        label: 'Data',
+        items: [{ icon: Icon, label: 'Collections', to: '/collections' }]
+      },
+      ...withHub
+    ]
+    const out = permittedCategories(withData, new Set(), new Set(['hub', 'hub_only']))
+    expect(out.find((c) => c.id === 'content')).toBeUndefined()
+    expect(labels(out.find((c) => c.id === 'system') ?? { items: [] })).toEqual([
+      'Settings',
+      'Apps'
+    ])
+    // A Hub that is also an app (no hub_only) keeps everything.
+    const both = permittedCategories(withData, new Set(), new Set(['hub']))
+    expect(labels(both.find((c) => c.id === 'content') ?? { items: [] })).toEqual(['Collections'])
+  })
 })
 
 describe('applyNavLayout', () => {

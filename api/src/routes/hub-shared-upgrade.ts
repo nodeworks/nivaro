@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { idParam } from '../services/hub/apps.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
+import { sharedFreezeRefusal } from '../services/hub/releases/freeze.js'
 import { HubSecretError } from '../services/hub/secrets.js'
 import { getShared } from '../services/hub/shared/store.js'
 import {
@@ -90,6 +91,18 @@ export function hubSharedUpgradeRoutes(app: FastifyInstance): void {
   app.post('/shared/:id/upgrade', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idParam((req.params as { id: string }).id)
     if (id === null) return refuse(reply, 404, 'NOT_FOUND', 'No such shared deployment.')
+    // Release operations: a freeze window stops an upgrade (any app on it, or Hub-wide); only a
+    // rollback to an older version than the deployment runs is exempt.
+    {
+      const b = body(req)
+      const running = (await getShared(id))?.version_pin ?? null
+      const frozen = await sharedFreezeRefusal(id, {
+        kind: kindOf(b.kind) ?? 'upgrade',
+        version: typeof b.version === 'string' ? b.version : undefined,
+        running: running == null ? null : String(running)
+      })
+      if (frozen) return refuse(reply, frozen.status, frozen.code, frozen.message)
+    }
     return guarded(reply, async () => {
       const out = await startSharedUpgrade(id, body(req), userId(req))
       return reply.code(202).send({ data: out })

@@ -9,8 +9,9 @@ import { reviewNotes } from '../../blueprint-sanitize.js'
 import { compareVersions } from '../promote-plan.js'
 import { readTemplate, TEMPLATE_INSTALLS, TemplateError } from './library.js'
 
-/** The first Nivaro version whose hub link takes a template (POST /api/hub-link/template). */
-export const TEMPLATE_MIN_VERSION = '0.3.215'
+import { TEMPLATE_MIN_VERSION } from './min-version.js'
+
+export { TEMPLATE_MIN_VERSION }
 
 export type TemplateInstallStatus = 'pending' | 'installing' | 'done' | 'partial' | 'failed'
 

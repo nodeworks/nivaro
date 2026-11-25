@@ -123,11 +123,16 @@ export interface StepDeps {
   now: () => number
 }
 
-export interface StepContext {
+/**
+ * What every step of every kind gets (gap `create`): a Docker or shared creation has no GitLab
+ * target, so the steps they share with the GitLab kind (database, name, link, admin) take this.
+ */
+export interface BaseStepContext {
   creation: CreationRow
   app: StepApp
   env: StepEnv
-  target: HubTargetRow
+  /** How the environment's name is made: by hand (a ticket, the Hub waits) or automatically. */
+  dnsMode: 'automatic' | 'manual'
   /** The creation's own `made`; persisted by saveMade(). */
   made: CreationMade
   saveMade(): Promise<void>
@@ -136,11 +141,16 @@ export interface StepContext {
   log(line: string, level?: 'info' | 'warn' | 'error'): void
   /** Every secret value opened or made in this leg: the runner scrubs stored text of them. */
   secrets: Set<string>
-  /** The GitLab user id of the target's token (GET /user), read once per leg. */
-  tokenUserId(): Promise<number>
   /** Aborted when the leg loses its lock: every wait ends at once (ruling P3-31). */
   signal?: AbortSignal
   deps: StepDeps
+}
+
+/** A GitLab creation's steps: the target, and its token's GitLab user. */
+export interface StepContext extends BaseStepContext {
+  target: HubTargetRow
+  /** The GitLab user id of the target's token (GET /user), read once per leg. */
+  tokenUserId(): Promise<number>
 }
 
 export type StepResult =
@@ -161,7 +171,7 @@ const done = (note: string, sha?: string): StepResult =>
   sha ? { status: 'done', note, sha } : { status: 'done', note }
 
 /** Remembers `value` (and its base64) as a secret of this leg; answers it. */
-function secret(ctx: StepContext, value: string | null | undefined): string {
+export function secret(ctx: BaseStepContext, value: string | null | undefined): string {
   if (!value) return ''
   ctx.secrets.add(value)
   ctx.secrets.add(Buffer.from(value).toString('base64'))
@@ -234,7 +244,7 @@ function projectCtx(ctx: StepContext): GitCtx {
   return { ...targetCtx(ctx.target, String(id)), ref: null }
 }
 
-function dbIdOf(ctx: StepContext): number | null {
+export function dbIdOf(ctx: BaseStepContext): number | null {
   if (ctx.made.database_id) return ctx.made.database_id
   const m = /^hub-db:(\d+)$/.exec(String(ctx.env.db_ref ?? ''))
   return m ? Number(m[1]) : null
@@ -243,7 +253,7 @@ function dbIdOf(ctx: StepContext): number | null {
 // ── database ─────────────────────────────────────────────────────────────────
 
 /** The environment's database row (masked), or a failure. */
-async function databaseOf(ctx: StepContext): Promise<HubDatabase> {
+export async function databaseOf(ctx: BaseStepContext): Promise<HubDatabase> {
   const id = dbIdOf(ctx)
   if (!id) throw new StepFailure('DATABASE_MISSING', 'The environment has no database recorded.')
   const d = await getDatabase(id)
@@ -261,7 +271,7 @@ function manualWaitNote(d: HubDatabase): string {
   return `Waiting for the DBA to create ${d.database_name} and enter its connection.`
 }
 
-async function stepDatabase(ctx: StepContext): Promise<StepResult> {
+export async function stepDatabase(ctx: BaseStepContext): Promise<StepResult> {
   const d = await databaseOf(ctx)
   if (d.status === 'ready') return done(`${d.database_name} is ready.`)
   if (d.created_by_hub && !d.adopted) {
@@ -277,7 +287,7 @@ async function stepDatabase(ctx: StepContext): Promise<StepResult> {
  * empty by now); then the row decides. Never provisions.
  */
 export async function checkDatabaseWait(
-  ctx: StepContext
+  ctx: BaseStepContext
 ): Promise<{ resolved: boolean; note: string }> {
   let d = await databaseOf(ctx)
   if (d.status !== 'ready' && isManual(d) && d.connection) {
@@ -801,7 +811,7 @@ async function stepDeploy(ctx: StepContext): Promise<StepResult> {
 
 // ── name ─────────────────────────────────────────────────────────────────────
 
-function hostnameOf(ctx: StepContext): string {
+function hostnameOf(ctx: BaseStepContext): string {
   return ctx.made.planned?.hostname ?? ctx.env.hostnames[0] ?? ''
 }
 
@@ -814,14 +824,14 @@ async function setEnvStatus(envId: number, to: string, from: string[]): Promise<
 
 /** One look at the environment's name: does it resolve and serve the creation's version? */
 export async function checkNameWait(
-  ctx: StepContext
+  ctx: BaseStepContext
 ): Promise<{ resolved: boolean; note: string }> {
   const r = await ctx.deps.checkName(hostnameOf(ctx), ctx.env.base_url, ctx.creation.version)
   return { resolved: r.resolves && r.serves, note: r.text }
 }
 
-async function stepName(ctx: StepContext): Promise<StepResult> {
-  if (ctx.target.config.dns_mode === 'manual') {
+export async function stepName(ctx: BaseStepContext): Promise<StepResult> {
+  if (ctx.dnsMode === 'manual') {
     const r = await checkNameWait(ctx)
     if (r.resolved) {
       await setEnvStatus(ctx.env.id, 'provisioning', ['waiting_for_name'])
@@ -846,7 +856,7 @@ async function stepName(ctx: StepContext): Promise<StepResult> {
 
 // ── link ─────────────────────────────────────────────────────────────────────
 
-async function stepLink(ctx: StepContext): Promise<StepResult> {
+export async function stepLink(ctx: BaseStepContext): Promise<StepResult> {
   let last = ''
   for (let i = 1; i <= LINK_POLLS; i++) {
     const s = await ctx.deps.status(
@@ -878,7 +888,7 @@ async function stepLink(ctx: StepContext): Promise<StepResult> {
 
 // ── admin ────────────────────────────────────────────────────────────────────
 
-async function stepAdmin(ctx: StepContext): Promise<StepResult> {
+export async function stepAdmin(ctx: BaseStepContext): Promise<StepResult> {
   const token = secret(ctx, openSecret(ctx.env.hub_token))
   const fa = ctx.creation.first_admin
   const person = {
@@ -908,7 +918,11 @@ async function stepAdmin(ctx: StepContext): Promise<StepResult> {
   throw new StepFailure(last, `The app did not take the first administrator (${last}).`)
 }
 
-export const STEPS: Record<CreationStepKey, (ctx: StepContext) => Promise<StepResult>> = {
+/** The GitLab kind's steps (STEP_ORDER); Docker and shared ones are docker-steps.ts's. */
+export const STEPS: Record<
+  Exclude<CreationStepKey, 'stack' | 'place'>,
+  (ctx: StepContext) => Promise<StepResult>
+> = {
   database: stepDatabase,
   repository: stepRepository,
   variables: stepVariables,

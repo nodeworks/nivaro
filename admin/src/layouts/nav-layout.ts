@@ -1,5 +1,5 @@
 import { allowedHubTabs, hubAtBase, hubTabPath, isPathDisabled } from '@/lib/hubs'
-import type { NavCategory, NavItem } from './nav-config'
+import { HUB_ONLY_NAV, type NavCategory, type NavItem } from './nav-config'
 
 /**
  * #3227 — personal sidebar layouts + role starters, as pure functions.
@@ -107,6 +107,7 @@ export function permittedCategories(
         const hub = hubAtBase(item.to)
         const needs = item.feature ?? hub?.feature
         if (needs && !features.has(needs)) return []
+        if (features.has('hub_only') && !HUB_ONLY_NAV.has(item.to)) return []
         if (!hub) return isPathDisabled(item.to, disabled) ? [] : [{ ...item, key: item.to }]
         const tabs = allowedHubTabs(hub, disabled)
         return tabs.length === 0 ? [] : [{ ...item, key: item.to, to: hubTabPath(hub, tabs[0]) }]

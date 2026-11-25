@@ -302,7 +302,7 @@ describe('buildCreationPlan — app blockers', () => {
     expectBlocked('IMAGE_NO_DIGEST', {}, { digest: 'present' })
   })
   it('BAD_SIGNIN', () => {
-    const s = input().signin
+    const s = input().signin as NonNullable<CreateAppInput['signin']>
     expectBlocked('BAD_SIGNIN', { signin: { ...s, issuer: 'http://login.example.com/t' } })
     expectBlocked('BAD_SIGNIN', { signin: { ...s, client_id: 'a b' } })
     expectBlocked('BAD_SIGNIN', { signin: { ...s, client_secret: '' } })

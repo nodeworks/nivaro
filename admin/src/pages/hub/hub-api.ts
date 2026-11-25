@@ -268,6 +268,11 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'A creation step is running on this environment',
     hint: 'Wait for it to finish, or cancel it on the app page, then try again.'
   },
+  // Gap `create`: promotions, Apply now and Restart wait for an open creation.
+  CREATION_OPEN: {
+    title: 'This environment is still being created',
+    hint: 'Let the creation finish, or cancel it on the app page, then try again.'
+  },
   // X-7: hub token input rules
   HUB_TOKEN_MASK: {
     title: 'That is the hidden token, not a token',
@@ -306,6 +311,10 @@ const CODE_COPY: Record<string, { title: string; hint?: string }> = {
   IN_USE: {
     title: 'An environment still uses this driver',
     hint: 'Move those environments to another driver (or none) first.'
+  },
+  DRIVER_IN_USE: {
+    title: 'A shared deployment deploys through this driver',
+    hint: 'Point that shared deployment at another driver (or retire it) first.'
   },
   PLACEMENT_IN_USE: {
     title: 'Another environment already uses this placement',
@@ -1023,6 +1032,60 @@ Object.assign(BLOCKER_COPY, {
   BAD_EXTENSION_PIN: {
     title: 'An extension pin is not valid',
     hint: 'Use image@sha256:… with the 64-character digest.'
+  },
+  // Where a stack keeps its files (Hub agent 0.2.2).
+  BAD_UPLOADS_FOLDER: {
+    title: 'The uploads folder is not a valid path',
+    hint: 'A relative path such as efp or nas/efp: letters, digits, . _ - per part, no .. .'
+  },
+  BAD_FILES_SUBFOLDER: {
+    title: 'The files sub-folder is not a valid path',
+    hint: 'A relative path such as directus-uploads: letters, digits, . _ - per part, no .. .'
+  },
+  BAD_RUN_AS: { title: 'Pick the image default or uid 1000' },
+  AGENT_TOO_OLD: {
+    title: 'The Hub agent is too old for this',
+    hint: 'Update the agent (nodeworks/nivaro-hub-agent) to the version the message names.'
+  },
+  UPLOADS_FOLDER_NEEDS_NFS: {
+    title: 'An uploads folder needs an agent with an NFS export',
+    hint: 'Set an NFS device in HUB_AGENT_VOLUME_OPTS_FILE on the agent, or clear the uploads folder.'
+  },
+  UPLOADS_FOLDER_MISSING: {
+    title: 'The folder is not on the NFS export',
+    hint: 'Create it on the file server (writable by uid 1000), or fix the folder setting.'
+  },
+  UPLOADS_FOLDER_NOT_WRITABLE: {
+    title: 'uid 1000 cannot write the folder on the NFS export',
+    hint: 'Run chown -R 1000:1000 on it on the file server, or export the share with anonuid=1000.'
+  },
+  UPLOADS_FOLDER_UNCHECKED: {
+    title: 'The agent cannot look into the folder on the NFS export',
+    hint: "Check the permissions of the agent's export mount."
+  },
+  UPLOADS_FOLDER_TAKEN: {
+    title: 'Another Hub stack keeps its files in that folder',
+    hint: 'Two stacks never share a folder: pick another one.'
+  },
+  UPLOADS_FOLDER_LINK: {
+    title: 'The folder is a link or passes through one',
+    hint: 'The agent never follows links on the export: use the real folder.'
+  },
+  EXPORT_MOUNT_MISSING: {
+    title: 'The agent does not see its NFS export',
+    hint: 'Mount the export into the agent and set HUB_AGENT_VOLUME_EXPORT_MOUNT.'
+  },
+  UPLOADS_FOLDER_PARENT_WRITABLE: {
+    title: 'A folder above the uploads folder is writable by others',
+    hint: 'Remove group and other write (chmod go-w) on it on the file server.'
+  },
+  UPLOADS_FOLDER_NOT_OURS: {
+    title: 'A folder with this stack’s name is already on the export',
+    hint: 'The agent did not make it. Adopt it with the uploads folder setting, or remove it on the file server.'
+  },
+  UPLOADS_LAYOUT_CHANGED: {
+    title: 'This stack’s files are still on the export root',
+    hint: 'An older agent put them there. Move them into a folder on the file server and set it as the uploads folder.'
   }
 } satisfies Record<string, { title: string; hint?: string }>)
 
@@ -1180,7 +1243,26 @@ export const RUN_ERROR_COPY: Record<string, { title: string }> = {
   APPLY_FAILED: { title: 'The agent could not apply the stack' },
   KEY_REFUSED: { title: 'The agent would refuse one of the settings' },
   TOKEN_MISSING: { title: 'The deployment token could not be opened' },
-  NO_DRIVER: { title: 'The deployment has no Docker driver' },
+  NO_DRIVER: { title: 'The deployment has no driver to deploy through' },
+  // A deployment its GitLab pipeline runs (the promotion's own api step).
+  DEPLOY_FAILED: { title: 'The GitLab deploy job failed' },
+  MERGE_REFUSED: { title: 'GitLab refused to merge the release' },
+  HEAD_MOVED: { title: 'The target branch moved since the plan' },
+  PIN_CHANGED: { title: 'The pin of the running version would change' },
+  DRIVER_CHANGED: { title: 'The GitLab driver points at another repository now' },
+  DEPLOY_JOB_UNEXPECTED: { title: 'The GitLab deploy job did something unexpected' },
+  JOB_MISSING: { title: 'The GitLab pipeline has no such job' },
+  ROLLBACK_NOT_RECORDED: { title: 'The Hub did not record that build' },
+  ROLLBACK_NO_BUILD: { title: 'That build cannot be redeployed' },
+  ROLLBACK_REFUSED_BY_GITLAB: { title: 'GitLab refused to rerun the earlier deploy job' },
+  REDEPLOY_REFUSED_BY_GITLAB: { title: 'GitLab refused to rerun the deploy job' },
+  GITLAB_UNAUTHORIZED: { title: "GitLab refused the driver's token" },
+  GITLAB_FORBIDDEN: { title: "The driver's token may not do this in GitLab" },
+  GITLAB_NOT_FOUND: { title: 'GitLab does not know the project, branch or job' },
+  GITLAB_REFUSED: { title: 'GitLab refused a call' },
+  GITLAB_UNREACHABLE: { title: 'GitLab did not answer' },
+  LINK_UNREACHABLE: { title: "The deployment's link did not answer" },
+  BRANCH_BUSY: { title: 'Another run deploys that GitLab branch' },
   LOCK_LOST: { title: 'The run lost its lock' },
   START_FAILED: { title: 'The run could not be started' },
   STEP_FAILED: { title: 'The run stopped unexpectedly' },
