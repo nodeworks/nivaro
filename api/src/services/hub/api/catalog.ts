@@ -1334,6 +1334,103 @@ export const HUB_ROUTES: HubRoute[] = [
       notes: 'Refused for anything that counts as production (PRODUCTION_TARGET).'
     }
   ),
+  // ─── Config promotion (routes/hub-config.ts, idea 30) ───────────────────────
+  r(
+    'GET',
+    '/config/groups',
+    'Config promotion',
+    'admin',
+    'read',
+    'What can be promoted, as groups of config tables'
+  ),
+  r(
+    'GET',
+    '/apps/:id/config-promotions',
+    'Config promotion',
+    'admin',
+    'read',
+    'The app’s newest config promotions (50)',
+    { notes: HEALS }
+  ),
+  r(
+    'POST',
+    '/apps/:id/config-promotions/plan',
+    'Config promotion',
+    'admin',
+    'plan',
+    'Plan moving configuration from one environment of the app to another (field diff, plan hash)',
+    {
+      body: {
+        source_env_id: n('Environment the configuration comes from', { required: true }),
+        target_env_id: n('Environment it goes to', { required: true }),
+        groups: list(
+          'string',
+          'layouts | flows | payload_templates | managed_procedures | pipelines | roles | settings'
+        ),
+        deletes: b(
+          'Also remove rows the source no longer has (default false: add and change only)'
+        ),
+        allow_cascade: b('Let removals take rows of other tables with them')
+      },
+      notes:
+        'Reads a snapshot from the source app and has the target app plan it over their links; secrets and what the target keeps never travel. 409 MOVE_OPEN while a move of the target is open.'
+    }
+  ),
+  r(
+    'GET',
+    '/config-promotions/:id',
+    'Config promotion',
+    'admin',
+    'read',
+    'One config promotion with its plan',
+    {
+      notes: HEALS
+    }
+  ),
+  r(
+    'POST',
+    '/config-promotions/:id/apply',
+    'Config promotion',
+    'admin',
+    'write',
+    'Apply a planned config promotion (bound to its plan hash)',
+    {
+      sensitive: true,
+      body: {
+        plan_hash: s('The plan_hash of the plan', { required: true }),
+        confirm: s('Production: type the target environment key'),
+        overwrite_prod_changes: b('Overwrite changes made on the target, not from promotion')
+      },
+      notes:
+        '409 STALE when either side moved since the plan, FROZEN in a freeze window, MOVE_OPEN, PROD_ONLY_CHANGES, CONFIG_PROMOTION_RUNNING; 400 CONFIRM_REQUIRED on production.'
+    }
+  ),
+  r(
+    'POST',
+    '/config-promotions/:id/undo/plan',
+    'Config promotion',
+    'admin',
+    'plan',
+    'Preview undoing an applied config promotion (restores the target’s pre-apply restore point)'
+  ),
+  r(
+    'POST',
+    '/config-promotions/:id/undo',
+    'Config promotion',
+    'admin',
+    'write',
+    'Undo an applied config promotion (bound to the undo preview’s hash)',
+    {
+      sensitive: true,
+      body: {
+        plan_hash: s('The plan_hash of the undo preview', { required: true }),
+        confirm: s('Production: type the target environment key'),
+        overwrite_prod_changes: b('Overwrite changes made on the target since')
+      },
+      notes:
+        'Never stopped by a freeze (it puts back what was there); refused while a move is open.'
+    }
+  ),
   // ─── Releases: trains, schedules, freezes, rollback rules, notes (routes/hub-releases.ts) ─
   r(
     'GET',

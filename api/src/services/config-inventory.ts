@@ -350,6 +350,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_uptime_hours',
   'nivaro_hub_fleet_alerts',
   'nivaro_hub_slo_reports',
+  'nivaro_hub_config_promotions', //   Hub config promotion (575): plans, results, undo points
   'nivaro_share_links',
   'nivaro_dashboard_links',
   'nivaro_webhook_deliveries',

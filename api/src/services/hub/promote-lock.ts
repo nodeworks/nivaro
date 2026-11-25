@@ -67,6 +67,8 @@ export type LockHolder =
   | 'database'
   // Hub data care: an environment refresh (or its rollback) replacing this environment's database.
   | 'data'
+  // Hub config promotion (idea 30): config being applied to (or undone on) this environment.
+  | 'config'
 const HOLDERS: readonly LockHolder[] = [
   'creation',
   'promotion',
@@ -76,7 +78,8 @@ const HOLDERS: readonly LockHolder[] = [
   'shared',
   'app-key',
   'database',
-  'data'
+  'data',
+  'config'
 ]
 
 const tokenFor = (holder: LockHolder | undefined) => `${holder ?? 'promotion'}:${randomUUID()}`
@@ -134,6 +137,11 @@ export function lockHolderRefusal(
     return {
       code: 'REFRESH_RUNNING',
       message: "This environment's database is being refreshed or rolled back — wait for it to end."
+    }
+  if (holder === 'config')
+    return {
+      code: 'CONFIG_PROMOTION_RUNNING',
+      message: 'Configuration is being promoted to this environment — wait for it to end.'
     }
   if (holder === 'shared')
     return {
