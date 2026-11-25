@@ -407,8 +407,8 @@ function linkWords(r: VerifyLinkResult): string {
     case 'bad_request':
       return 'the app refused the reads as asked'
     default:
-      return r.code === 'NO_ADMIN_ROLE'
-        ? 'the app has no administrator role for its smoke identity'
+      return r.code?.startsWith('SMOKE_')
+        ? `the app refused its smoke service account (${r.code}): it is no longer the read-only account the app made`
         : 'the app could not run the reads'
   }
 }

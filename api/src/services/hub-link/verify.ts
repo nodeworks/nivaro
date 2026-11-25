@@ -2,7 +2,6 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { extensionRegistry } from '../../extensions/loader.js'
-import { isUniqueViolation } from '../../lib/unique-violation.js'
 import { NIVARO_VERSION } from '../../version.js'
 
 /**
@@ -10,9 +9,10 @@ import { NIVARO_VERSION } from '../../version.js'
  * extension version manager may ask of an app over its hub link (routes/hub-verify-link.ts).
  *
  * Smoke reads (`runVerifyReads`): a signed-in read, run IN-PROCESS as a SERVICE identity — never
- * as a person and never with a token the Hub holds. The identity is one machine account per app
- * (`hub-smoke@nivaro.local`, account_kind `service`, the administrator role so a check can read
- * what it names); every call mints a temporary API key for it — read-only scope (`*`: read),
+ * as a person and never with a token the Hub holds. The identity is one SERVICE account per app
+ * (account_kind `service`, found by the id this code stored, never by address) in a role of its
+ * own: read every collection, no administration, app access off (nobody signs in with it, and
+ * every sign-in path refuses a service account); every call mints a temporary API key for it — read-only scope (`*`: read),
  * expiring in 3 minutes, never leaving this process — runs the reads through `app.inject` with it
  * and deletes the key again. Because the key's scope is read-only, administration routes refuse
  * it (a "keys limited to named collections" refusal) and no write route accepts it; the methods
@@ -24,7 +24,6 @@ import { NIVARO_VERSION } from '../../version.js'
  * the manifest version and the build (the export's `build` or the deploy's `.release-sha`).
  */
 
-export const SMOKE_EMAIL = 'hub-smoke@nivaro.local'
 const KEY_TTL_MS = 3 * 60_000
 const READ_TIMEOUT_MS = 15_000
 export const MAX_READS = 10
@@ -107,47 +106,157 @@ export function parseReads(body: unknown): VerifyRead[] | { error: string } {
   return out
 }
 
-async function adminRoleId(): Promise<string | null> {
-  const role = (await db('nivaro_roles').where({ admin_access: true }).orderBy('id').first('id')) as
-    | { id: string }
-    | undefined
-  return role ? String(role.id) : null
+/** Where the identity's ids live: one row in nivaro_extension_settings (no migration). */
+export const SMOKE_STORE = { extension_id: 'nivaro-core', key: 'hub_smoke_identity' } as const
+const ROLE_NAME = 'Hub smoke check'
+
+export class SmokeIdentityError extends Error {
+  code: string
+  constructor(code: string, message: string) {
+    super(message)
+    this.code = code
+  }
 }
 
-const smokeRow = async () =>
-  (await db('nivaro_users').where({ email: SMOKE_EMAIL }).orderBy('id').first('id', 'role')) as
-    | { id: string; role: string | null }
+interface StoredIdentity {
+  user_id: string
+  role_id: string
+}
+
+async function readStored(): Promise<StoredIdentity | null> {
+  const row = (await db('nivaro_extension_settings').where(SMOKE_STORE).first('value')) as
+    | { value: string | null }
     | undefined
+  try {
+    const v = JSON.parse(String(row?.value ?? 'null')) as Partial<StoredIdentity> | null
+    return v && typeof v.user_id === 'string' && typeof v.role_id === 'string'
+      ? { user_id: v.user_id, role_id: v.role_id }
+      : null
+  } catch {
+    return null
+  }
+}
+
+const blank = (v: unknown) => v == null || v === ''
+const yes = (v: unknown) => v === true || v === 1 || v === '1'
 
 /**
- * The service identity's user id: created on first use, its role kept on the administrator role.
- * A lost insert (unique email, another process) reads the winner; every reader takes the lowest id.
+ * Why a stored row may not act as the smoke identity, or null when it may: a SERVICE account
+ * (account_kind service) with no credential of a person — no password, no Entra object id, no
+ * external (identity provider) id, no static token — holding exactly our own role, active.
+ */
+export function smokeUserRefusal(
+  u: Record<string, unknown> | undefined,
+  roleId: string
+): string | null {
+  if (!u) return 'SMOKE_IDENTITY_MISSING'
+  if (String(u.account_kind ?? '') !== 'service') return 'SMOKE_IDENTITY_NOT_SERVICE'
+  if (!blank(u.password_hash) || !blank(u.entra_oid) || !blank(u.external_id))
+    return 'SMOKE_IDENTITY_HAS_CREDENTIAL'
+  if (!blank(u.static_token)) return 'SMOKE_IDENTITY_HAS_CREDENTIAL'
+  if (String(u.role ?? '').toLowerCase() !== roleId.toLowerCase()) return 'SMOKE_IDENTITY_CHANGED'
+  if (u.status !== 'active') return 'SMOKE_IDENTITY_SUSPENDED'
+  return null
+}
+
+/** Why the stored role may not be the smoke role, or null: no administration, no sign-in, reads only. */
+async function smokeRoleRefusal(roleId: string): Promise<string | null> {
+  const role = (await db('nivaro_roles').where({ id: roleId }).first()) as
+    | Record<string, unknown>
+    | undefined
+  if (!role) return 'SMOKE_ROLE_MISSING'
+  if (yes(role.admin_access) || !(role.app_access === false || role.app_access === 0))
+    return 'SMOKE_ROLE_CHANGED'
+  const writes = await db('nivaro_policies')
+    .where({ role: roleId })
+    .whereNot({ action: 'read' })
+    .first('id')
+  return writes ? 'SMOKE_ROLE_CHANGED' : null
+}
+
+const REFUSAL_WORDS: Record<string, string> = {
+  SMOKE_IDENTITY_MISSING: 'The smoke service account was deleted',
+  SMOKE_IDENTITY_NOT_SERVICE: 'The stored smoke account is not a service account',
+  SMOKE_IDENTITY_HAS_CREDENTIAL: 'The smoke service account was given a sign-in credential',
+  SMOKE_IDENTITY_CHANGED: 'The smoke service account’s role was changed',
+  SMOKE_IDENTITY_SUSPENDED: 'The smoke service account is suspended',
+  SMOKE_ROLE_MISSING: 'The smoke role was deleted',
+  SMOKE_ROLE_CHANGED: 'The smoke role was given more than read access'
+}
+
+/**
+ * Creates the identity: a role of its own (no administration, app access off so nobody in it
+ * signs in, one policy: read every collection) and a service account in it under a random address
+ * nobody else holds. The ids are stored; a process that lost the race removes its own rows.
+ */
+async function createIdentity(): Promise<StoredIdentity> {
+  const tag = randomBytes(4).toString('hex')
+  const roleId = randomUUID()
+  const userId = randomUUID().toUpperCase()
+  const taken = await db('nivaro_roles').where({ name: ROLE_NAME }).first('id')
+  await db('nivaro_roles').insert({
+    id: roleId,
+    name: taken ? `${ROLE_NAME} (${tag})` : ROLE_NAME,
+    description: 'The Nivaro Hub smoke checks read with this role. Read only; nobody signs in.',
+    admin_access: false,
+    app_access: false
+  })
+  await db('nivaro_policies').insert({
+    role: roleId,
+    collection: '*',
+    action: 'read',
+    fields: '*'
+  })
+  // A machine account (account_kind service): never a person, never offboarded, never mailed,
+  // never signed in (auth/role-sign-in.ts isServiceAccount); it acts only through the temporary
+  // key minted below, and is found again by its stored id only, never by its address.
+  await db('nivaro_users').insert({
+    id: userId,
+    email: `hub-smoke-${tag}@nivaro.local`,
+    first_name: 'Hub smoke check',
+    status: 'active',
+    account_kind: 'service',
+    role: roleId
+  })
+  try {
+    await db('nivaro_extension_settings').insert({
+      ...SMOKE_STORE,
+      value: JSON.stringify({ user_id: userId, role_id: roleId }),
+      updated_at: new Date()
+    })
+    return { user_id: userId, role_id: roleId }
+  } catch (err) {
+    await db('nivaro_users')
+      .where({ id: userId })
+      .delete()
+      .catch(() => undefined)
+    await db('nivaro_policies')
+      .where({ role: roleId })
+      .delete()
+      .catch(() => undefined)
+    await db('nivaro_roles')
+      .where({ id: roleId })
+      .delete()
+      .catch(() => undefined)
+    const won = await readStored()
+    if (won) return won
+    throw err
+  }
+}
+
+/**
+ * The smoke identity's user id — found by the id this code stored, never by an address — and
+ * refused (never repaired, never promoted) when the row or its role is no longer what this code
+ * made (SMOKE_IDENTITY_* / SMOKE_ROLE_*; an administrator removes the stored row to start over).
  */
 export async function smokeIdentity(): Promise<string> {
-  const role = await adminRoleId()
-  if (!role) throw Object.assign(new Error('no administrator role'), { code: 'NO_ADMIN_ROLE' })
-  let row = await smokeRow()
-  if (!row) {
-    try {
-      // A machine account (account_kind service): never a person, never offboarded, never
-      // mailed; it signs in only through the temporary key minted below.
-      await db('nivaro_users').insert({
-        id: randomUUID().toUpperCase(),
-        email: SMOKE_EMAIL,
-        first_name: 'Hub smoke check',
-        status: 'active',
-        account_kind: 'service',
-        role
-      })
-    } catch (err) {
-      if (!isUniqueViolation(err)) throw err
-    }
-    row = await smokeRow()
-    if (!row) throw new Error('the smoke identity could not be created')
-  }
-  if (String(row.role ?? '') !== role)
-    await db('nivaro_users').where({ id: row.id }).update({ role })
-  return String(row.id)
+  const stored = (await readStored()) ?? (await createIdentity())
+  const user = (await db('nivaro_users').where({ id: stored.user_id }).first()) as
+    | Record<string, unknown>
+    | undefined
+  const refusal = smokeUserRefusal(user, stored.role_id) ?? (await smokeRoleRefusal(stored.role_id))
+  if (refusal) throw new SmokeIdentityError(refusal, REFUSAL_WORDS[refusal] ?? refusal)
+  return String(user?.id)
 }
 
 /** Mints the run's temporary read-only key; answers the key and its row id. */

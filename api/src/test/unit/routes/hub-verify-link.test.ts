@@ -34,8 +34,25 @@ const keysDuringRead: number[] = []
 beforeAll(async () => {
   await db.schema.createTable('nivaro_roles', (t) => {
     t.string('id').primary()
-    t.string('name')
+    t.string('name').unique()
+    t.text('description')
     t.boolean('admin_access')
+    t.boolean('app_access').defaultTo(true)
+  })
+  await db.schema.createTable('nivaro_policies', (t) => {
+    t.increments('id')
+    t.string('role')
+    t.string('collection')
+    t.string('action')
+    t.text('fields')
+  })
+  await db.schema.createTable('nivaro_extension_settings', (t) => {
+    t.increments('id')
+    t.string('extension_id')
+    t.string('key')
+    t.text('value')
+    t.dateTime('updated_at')
+    t.unique(['extension_id', 'key'])
   })
   await db.schema.createTable('nivaro_users', (t) => {
     t.string('id').primary()
@@ -44,6 +61,10 @@ beforeAll(async () => {
     t.string('status')
     t.string('account_kind')
     t.string('role')
+    t.string('password_hash')
+    t.string('entra_oid')
+    t.string('external_id')
+    t.string('static_token')
   })
   await db.schema.createTable('nivaro_api_keys', (t) => {
     t.increments('id')
@@ -64,6 +85,13 @@ beforeAll(async () => {
     { id: 'R-USER', name: 'User', admin_access: false },
     { id: 'R-ADMIN', name: 'Administrator', admin_access: true }
   ])
+  // A PERSON who holds the address the smoke identity used to have: never touched.
+  await db('nivaro_users').insert({
+    id: 'HUMAN-1',
+    email: 'hub-smoke@nivaro.local',
+    status: 'active',
+    role: 'R-USER'
+  })
 
   app = Fastify()
   // Stand-ins for the app's own routes the reads reach in-process.
@@ -124,8 +152,88 @@ describe('hub link: verify', () => {
     expect(seenAuth[0]).not.toContain(TOKEN)
     expect(keysDuringRead[0]).toBe(1)
     expect(Number((await db('nivaro_api_keys').count({ n: '*' }))[0].n)).toBe(0)
-    const u = await db('nivaro_users').where({ email: verify.SMOKE_EMAIL }).first()
-    expect(u).toMatchObject({ account_kind: 'service', status: 'active', role: 'R-ADMIN' })
+    const stored = JSON.parse(
+      (await db('nivaro_extension_settings').where(verify.SMOKE_STORE).first()).value
+    )
+    const u = await db('nivaro_users').where({ id: stored.user_id }).first()
+    expect(u).toMatchObject({ account_kind: 'service', status: 'active', role: stored.role_id })
+    expect(u.role).not.toBe('R-ADMIN')
+    expect(u.email).toMatch(/^hub-smoke-[0-9a-f]{8}@nivaro\.local$/)
+    // Its own role: no administration, no sign-in, one read policy.
+    const role = await db('nivaro_roles').where({ id: stored.role_id }).first()
+    expect([!!role.admin_access, !!role.app_access]).toEqual([false, false])
+    const policies = await db('nivaro_policies').where({ role: stored.role_id })
+    expect(policies.map((p) => [p.collection, p.action])).toEqual([['*', 'read']])
+    // The person with the old address is exactly as they were.
+    expect(await db('nivaro_users').where({ id: 'HUMAN-1' }).first()).toMatchObject({
+      role: 'R-USER',
+      account_kind: null
+    })
+  })
+
+  it('the identity is found by its stored id; a store naming a person is refused, never promoted', async () => {
+    const saved = (await db('nivaro_extension_settings').where(verify.SMOKE_STORE).first()).value
+    const roleId = JSON.parse(saved).role_id
+    await db('nivaro_extension_settings')
+      .where(verify.SMOKE_STORE)
+      .update({ value: JSON.stringify({ user_id: 'HUMAN-1', role_id: roleId }) })
+    const r = await app.inject({
+      method: 'POST',
+      url: '/api/hub-link/verify/run',
+      headers: auth,
+      payload: { reads: [{ kind: 'read', path: '/api/items/projects' }] }
+    })
+    expect(r.statusCode).toBe(409)
+    expect(r.json().code).toBe('SMOKE_IDENTITY_NOT_SERVICE')
+    expect(await db('nivaro_users').where({ id: 'HUMAN-1' }).first()).toMatchObject({
+      role: 'R-USER',
+      account_kind: null
+    })
+    expect(Number((await db('nivaro_api_keys').count({ n: '*' }))[0].n)).toBe(0)
+    await db('nivaro_extension_settings').where(verify.SMOKE_STORE).update({ value: saved })
+  })
+
+  it.each([
+    ['a password', { password_hash: 'salt:hash' }, 'SMOKE_IDENTITY_HAS_CREDENTIAL'],
+    ['an Entra id', { entra_oid: 'oid-1' }, 'SMOKE_IDENTITY_HAS_CREDENTIAL'],
+    ['an identity-provider id', { external_id: 'sub-1' }, 'SMOKE_IDENTITY_HAS_CREDENTIAL'],
+    ['a static token', { static_token: 'tok' }, 'SMOKE_IDENTITY_HAS_CREDENTIAL'],
+    ['another role', { role: 'R-ADMIN' }, 'SMOKE_IDENTITY_CHANGED'],
+    ['a person kind', { account_kind: null }, 'SMOKE_IDENTITY_NOT_SERVICE'],
+    ['a suspension', { status: 'suspended' }, 'SMOKE_IDENTITY_SUSPENDED']
+  ])('refuses a smoke account that was given %s', async (_what, patch, code) => {
+    const { user_id } = JSON.parse(
+      (await db('nivaro_extension_settings').where(verify.SMOKE_STORE).first()).value
+    )
+    const before = await db('nivaro_users').where({ id: user_id }).first()
+    await db('nivaro_users').where({ id: user_id }).update(patch)
+    await expect(verify.smokeIdentity()).rejects.toMatchObject({ code })
+    // Never repaired or promoted: the row stays as it was changed.
+    expect(await db('nivaro_users').where({ id: user_id }).first()).toMatchObject(patch)
+    await db('nivaro_users').where({ id: user_id }).update(before)
+  })
+
+  it('the role cannot write; a write policy or admin access on it refuses every run', async () => {
+    const { user_id, role_id } = JSON.parse(
+      (await db('nivaro_extension_settings').where(verify.SMOKE_STORE).first()).value
+    )
+    const { can } = await import('../../../services/permissions.js')
+    const user = await db('nivaro_users').where({ id: user_id }).first()
+    for (const action of ['create', 'update', 'delete'] as const)
+      expect(await can(user, action, 'projects')).toBe(false)
+    expect(await can(user, 'read', 'projects')).toBe(true)
+    const [pid] = await db('nivaro_policies').insert({
+      role: role_id,
+      collection: 'projects',
+      action: 'update',
+      fields: '*'
+    })
+    await expect(verify.smokeIdentity()).rejects.toMatchObject({ code: 'SMOKE_ROLE_CHANGED' })
+    await db('nivaro_policies').where({ id: pid }).delete()
+    await db('nivaro_roles').where({ id: role_id }).update({ admin_access: true })
+    await expect(verify.smokeIdentity()).rejects.toMatchObject({ code: 'SMOKE_ROLE_CHANGED' })
+    await db('nivaro_roles').where({ id: role_id }).update({ admin_access: false })
+    expect(await verify.smokeIdentity()).toBe(user_id)
   })
 
   it('the minted key is read-only and short-lived', async () => {

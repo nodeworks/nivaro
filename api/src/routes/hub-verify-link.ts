@@ -3,7 +3,12 @@ import { withTenant } from '../db/tenant-context.js'
 import { failedAuthLimiter } from '../lib/auth-fail-limiter.js'
 import { hubSharedConfig, isMultiTenant, tenantSource } from '../services/deployment-mode.js'
 import { hubLinkToken } from '../services/hub/mode.js'
-import { extensionInventory, parseReads, runVerifyReads } from '../services/hub-link/verify.js'
+import {
+  extensionInventory,
+  parseReads,
+  runVerifyReads,
+  SmokeIdentityError
+} from '../services/hub-link/verify.js'
 import { bearerMatches } from '../services/render-peer.js'
 import { deploymentLinkBearer } from '../services/tenancy/hub-contract.js'
 import { getTenantRegistry } from '../services/tenancy/registry.js'
@@ -51,8 +56,8 @@ async function runReads(
     )
   } catch (err) {
     const code = (err as { code?: unknown } | null)?.code
-    if (code === 'NO_ADMIN_ROLE')
-      return refuse(reply, 409, 'This app has no administrator role', 'NO_ADMIN_ROLE')
+    // The stored identity is no longer what the app made: refused, never repaired (plain words).
+    if (err instanceof SmokeIdentityError) return refuse(reply, 409, err.message, err.code)
     req.log.warn({ code: code ?? null }, 'hub link: smoke reads failed')
     return refuse(reply, 503, 'The smoke reads could not run', 'VERIFY_FAILED')
   }
