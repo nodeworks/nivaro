@@ -597,7 +597,16 @@ export const fetchPromotionPlan = (envId: number, kind: PromotionKind, version: 
 
 export const startPromotion = (
   envId: number,
-  body: { version: string; kind: PromotionKind; confirm: string; plan_hash: string }
+  body: {
+    version: string
+    kind: PromotionKind
+    confirm: string
+    plan_hash: string
+    /** The ticked pre-deploy checklist (a production promotion with one). */
+    checklist_run_id?: number
+    /** An administrator's emergency start outside the deploy window: why. */
+    outside_window_reason?: string
+  }
 ) =>
   api
     .post<{ data: { deploy_id: number; job_run_id: number | null } }>(
@@ -1183,7 +1192,8 @@ export const AGENT_FIELD_COPY: Record<string, string> = {
   SETTING_INVALID: 'A stack setting has a value the agent cannot use.',
   SHARED_KEY_MISMATCH: 'The stack belongs to another shared deployment.',
   ROLE_NOT_SHARED: 'That process role, or that set of roles, cannot run on a shared deployment.',
-  FOLDER_BAD: 'A files folder name is not one the agent accepts (plain folder names only, no dots or slashes at the start).',
+  FOLDER_BAD:
+    'A files folder name is not one the agent accepts (plain folder names only, no dots or slashes at the start).',
   NO_NFS_EXPORT: 'A per-stack files folder needs an NFS share set up on the agent first.',
   RUN_AS_BAD: 'The process user setting is not one the agent accepts.',
   ROLE_NEEDS_TRAEFIK_V3:

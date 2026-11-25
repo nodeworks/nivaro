@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
+import { EnvWindowGate } from '../changes/WindowGate'
 import { BLOCKER_COPY, type HubEnvironment, hubError, hubKeys, hubToast } from '../hub-api'
 import { dangerGhost, ghostButton, StatusChip } from '../hub-parts'
 import { StackSettingsView } from '../owner-access'
@@ -547,8 +548,9 @@ function ApplyForm({
 }) {
   const qc = useQueryClient()
   const [typed, setTyped] = useState('')
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
   const apply = useMutation({
-    mutationFn: () => applyStack(env.id, typed),
+    mutationFn: () => applyStack(env.id, typed, outsideReason),
     onSuccess: () => {
       toast.success(
         `Applying the saved settings to ${env.key} — follow it in the promotion history`
@@ -567,6 +569,7 @@ function ApplyForm({
         deploy.
       </p>
       {preview && <ApplyPreviewLines preview={preview} />}
+      <EnvWindowGate envId={env.id} what='apply' onReason={setOutsideReason} />
       <div className='flex flex-wrap items-center gap-2'>
         <label htmlFor={`hub-apply-${env.id}${idPrefix}`} className={rowText}>
           Type <span className='font-mono'>{env.key}</span> to apply:

@@ -17,6 +17,8 @@ import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatRelative } from '@/lib/utils'
+import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
+import { SharedWindowGate } from '../changes/WindowGate'
 import {
   isLivePromotion,
   promotionStatusTone,
@@ -236,6 +238,17 @@ function UpgradeForm({
   const downgrade = plan.data
     ? plan.data.downgrade === true
     : isDowngrade(kind, version, shared.version_pin)
+  /** An administrator's emergency start outside the Hub-wide deploy windows: the reason. */
+  const [outsideReason, setOutsideReason] = useState<string | null>(null)
+  /**
+   * The pre-deploy checklist of the production apps on this deployment: an upgrade, or a
+   * rollback the Hub judges a forward deploy (not below what the deployment runs).
+   */
+  const [preDeploy, setPreDeploy] = useState<ChecklistState>({
+    required: false,
+    ready: true,
+    runId: null
+  })
   const start = useMutation({
     mutationFn: () =>
       startSharedUpgrade(shared.id, {
@@ -244,7 +257,9 @@ function UpgradeForm({
         plan_hash: plan.data?.plan_hash ?? '',
         confirm: confirm.trim(),
         overrides: [...overrides].sort(),
-        ...(downgrade && downgradeOk ? { downgrade: true as const } : {})
+        ...(downgrade && downgradeOk ? { downgrade: true as const } : {}),
+        ...(preDeploy.runId != null ? { checklist_run_id: preDeploy.runId } : {}),
+        ...(outsideReason ? { outside_window_reason: outsideReason } : {})
       }),
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: upgradeKeys.deploys(shared.id) })
@@ -279,6 +294,7 @@ function UpgradeForm({
     open === 0 &&
     confirm.trim() === shared.key &&
     (!downgrade || downgradeOk) &&
+    !(preDeploy.required && !preDeploy.ready) &&
     !start.isPending
   const label = downgrade ? DOWNGRADE_LABEL : KIND_LABEL[kind]
   const downgradeNote = plan.data?.warnings.find((w) => w.code === 'DOWNGRADE')?.text
@@ -427,6 +443,19 @@ function UpgradeForm({
         <ErrorNotice
           description={upgradeError(plan.error, 'Could not check this version')}
           onRetry={() => void plan.refetch()}
+        />
+      )}
+
+      <SharedWindowGate sharedId={shared.id} onReason={setOutsideReason} />
+
+      {version && (
+        <PreDeployChecklist
+          key={kind}
+          target={{ kind: 'shared', sharedId: shared.id }}
+          action='upgrade'
+          version={version}
+          kind={kind === 'rollback' ? 'rollback' : null}
+          onState={setPreDeploy}
         />
       )}
 

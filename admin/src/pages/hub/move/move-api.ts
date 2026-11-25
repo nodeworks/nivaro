@@ -295,6 +295,10 @@ export const startMove = (
     checklist: Record<string, boolean>
     /** Refusals the operator overrides for this move (P6-20: LINK_URL_NOT_PULLABLE, SOURCE_NOT_PULLABLE). */
     overrides?: string[]
+    /** The ticked pre-deploy checklist (a production move with one). */
+    checklist_run_id?: number
+    /** An administrator's emergency start outside the deploy window: why. */
+    outside_window_reason?: string
   }
 ) =>
   api.post(`/hub/environments/${envId}/move`, body).then((r) => {

@@ -439,6 +439,11 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_rollback_watches',
       'nivaro_hub_release_notes',
       'nivaro_hub_version_facts',
+      // Hub change operations (573): deploy windows, checklist items + checklists, calendar
+      'nivaro_hub_deploy_windows',
+      'nivaro_hub_checklist_items',
+      'nivaro_hub_checklist_runs',
+      'nivaro_hub_calendar_entries',
       'nivaro_hub_issue_groups',
       'nivaro_hub_ops_health',
       'nivaro_hub_secret_policies',

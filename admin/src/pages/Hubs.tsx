@@ -182,6 +182,7 @@ const SCREENS: Record<string, Screens> = {
     status: lazy(() => import('@/pages/hub/incident/HubStatusPages')),
     smoke: lazy(() => import('@/pages/hub/verify/HubSmoke')),
     extensions: lazy(() => import('@/pages/hub/verify/HubExtensions')),
+    changes: lazy(() => import('@/pages/hub/changes/HubChanges')),
     issues: lazy(() => import('@/pages/hub/ops/HubIssues')),
     storage: lazy(() => import('@/pages/hub/ops/HubStorage')),
     secrets: lazy(() => import('@/pages/hub/ops/HubSecrets')),

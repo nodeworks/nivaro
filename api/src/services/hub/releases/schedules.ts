@@ -2,6 +2,7 @@ import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
 import { listEnvironments } from '../apps.js'
+import { isChecklistWait } from '../changes/checklist.js'
 import { type FreezeRefusal, freezeRefusal } from './freeze.js'
 import { notifyAppPeople, notifyAppPeopleAndAdmins } from './notify.js'
 import { type PersonCheck, personCanAct } from './person.js'
@@ -169,7 +170,7 @@ export async function cancelSchedule(id: number): Promise<boolean> {
 
 export interface ScheduleDeps {
   now(): number
-  freeze(appId: number): Promise<FreezeRefusal | null>
+  freeze(appId: number, envId?: number | null): Promise<FreezeRefusal | null>
   startPromotion(envId: number, o: PlannedStart): Promise<{ deployId: number }>
   startTrain(s: HubSchedule): Promise<{ trainId: number }>
   notify(
@@ -195,7 +196,7 @@ export interface ScheduleDeps {
 export function defaultScheduleDeps(): ScheduleDeps {
   return {
     now: () => Date.now(),
-    freeze: (appId) => freezeRefusal({ appIds: [appId], action: 'promote' }),
+    freeze: (appId, envId) => freezeRefusal({ appIds: [appId], action: 'promote', envId }),
     startPromotion: (envId, o) => startPlannedPromotion(envId, o),
     startTrain: async (s) => {
       if (!s.train)
@@ -336,26 +337,60 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
       })
       continue
     }
-    const frozen = await deps.freeze(s.app_id)
+    const frozen = await deps.freeze(s.app_id, s.kind === 'promote' ? s.environment_id : null)
     if (frozen) {
-      // Waits never use up tries; the missed rule counts from the freeze's end.
-      if (frozen.code === 'FROZEN' && s.on_freeze === 'fail') {
-        await settle(s.id, { status: 'failed', error: `FROZEN: ${frozen.message}`.slice(0, 1000) })
+      // A deploy window that cannot be read needs a person, and so does a schedule no window
+      // opens for within 14 days: both end here (missed / failed, people told) instead of
+      // waiting for a surprise deploy whenever someone edits a window.
+      const noOpening = frozen.code === 'OUTSIDE_WINDOW' && frozen.next_opening === null
+      if (noOpening || frozen.code === 'WINDOW_INVALID') {
+        await settle(s.id, {
+          status: 'failed',
+          error: (noOpening
+            ? `MISSED: no deploy window opens within 14 days. ${frozen.message}`
+            : `${frozen.code}: ${frozen.message}`
+          ).slice(0, 1000)
+        })
+        await deps.notify(
+          s.app_id,
+          {
+            subject: noOpening
+              ? `Scheduled ${s.kind} of ${s.version} missed`
+              : `Scheduled ${s.kind} of ${s.version} not started`,
+            message: `${what(s)} was not started: ${frozen.message} Nothing was deployed; schedule it again.`,
+            urgent: true
+          },
+          [s.created_by]
+        )
+        continue
+      }
+      // Waits never use up tries; the missed rule counts from the freeze's end (a deploy
+      // window's next opening counts the same way: OUTSIDE_WINDOW).
+      const timed = frozen.code === 'FROZEN' || frozen.code === 'OUTSIDE_WINDOW'
+      const wordsOf =
+        frozen.code === 'OUTSIDE_WINDOW' ? 'outside its deploy window' : 'inside a freeze window'
+      if (timed && s.on_freeze === 'fail') {
+        await settle(s.id, {
+          status: 'failed',
+          error: `${frozen.code}: ${frozen.message}`.slice(0, 1000)
+        })
         await deps.notify(
           s.app_id,
           {
             subject: `Scheduled ${s.kind} of ${s.version} not started`,
-            message: `${what(s)} was due inside a freeze window and was set to fail then: ${frozen.message}`
+            message: `${what(s)} was due ${wordsOf} and was set to fail then: ${frozen.message}`
           },
           [s.created_by]
         )
       } else {
         await settle(s.id, {
           status: 'waiting',
-          wait_until: frozen.code === 'FROZEN' ? new Date(frozen.freeze.ends_at) : new Date(now),
-          note: (frozen.code === 'FROZEN'
-            ? `Waiting for the freeze to end: ${frozen.message}`
-            : `Trying again: ${frozen.message}`
+          wait_until: timed ? new Date(frozen.freeze.ends_at) : new Date(now),
+          note: (frozen.code === 'OUTSIDE_WINDOW'
+            ? `Waiting for the deploy window: ${frozen.message}`
+            : timed
+              ? `Waiting for the freeze to end: ${frozen.message}`
+              : `Trying again: ${frozen.message}`
           ).slice(0, 500)
         })
       }
@@ -374,7 +409,8 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
         const { deployId } = await deps.startPromotion(s.environment_id, {
           kind: 'promote',
           version: s.version,
-          userId: s.created_by
+          userId: s.created_by,
+          checklist: { kind: 'schedule', id: s.id }
         })
         await settle(s.id, { status: 'started', deploy_id: deployId, note: null })
         await Promise.resolve(deps.logStart(s, { deployId })).catch(() => undefined)
@@ -384,6 +420,16 @@ export async function runDueSchedules(deps: ScheduleDeps = defaultScheduleDeps()
       const code = refusalCode(err)
       if (code === 'ALREADY_RUNS' && s.kind === 'promote') {
         await settle(s.id, { status: 'started', note: 'The environment already ran this version' })
+        continue
+      }
+      // A production pre-deploy checklist not ticked yet: wait without using a try, and keep
+      // wait_until as it is, so the 6-hour missed rule still counts from when it was due.
+      if (isChecklistWait(code)) {
+        await settle(s.id, {
+          status: 'waiting',
+          attempts: s.attempts,
+          note: `Waiting for its pre-deploy checklist: ${refusalText(err)}`.slice(0, 500)
+        })
         continue
       }
       if (isTransientCode(code) && attempts < MAX_SCHEDULE_ATTEMPTS) {

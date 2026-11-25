@@ -42,6 +42,8 @@ describe('hub registry', () => {
       // Hub verification (hub-enh/verify) follows Releases.
       'Smoke checks',
       'Extensions',
+      // Hub change operations (enhancements 26–28) sit beside Releases.
+      'Changes',
       // Hub ops (enhancements 10, 20, 19) come last, then People (hub-enh/people).
       'Issues',
       'Storage',
