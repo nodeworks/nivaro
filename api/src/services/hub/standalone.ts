@@ -10,12 +10,23 @@ import { hubModeEnabled } from './mode.js'
  */
 
 const SYSTEM_TABLE = /^(nivaro|directus)_/i
+/**
+ * Collections every install gets from core migrations without a system prefix — they are
+ * Nivaro's own, not an app's. `ideas` = the idea board (migration 446): a fresh standalone Hub
+ * holds it, so without this every new Hub showed the full sidebar (2026-11-25).
+ */
+const CORE_COLLECTIONS = new Set(['ideas'])
 
 export async function hasAppCollections(): Promise<boolean> {
   const rows = (await db('nivaro_collections').select('collection')) as Array<{
     collection: unknown
   }>
-  return rows.some((r) => typeof r.collection === 'string' && !SYSTEM_TABLE.test(r.collection))
+  return rows.some(
+    (r) =>
+      typeof r.collection === 'string' &&
+      !SYSTEM_TABLE.test(r.collection) &&
+      !CORE_COLLECTIONS.has(r.collection.toLowerCase())
+  )
 }
 
 export async function hubStandalone(
