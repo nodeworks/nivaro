@@ -227,9 +227,19 @@ describe('GET /status', () => {
       expect(on.json().flow_scripts_mixed).toBeUndefined()
       // Every process that may run flows must agree (review L7): a worker left off, or one
       // before 0.3.215 (no flag), makes it off and "mixed"; a realtime process does not count.
+      // Only this deployment's processes count (review N8): a peer of another shared deployment
+      // on the same Redis — same NODE_ENV, so the same instanceKey() — is left out.
+      const mine = { instance: instanceKey(), shared_deployment: 'shared-a' }
       roster.peers = [
-        { id: 'other-web', role: 'web', flow_scripts: true },
-        { id: 'rt', role: 'realtime' }
+        { id: 'other-web', role: 'web', flow_scripts: true, ...mine },
+        { id: 'rt', role: 'realtime', ...mine },
+        {
+          id: 'foreign',
+          role: 'worker',
+          flow_scripts: false,
+          instance: instanceKey(),
+          shared_deployment: 'shared-b'
+        }
       ]
       const all = await a.inject({
         method: 'GET',
@@ -237,14 +247,13 @@ describe('GET /status', () => {
         headers: auth
       })
       expect(all.json().flow_scripts).toBe(true)
+      expect(all.json().flow_scripts_mixed).toBeUndefined()
       for (const worker of [
-        { id: 'w1', role: 'worker', flow_scripts: false, instance: instanceKey() },
+        { id: 'w1', role: 'worker', flow_scripts: false, ...mine },
+        // Before 0.3.215: no flag and no key, but the same instance — counted, and off.
         { id: 'w1', role: 'worker', instance: instanceKey() }
       ]) {
-        roster.peers = [
-          { id: 'other-web', role: 'web', flow_scripts: true, instance: instanceKey() },
-          worker
-        ]
+        roster.peers = [{ id: 'other-web', role: 'web', flow_scripts: true, ...mine }, worker]
         const mixed = await a.inject({
           method: 'GET',
           url: '/api/hub-deployment/status',

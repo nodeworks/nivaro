@@ -137,10 +137,17 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
     // a worker left off would refuse the steps the plan let through. Roster entries before
     // 0.3.215 carry no flag and count as off; realtime processes run no flows.
     const ownScripts = flowScriptsOnShared()
-    // Only this deployment's processes (review N4): a shared external Redis also holds others'.
-    const peers = (await listInstances()).filter(
-      (r) => r.id !== INSTANCE_ID && r.role !== 'realtime' && r.instance === instanceKey()
-    )
+    // Only this deployment's processes (review N4/N8): a shared external Redis also holds other
+    // deployments' roster entries, and NODE_ENV alone does not tell them apart. A peer naming
+    // another shared-deployment key is left out; one naming none (a version before 0.3.215) is
+    // counted when its instance matches, so an old process of this deployment still reads as off
+    // (fail closed).
+    const ownKey = hubSharedConfig()?.deployment ?? null
+    const peers = (await listInstances()).filter((r) => {
+      if (r.id === INSTANCE_ID || r.role === 'realtime') return false
+      if (typeof r.shared_deployment === 'string') return r.shared_deployment === ownKey
+      return r.instance === instanceKey()
+    })
     const scriptFlags = [ownScripts, ...peers.map((r) => r.flow_scripts === true)]
     const scriptsOn = scriptFlags.every(Boolean)
     const body: DeploymentStatus = {
