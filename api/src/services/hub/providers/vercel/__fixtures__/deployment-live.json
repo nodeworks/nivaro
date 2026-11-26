@@ -1,0 +1,13 @@
+{
+  "id": "dpl_test00000000000000002",
+  "url": "web-app-def456.vercel.app",
+  "projectId": "prj_test000000000000000001",
+  "name": "web-app",
+  "target": "production",
+  "readyState": "READY",
+  "readySubstate": "PROMOTED",
+  "checksState": "completed",
+  "checksConclusion": "succeeded",
+  "aliasAssigned": 1767225650000,
+  "createdAt": 1767225100000
+}

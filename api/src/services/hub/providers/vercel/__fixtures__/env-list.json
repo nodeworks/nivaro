@@ -1,0 +1,22 @@
+{
+  "envs": [
+    {
+      "id": "env_test0000000000000001",
+      "key": "API_URL",
+      "type": "sensitive",
+      "target": ["production", "preview"],
+      "gitBranch": null,
+      "createdAt": 1767225600000,
+      "updatedAt": 1767225600000
+    },
+    {
+      "id": "env_test0000000000000002",
+      "key": "FEATURE_FLAG",
+      "type": "plain",
+      "value": "plain-value-visible",
+      "target": ["development"],
+      "gitBranch": null,
+      "updatedAt": 1767225600000
+    }
+  ]
+}

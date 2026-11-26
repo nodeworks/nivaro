@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "rate_limited",
+    "message": "Rate limit exceeded; the token test-secret-token-0001 was used"
+  }
+}

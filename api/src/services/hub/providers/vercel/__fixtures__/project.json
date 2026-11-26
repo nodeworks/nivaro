@@ -1,0 +1,15 @@
+{
+  "id": "prj_test000000000000000001",
+  "name": "web-app",
+  "framework": "nextjs",
+  "rootDirectory": "apps/web",
+  "buildCommand": "pnpm build",
+  "installCommand": null,
+  "outputDirectory": null,
+  "nodeVersion": "22.x",
+  "link": {
+    "type": "github",
+    "repo": "acme/web-app"
+  },
+  "updatedAt": 1767225600000
+}

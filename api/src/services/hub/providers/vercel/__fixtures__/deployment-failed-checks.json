@@ -1,0 +1,12 @@
+{
+  "id": "dpl_test00000000000000003",
+  "url": "web-app-bad789.vercel.app",
+  "projectId": "prj_test000000000000000001",
+  "name": "web-app",
+  "target": "preview",
+  "readyState": "READY",
+  "checksState": "completed",
+  "checksConclusion": "failed",
+  "aliasAssigned": null,
+  "createdAt": 1767224000000
+}
