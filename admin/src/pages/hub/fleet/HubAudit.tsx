@@ -103,7 +103,7 @@ export default function HubAudit() {
   const people = audit.data?.meta.people ?? []
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
+    <div className='relative flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
       <div className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
         <div className='flex flex-wrap items-center gap-2'>
           <SimpleSelect

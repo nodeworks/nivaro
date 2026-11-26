@@ -94,7 +94,7 @@ export function HubTemplates() {
         }
       />
 
-      <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+      <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 pb-20 sm:p-6'>
           {picked === 'new' && (
             <UploadForm onClose={() => setPicked(null)} onSaved={(id) => setPicked(id)} />

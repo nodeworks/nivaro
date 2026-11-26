@@ -77,7 +77,7 @@ export default function HubAccess() {
         Access
       </h2>
       <HubToolbar description='Temporary admin access (break-glass) that ends by itself, and the access reviews every app is due for. Removed people are suspended in the app, never deleted.' />
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <div className='relative flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {reviewId ? (
           <ReviewView id={reviewId} onBack={() => open(null)} />
         ) : (

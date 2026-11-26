@@ -88,7 +88,7 @@ export default function HubHealth() {
   const weights = health.data?.weights
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
+    <div className='relative flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
       <HubToolbar
         description={
           <>

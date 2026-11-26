@@ -159,7 +159,7 @@ export default function HubStorage() {
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
   const q = useStorageOverview()
   return (
-    <div className='flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+    <div className='relative flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
       {q.isPending ? (
         <Skeleton className='h-32 w-full' />
       ) : q.isError ? (

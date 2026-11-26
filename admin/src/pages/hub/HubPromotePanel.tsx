@@ -806,7 +806,7 @@ function PromotionProgress({
             Nothing logged yet.
           </p>
         ) : (
-          <ol className='m-0 max-h-64 list-none space-y-0.5 overflow-y-auto px-3 pb-2 font-mono text-[11px] leading-snug'>
+          <ol className='relative m-0 max-h-64 list-none space-y-0.5 overflow-y-auto px-3 pb-2 font-mono text-[11px] leading-snug'>
             {d.log.map((l) => (
               <li
                 key={l.seq}

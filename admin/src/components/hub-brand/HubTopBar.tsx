@@ -148,7 +148,7 @@ export function HubTopBar({
         <div className='flex shrink-0 items-center gap-0.5'>
           {chat}
           {!narrow && tools}
-          <NotificationBell collapsed compact />
+          <NotificationBell collapsed compact placement='below' />
           {!narrow && <ThemeSwitcher collapsed />}
           <AccountMenu user={user} extras={accountExtras} />
         </div>

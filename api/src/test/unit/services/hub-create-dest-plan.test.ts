@@ -207,6 +207,33 @@ describe('Docker creation plan', () => {
     expect(text).not.toContain('enc:v1')
   })
 
+  it('base URLs follow the driver edge (scheme + port); unset = https on 443', () => {
+    expect(buildCreationPlan(input(), facts()).environments.map((e) => e.base_url)).toEqual([
+      'https://demo--staging.apps.example.com',
+      'https://demo.apps.example.com'
+    ])
+    const onPort = (edge: Partial<DockerDriverRow['config']>) =>
+      buildCreationPlan(
+        input(),
+        facts({
+          docker: dockerFacts({ driver: { ...driver, config: { ...driver.config, ...edge } } })
+        })
+      )
+    const p = onPort({ edge_port: 3280 })
+    expect(p.ok).toBe(true)
+    expect(p.environments.map((e) => [e.base_url, e.redirect_uri])).toEqual([
+      [
+        'https://demo--staging.apps.example.com:3280',
+        'https://demo--staging.apps.example.com:3280/api/auth/callback'
+      ],
+      ['https://demo.apps.example.com:3280', 'https://demo.apps.example.com:3280/api/auth/callback']
+    ])
+    // The scheme's own default port is never written out.
+    expect(onPort({ edge_port: 443 }).environments[1].base_url).toBe(
+      'https://demo.apps.example.com'
+    )
+  })
+
   it('refuses a missing driver or one without a token', () => {
     expect(
       codes(buildCreationPlan(input(), facts({ docker: dockerFacts({ driver: null }) })))

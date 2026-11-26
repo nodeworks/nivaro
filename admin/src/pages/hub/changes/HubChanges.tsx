@@ -84,7 +84,7 @@ export default function HubChanges() {
       <HubToolbar
         description={`Promotions, schedules, release trains, moves, shared upgrades, freezes and planned maintenance of every app you can see. Times in ${viewerTimeZone()}.`}
       />
-      <div className='flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <div className='relative flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         {q.isPending ? (
           <Skeleton className='h-40 w-full' />
         ) : q.isError ? (

@@ -95,6 +95,10 @@ export interface HubDockerDriverConfig {
   dns_mode: 'automatic' | 'manual'
   wildcard_domain: string | null
   edge_target: string | null
+  /** How people reach the edge; null = https (plain http for localhost / .test names). */
+  edge_scheme?: 'https' | 'http' | null
+  /** The edge's public port when not 443 / 80; null = the scheme's default. */
+  edge_port?: number | null
 }
 
 export interface HubDriver {

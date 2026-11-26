@@ -162,7 +162,7 @@ export default function HubFleet() {
   const sortBy = (s: Sort) => set('sort', sort === s ? 'app' : s, 'app')
 
   return (
-    <div className='flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
+    <div className='relative flex flex-1 min-h-0 flex-col overflow-y-auto bg-slate-50 dark:bg-background'>
       <div className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'>
         <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
           <p className='m-0 text-[13px] font-medium text-slate-900 dark:text-foreground'>

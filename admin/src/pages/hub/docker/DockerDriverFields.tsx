@@ -18,6 +18,17 @@ import {
   useAgentCheck
 } from './docker-api'
 
+/** The address a new app on this host will get, from the draft (shown under the port). */
+function edgeAddressHint(d: DockerDraft): string {
+  const base = d.dns_mode === 'automatic' ? d.wildcard_domain.trim().replace(/^\*\./, '') : ''
+  const host = base ? `myapp.${base}` : 'myapp.example.com'
+  const local = /(^|\.)(localhost|test)$/i.test(base)
+  const scheme = d.edge_scheme || (local ? 'http' : 'https')
+  const port = d.edge_port.trim()
+  const shownPort = port && port !== (scheme === 'https' ? '443' : '80') ? `:${port}` : ''
+  return `Empty = ${scheme === 'https' ? '443' : '80'}. New apps open at ${scheme}://${host}${shownPort}`
+}
+
 /**
  * The fields of a Docker driver (Hub admins): the Hub agent's address, how a new stack name
  * reaches the edge (automatic wildcard DNS or manual), and the agent token — generated here,
@@ -141,6 +152,39 @@ export function DockerDriverFields({
           />
         </Field>
       )}
+      <Field
+        id={`${idPrefix}-scheme`}
+        label='Edge scheme'
+        hint='How people reach apps on this host. Automatic: https, plain http for localhost and .test names.'
+      >
+        <SimpleSelect
+          value={draft.edge_scheme || 'auto'}
+          onChange={(v) => onChange({ edge_scheme: v === 'auto' ? '' : (v as 'https' | 'http') })}
+          options={[
+            { value: 'auto', label: 'Automatic' },
+            { value: 'https', label: 'https' },
+            { value: 'http', label: 'http (localhost and .test only)' }
+          ]}
+          ariaLabel='Edge scheme'
+          className='h-8 text-[13px]'
+          triggerProps={{ id: `${idPrefix}-scheme` }}
+        />
+      </Field>
+      <Field
+        id={`${idPrefix}-port`}
+        label='Edge port'
+        error={shown('edge_port')}
+        hint={edgeAddressHint(draft)}
+      >
+        <Input
+          id={`${idPrefix}-port`}
+          value={draft.edge_port}
+          onChange={(e) => onChange({ edge_port: e.target.value })}
+          placeholder='443'
+          inputMode='numeric'
+          className='h-8 font-mono text-[13px]'
+        />
+      </Field>
       <div className='sm:col-span-2'>
         <Field
           id={`${idPrefix}-token`}

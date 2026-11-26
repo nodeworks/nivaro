@@ -94,6 +94,41 @@ describe('docker driver validation', () => {
     }
   })
 
+  it('edge_scheme + edge_port: optional, checked, stored as null when unset', () => {
+    const ok = code({ ...auto, edge_scheme: 'https', edge_port: 3280 })
+    expect(ok).toMatchObject({
+      ok: true,
+      row: { config: { edge_scheme: 'https', edge_port: 3280 } }
+    })
+    expect(code(auto)).toMatchObject({
+      ok: true,
+      row: { config: { edge_scheme: null, edge_port: null } }
+    })
+    expect(code({ ...auto, edge_scheme: '', edge_port: '' })).toMatchObject({
+      ok: true,
+      row: { config: { edge_scheme: null, edge_port: null } }
+    })
+    for (const bad of [
+      { edge_scheme: 'ftp' },
+      { edge_port: 0 },
+      { edge_port: 70000 },
+      { edge_port: '3280' },
+      { edge_port: 1.5 }
+    ])
+      expect(code({ ...auto, ...bad })).toMatchObject({ ok: false, code: 'BAD_CONFIG' })
+    // Plain http only under localhost / .test names.
+    expect(code({ ...auto, edge_scheme: 'http' })).toMatchObject({ ok: false, code: 'BAD_CONFIG' })
+    expect(
+      code({ ...auto, wildcard_domain: 'apps.localhost', edge_scheme: 'http', edge_port: 8080 }).ok
+    ).toBe(true)
+  })
+
+  it('a stored config from before edge_scheme / edge_port still validates on PATCH', () => {
+    const existing = stored()
+    const r = validateDriverInput({ name: 'Renamed' }, existing)
+    expect(r).toMatchObject({ ok: true, row: { config: { edge_scheme: null, edge_port: null } } })
+  })
+
   it('agent_url: https, or http only for plainHttpAllowed() hosts', () => {
     expect(code({ ...auto, agent_url: 'http://agent.example.com' })).toMatchObject({
       ok: false,

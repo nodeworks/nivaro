@@ -13,6 +13,24 @@ describe('opsTopicsOfWrite', () => {
     ).toEqual(['trackers'])
     expect(opsTopicsOfWrite('update [nivaro_tracker_outbox] set [attempts] = @p0')).toEqual([])
   })
+  it('Hub tables poke hub; the per-minute sample tables do not', () => {
+    for (const sql of [
+      'update [nivaro_hub_deploys] set [heartbeat_at] = @p0 where [id] = @p1',
+      'insert into "nivaro_hub_creations" ("environment_id") values ($1)',
+      'update nivaro_hub_fleet_status set state = ? where environment_id = ?',
+      'delete from `nivaro_hub_apps` where `id` = ?'
+    ])
+      expect(opsTopicsOfWrite(sql)).toEqual(['hub'])
+    for (const sql of [
+      'insert into [nivaro_hub_uptime_samples] ([up]) values (@p0)',
+      'insert into nivaro_hub_uptime_hours (hour) values (?)',
+      'insert into [nivaro_hub_capacity_samples] ([cpu]) values (@p0)',
+      'insert into [nivaro_hub_usage_days] ([day]) values (@p0)',
+      'select * from [nivaro_hub_apps]'
+    ])
+      expect(opsTopicsOfWrite(sql)).toEqual([])
+    expect(opsTopicGate('hub')).toEqual({ topic: 'hub', gate: 'auth' })
+  })
   it('maps writes to the topics whose pages show that table', () => {
     expect(opsTopicsOfWrite('insert into [nivaro_issues] ([title]) values (@p0)')).toEqual([
       'issues'

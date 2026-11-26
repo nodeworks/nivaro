@@ -59,7 +59,7 @@ export default function HubSignin() {
   const overview = useSigninOverview()
 
   return (
-    <div className='flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+    <div className='relative flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
       <SectionCard
         title='Sign in through the Hub'
         description='Apps in Via the Hub mode send people here; the Hub signs them in with Microsoft and hands them back.'

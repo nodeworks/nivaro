@@ -278,7 +278,7 @@ export const segmentButton = (on: boolean) =>
 
 /** Width of every Apps hub list pane (Apps, Shared deployments, Drivers, Databases, …). */
 export const listPaneClass =
-  'w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[288px] md:border-r dark:border-border dark:bg-card'
+  'relative w-full shrink-0 flex-col overflow-y-auto border-slate-200 bg-white md:flex md:w-[288px] md:border-r dark:border-border dark:bg-card'
 
 /**
  * The header of an Apps hub list pane: what the list holds (with its count), then its actions.
