@@ -1,0 +1,386 @@
+/**
+ * Nivaro Hub third-party providers: the contract every adapter (GitHub, AWS, Vercel, Auth0, Expo,
+ * an extension's) implements and the engine, REST API and UI speak. Spec:
+ * docs/superpowers/specs/2026-11-26-hub-providers-design.md ("Framework contract").
+ *
+ * Ground rules an adapter keeps:
+ *  - It never touches the Hub database (the engine owns every write) and never calls `fetch`
+ *    itself: every outbound call goes through `ctx.fetch` (host allowlist, https only).
+ *  - It never puts a secret value in an error, a log line, an op's `changes`, `data` or `answer`,
+ *    or an `Observed` — `ctx.scrub(text)` masks the connection's secrets in provider text.
+ *  - `apply` is idempotent by read-before-write: observe, then act only if still needed.
+ *  - Failures are thrown as `ProviderError` (code + message + retryable), never a bare Error.
+ */
+
+// ── Small enums ──
+
+/** What a planned operation risks. The engine maps each to a gate (see the spec). */
+export type RiskFlag = 'destructive' | 'data_loss' | 'public_exposure' | 'downtime' | 'cost'
+export const RISK_FLAGS: readonly RiskFlag[] = [
+  'destructive',
+  'data_loss',
+  'public_exposure',
+  'downtime',
+  'cost'
+]
+
+/** `app` = belongs to one app (+ environment); `shared` = per connection, Hub admins only. */
+export type ResourceScope = 'app' | 'shared'
+
+export type OpKind = 'create' | 'update' | 'replace' | 'delete' | 'noop'
+
+// ── Outbound calls ──
+
+export interface ProviderFetchInit {
+  method?: string
+  /** Lower- or mixed-case names; values are sent as given. */
+  headers?: Record<string, string>
+  body?: string | Uint8Array | null
+  /** Combined with the context's abort signal and the fetch's own timeout. */
+  signal?: AbortSignal
+  /** Overrides the fetch's default timeout for this one call. */
+  timeoutMs?: number
+}
+
+/**
+ * `fetch` limited to the hosts an adapter declared (see provider-fetch.ts): https only, redirects
+ * followed only to allowed hosts. Refusals and timeouts throw `ProviderFetchError`.
+ */
+export type ProviderFetch = (url: string, init?: ProviderFetchInit) => Promise<Response>
+
+export interface ProviderLogger {
+  /** Never pass secret values or provider bodies that may hold them. */
+  info(message: string, data?: Record<string, unknown>): void
+  warn(message: string, data?: Record<string, unknown>): void
+  error(message: string, data?: Record<string, unknown>): void
+}
+
+/**
+ * Short-lived tokens an adapter mints from its credentials (GitHub installation token, Auth0 M2M
+ * token, AWS STS session). Scoped to ONE connection by the context builder, held in memory only,
+ * dropped when the connection's credentials change. Adapters use this instead of module-level
+ * caches (module-state guard).
+ */
+export interface ProviderTokenCache {
+  get(key: string): string | null
+  /** `expiresAt` = when the token stops working; the cache drops it 60 s before. */
+  set(key: string, value: string, expiresAt: Date): void
+  delete(key: string): void
+}
+
+/** What an adapter call is given. Built by the engine (`makeProviderContext`, context.ts). */
+export interface ProviderContext {
+  connectionId: number
+  /** The adapter key, e.g. 'aws'. */
+  provider: string
+  /** The connection's non-secret fields (`ConnectionField` without `secret`). */
+  config: Record<string, unknown>
+  /** The connection's secret fields, opened for this call only. Never log or answer these. */
+  secrets: Record<string, string>
+  /** Allowlisted fetch for this connection (hosts from `ConnectionSpec.hosts(config)`). */
+  fetch: ProviderFetch
+  log: ProviderLogger
+  /** The region this call is for (AWS: one of the connection's allowed regions); else null. */
+  region: string | null
+  /** Aborted when the run is cancelled or loses its lock. */
+  signal: AbortSignal
+  /** Masks every secret value of this connection (and its tokens) found in `text`. */
+  scrub(text: string): string
+  tokens: ProviderTokenCache
+  /** The clock (tests pin it). */
+  now(): Date
+}
+
+// ── Connections ──
+
+export interface ConnectionField {
+  key: string
+  label: string
+  kind: 'string' | 'number' | 'boolean' | 'enum' | 'list' | 'text'
+  /** Sealed with the connection's secret; answered back only as a mask + fingerprint. */
+  secret?: boolean
+  required?: boolean
+  help?: string
+  placeholder?: string
+  /** For `enum`; for `list` the allowed values when the list is closed (e.g. AWS regions). */
+  options?: Array<{ value: string; label: string }>
+  default?: unknown
+}
+
+export interface ConnectionSpec {
+  /** The form: non-secret fields land in `config`, secret ones in the sealed secret. */
+  fields: ConnectionField[]
+  /**
+   * The exact hosts (or `*.suffix`) this connection may call, from its config — e.g.
+   * `['api.github.com']`, `['sts.amazonaws.com', 'ec2.us-east-1.amazonaws.com', …]`,
+   * `['<tenant>.auth0.com']`. Anything else is refused by `ctx.fetch`.
+   */
+  hosts(config: Record<string, unknown>): string[]
+  /** One line for lists, e.g. "AWS 123456789012 · us-east-1, eu-west-1". No secrets. */
+  describe(config: Record<string, unknown>): string
+  /** Problems with a filled-in form (empty = fine); called before saving. */
+  validate?(config: Record<string, unknown>, secrets: Record<string, string>): string[]
+}
+
+export interface ConnectionTest {
+  ok: boolean
+  /** Who the credentials are, as the provider says it ("org nodeworks", an assumed-role ARN). */
+  identity: string | null
+  /** Each permission a resource type needs (`type` = '*' for connection-wide ones). */
+  permissions: Array<{ type: string; need: string; has: boolean }>
+  /** `need` of every permission with `has: false`. */
+  missing: string[]
+  message?: string
+}
+
+// ── Resource types ──
+
+export interface FieldSpec {
+  key: string
+  label: string
+  kind: 'string' | 'number' | 'boolean' | 'enum' | 'list' | 'object' | 'ref' | 'secret'
+  required?: boolean
+  help?: string
+  default?: unknown
+  /** `enum` choices. */
+  options?: Array<{ value: string; label: string }>
+  /** `list`: the spec of one item (its own `key` is ignored). */
+  items?: FieldSpec
+  /** `object`: its fields. */
+  fields?: FieldSpec[]
+  /** `ref`: the resource type key it points at (e.g. 'aws.vpc'). Value = `RefValue`. */
+  refType?: string
+  /** Set by the provider, shown, never edited (an ARN, a URL). */
+  readOnly?: boolean
+  /** A change to this field forces a replace (delete + create). */
+  replaceOnChange?: boolean
+  /** Changeable only on create. */
+  createOnly?: boolean
+  min?: number
+  max?: number
+  /** A regular expression source the value must match (strings). */
+  pattern?: string
+}
+
+export interface ResourceCapabilities {
+  create: boolean
+  update: boolean
+  delete: boolean
+  adopt: boolean
+  snapshot: boolean
+  tag: boolean
+}
+
+/** A field of this type that points at another managed resource (dependency order, SHARED_IN_USE). */
+export interface ResourceTypeRef {
+  /** The field key (a `ref` field, or a `list` of `ref`). */
+  field: string
+  /** The type it points at. */
+  type: string
+  /** Deleting this resource requires deleting the referencing ones first. Default true. */
+  required?: boolean
+}
+
+export interface ResourceTypeSpec {
+  /** `<provider>.<snake>`, e.g. 'aws.security_group'. */
+  key: string
+  label: string
+  scope: ResourceScope
+  fields: FieldSpec[]
+  capabilities: ResourceCapabilities
+  /** Whether the engine may generate an undo (per field when a function). */
+  reversible: boolean | ((field: string) => boolean)
+  refs: ResourceTypeRef[]
+  /** The field whose value a typed confirm asks for (default: 'name'). */
+  nameField?: string
+  /** Risk flags of one planned op (pure). `desired` is null for a delete. */
+  risk(op: PlannedOp, desired: DesiredResource | null): RiskFlag[]
+  /** `monthly` = the resource bills while it exists above a small free/cheap class. */
+  costClass?(desired: DesiredResource): 'none' | 'monthly'
+}
+
+// ── Values that travel between the engine and adapters ──
+
+/** The stored value of a `ref` field: the Hub resource row it points at. */
+export interface RefValue {
+  resourceId: number
+}
+
+/**
+ * A `secret` field's value as an adapter sees it. `plain` is present only inside `apply` (opened
+ * for that call); `plan` sees the fingerprint and whether the person sent a new value.
+ */
+export interface SecretValue {
+  fingerprint: string
+  changed: boolean
+  plain?: string
+}
+
+/** What the Hub wants a resource to be. */
+export interface DesiredResource {
+  /** The Hub row id; null for a create the engine has not stored yet. */
+  resourceId: number | null
+  type: string
+  /** The provider's id (ARN, repo id…); null before create. */
+  externalId: string | null
+  scope: ResourceScope
+  appId: number | null
+  environmentId: number | null
+  /**
+   * Values by FieldSpec key. `ref` fields hold `RefValue` (or `RefValue[]` for a list of refs);
+   * `secret` fields hold `SecretValue`; everything else is plain JSON.
+   */
+  fields: Record<string, unknown>
+  /**
+   * The provider ids of every ref field, resolved by the engine (`null` = the referenced
+   * resource is not created yet — only at plan time; apply runs parents first).
+   */
+  refs: Record<string, string | string[] | null>
+  /** Tags the engine wants on it: `nivaro-hub:app`, `nivaro-hub:env`, `nivaro-hub:resource`. */
+  tags: Record<string, string>
+}
+
+/** What the provider says a resource is. No secret values, no raw provider bodies. */
+export interface Observed {
+  type: string
+  externalId: string
+  /** Display name. */
+  name: string | null
+  /**
+   * Values by FieldSpec key where readable (write-only secrets are absent). `ref` fields hold the
+   * referenced resource's provider id (string or string[]), not a RefValue.
+   */
+  fields: Record<string, unknown>
+  tags: Record<string, string>
+  /** ETag / version for compare-and-set writes, when the provider has one. */
+  version?: string | null
+  /** Provider lifecycle state ('available', 'pending', 'archived'…). */
+  status?: string | null
+  /** A link to the resource in the provider's own console. */
+  url?: string | null
+}
+
+export interface FieldChange {
+  field: string
+  /** Omitted for secret fields (and replaced by `secret: true`). */
+  from?: unknown
+  to?: unknown
+  secret?: boolean
+}
+
+export interface PlannedOp {
+  kind: OpKind
+  type: string
+  resourceId: number | null
+  externalId: string | null
+  /** One plain sentence why ("Port 22 open to 0.0.0.0/0 added"). */
+  reason: string
+  changes: FieldChange[]
+  /**
+   * The observed values this op depends on (field → value). The engine hashes them into the
+   * plan's precondition fingerprint and re-reads before the step; a moved value stops the run
+   * with PRECONDITION_CHANGED. Empty for a create.
+   */
+  preconditions: Record<string, unknown>
+  /** Filled by the engine from `ResourceTypeSpec.risk` (an adapter may leave it []). */
+  risk: RiskFlag[]
+  /**
+   * A named non-CRUD action an op runs (kind 'update'): 'dispatch' (github.workflow),
+   * 'promote' / 'rollback' (vercel.deployment), 'point' (expo.channel). Absent = plain write.
+   */
+  action?: string
+  /** The adapter's own step data (non-secret JSON), handed back to `apply` unchanged. */
+  data?: Record<string, unknown>
+}
+
+export interface SnapshotRef {
+  /** 'rds_snapshot', 'ebs_snapshot', 'before_state', … */
+  kind: string
+  /** The provider's snapshot id (or the engine's before-state key). */
+  id: string
+  label?: string
+  createdAt: string
+}
+
+export interface OpError {
+  code: string
+  /** Scrubbed of secrets. */
+  message: string
+  retryable: boolean
+  status?: number
+}
+
+export interface OpResult {
+  ok: boolean
+  /** The provider id after the op (a create's new id; the old one after a delete). */
+  externalId: string | null
+  /** The state after the op when the adapter read it (null after a delete or when not read). */
+  observed: Observed | null
+  /** A short, non-secret summary of the provider's answer (request id, status). */
+  answer?: Record<string, unknown>
+  error?: OpError
+  snapshot?: SnapshotRef
+}
+
+export interface ListPage {
+  items: Observed[]
+  /** Next page; null = last. */
+  cursor: string | null
+}
+
+export interface HealthAnswer {
+  status: 'ok' | 'warn' | 'down' | 'unknown'
+  message?: string
+  checkedAt: string
+  details?: Record<string, string | number | boolean>
+}
+
+// ── The adapter ──
+
+export interface ProviderAdapter {
+  /** `/^[a-z][a-z0-9-]{1,30}$/` — 'aws', 'github', or an extension's 'acme'. */
+  key: string
+  label: string
+  connection: ConnectionSpec
+  types: ResourceTypeSpec[]
+  testConnection(ctx: ProviderContext): Promise<ConnectionTest>
+  /** null = the resource is gone. */
+  observe(ctx: ProviderContext, type: string, externalId: string): Promise<Observed | null>
+  /** Everything of `type` the connection can see (Unmanaged + adopt). */
+  list(ctx: ProviderContext, type: string, cursor?: string | null): Promise<ListPage>
+  /**
+   * Pure diff (no calls): desired null = delete `observed`; observed null = create `desired`;
+   * nothing to do = one `noop` op (or []).
+   */
+  plan(
+    ctx: ProviderContext,
+    desired: DesiredResource | null,
+    observed: Observed | null
+  ): PlannedOp[]
+  /** One op, idempotent (read-before-write). Throws ProviderError on failure. */
+  apply(ctx: ProviderContext, op: PlannedOp, desired: DesiredResource | null): Promise<OpResult>
+  /** Before a delete / replace when the type's `capabilities.snapshot` is true. */
+  snapshot?(ctx: ProviderContext, type: string, externalId: string): Promise<SnapshotRef>
+  health?(ctx: ProviderContext, type: string, externalId: string): Promise<HealthAnswer>
+}
+
+// ── Errors ──
+
+/** What an adapter throws. The engine records it on the step (message already scrubbed). */
+export class ProviderError extends Error {
+  code: string
+  retryable: boolean
+  status?: number
+  constructor(code: string, message: string, opts: { retryable?: boolean; status?: number } = {}) {
+    super(message)
+    this.name = 'ProviderError'
+    this.code = code
+    this.retryable = opts.retryable ?? false
+    if (opts.status !== undefined) this.status = opts.status
+  }
+}
+
+/** 408 / 425 / 429 / 5xx are worth retrying; the rest are not. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599)
+}

@@ -331,6 +331,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_rebalances',
   'nivaro_hub_scale_roles', //         Hub scaling (581): kept replicas/limits, rules, scale runs
   'nivaro_hub_scale_runs',
+  'nivaro_hub_connections', //         Hub providers (582): connections (sealed credentials),
+  'nivaro_hub_app_connections', //     allowed connections per app, managed resources, changes
+  'nivaro_hub_resources',
+  'nivaro_hub_resource_changes',
   'nivaro_hub_regions', //             Hub placement (580): regions, host membership, cost
   'nivaro_hub_region_drivers', //      centres, peer Hubs (sealed key)
   'nivaro_hub_app_cost_centers',

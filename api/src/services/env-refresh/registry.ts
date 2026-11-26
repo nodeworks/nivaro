@@ -444,6 +444,12 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       // Hub scaling (581): kept replicas and limits, autoscaling rules, scale runs
       'nivaro_hub_scale_roles',
       'nivaro_hub_scale_runs',
+      // Hub providers (582): provider connections (sealed credentials), allowed connections per
+      // app, managed resources and their changes
+      'nivaro_hub_connections',
+      'nivaro_hub_app_connections',
+      'nivaro_hub_resources',
+      'nivaro_hub_resource_changes',
       // Hub placement (580): regions + host membership, cost centres, peer Hubs (sealed key)
       'nivaro_hub_regions',
       'nivaro_hub_region_drivers',
