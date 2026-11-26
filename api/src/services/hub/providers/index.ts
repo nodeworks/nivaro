@@ -1,3 +1,4 @@
+import { expoAdapter } from './expo/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import type { ProviderAdapter } from './types.js'
 
@@ -10,6 +11,7 @@ import type { ProviderAdapter } from './types.js'
 
 export const CORE_PROVIDERS: ProviderAdapter[] = [
   // github, aws, vercel, auth0, expo adapters are appended here.
+  expoAdapter
 ]
 
 /** Registers every core adapter that is not registered yet. Safe to call more than once. */
