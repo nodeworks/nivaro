@@ -20,6 +20,7 @@
  */
 
 import { LIFECYCLE_ROUTES } from './catalog-lifecycle.js'
+import { PROVIDER_ROUTES } from './catalog-providers.js'
 
 export type HubAccess = 'read' | 'plan' | 'write'
 export type HubAuth = 'admin' | 'owner' | 'machine' | 'public'
@@ -2850,7 +2851,8 @@ export const HUB_ROUTES: HubRoute[] = [
     query: { limit: n('1–100, default 20') }
   }),
   // ─── App lifecycle: cloning, retirement (routes/hub-lifecycle.ts) ─────────────────────
-  ...LIFECYCLE_ROUTES
+  ...LIFECYCLE_ROUTES,
+  ...PROVIDER_ROUTES
 ]
 
 /** Fastify's template for a request (`/api/hub/apps/:id`) → its catalog entry, else null. */
