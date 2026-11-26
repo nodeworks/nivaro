@@ -539,6 +539,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       ...(table === 'nivaro_hub_databases' ? { secret_columns: ['connection'] } : {}),
       ...(table === 'nivaro_hub_targets' ? { secret_columns: ['secret'] } : {}),
       ...(table === 'nivaro_hub_status_pages' ? { secret_columns: ['token_hash'] } : {}),
+      ...(table === 'nivaro_hub_connections' ? { secret_columns: ['secret'] } : {}),
       ...(table === 'nivaro_hub_shared_deployments'
         ? { secret_columns: ['token', 'prev_token', 'secrets'] }
         : {})

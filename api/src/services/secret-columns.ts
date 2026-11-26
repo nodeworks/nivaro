@@ -66,6 +66,8 @@ const REDACTED: Record<string, string[]> = {
   nivaro_hub_db_servers: ['admin_secret'],
   nivaro_hub_apps: ['oidc_secret'],
   nivaro_hub_targets: ['secret'],
+  // Hub providers (582): a connection's sealed credentials.
+  nivaro_hub_connections: ['secret'],
   // X-6c, phase 7 (550): the Hub's sealed private signing keys (escapes the name rule) and the
   // per-environment OpenID client secrets.
   nivaro_hub_oidc_keys: ['private_jwk'],
