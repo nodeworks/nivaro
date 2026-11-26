@@ -318,6 +318,30 @@ describe('unmanaged and adopt', () => {
     expect(page.items.map((i) => i.externalId)).toEqual(['free'])
   })
 
+  it('a resource managed through one connection is refused and hidden on another of the same provider', async () => {
+    const c2 = await store.createConnection({
+      provider: 'fake',
+      name: 'c2',
+      config: {},
+      secrets: {}
+    })
+    world.set('shared-id', obs('shared-id', { name: 'x' }))
+    await observe.adoptResource(connId, adoptApp('shared-id'), admin)
+    await expect(observe.adoptResource(c2.id, adoptApp('shared-id'), admin)).rejects.toMatchObject({
+      code: 'RESOURCE_ALREADY_MANAGED'
+    })
+    listed.push(obs('shared-id', { name: 'x' }), obs('other', { name: 'o' }))
+    const page = await observe.listUnmanaged(c2.id, 'fake.thing', undefined, admin)
+    expect(page.items.map((i) => i.externalId)).toEqual(['other'])
+  })
+
+  it('a nivaro-hub:resource tag alone does not block adopting', async () => {
+    world.set('tagged', obs('tagged', { name: 't' }, { 'nivaro-hub:resource': String(connId) }))
+    await expect(observe.adoptResource(connId, adoptApp('tagged'), admin)).resolves.toMatchObject({
+      adopted: true
+    })
+  })
+
   it('an owner lists only through a connection allowed for an app they own', async () => {
     await expect(
       observe.listUnmanaged(connId, 'fake.thing', undefined, owner)

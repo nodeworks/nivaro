@@ -537,7 +537,9 @@ export async function listUnmanaged(
     throw new ResourceChangeError('UNKNOWN_TYPE', 'This connection’s provider is not available.')
 
   const managed = new Set(
-    (await listResources({ connectionId, type })).map((r) => r.external_id).filter(Boolean)
+    (await listResources({ provider: connRow.provider, type }))
+      .map((r) => r.external_id)
+      .filter(Boolean)
   )
   const items: Observed[] = []
   let next: string | null = cursor ?? null
@@ -640,7 +642,11 @@ export async function adoptResource(
   }
 
   const externalId = input.externalId.trim()
-  if (await listResources({ connectionId, type: input.type, externalId }).then((r) => r.length))
+  if (
+    await listResources({ provider: connRow.provider, type: input.type, externalId }).then(
+      (r) => r.length
+    )
+  )
     throw new ResourceChangeError(
       'RESOURCE_ALREADY_MANAGED',
       'The Hub already manages this resource.'
@@ -657,14 +663,6 @@ export async function adoptResource(
     throw providerFailure(ctx, e)
   }
   if (!seen) throw new ResourceChangeError('NOT_FOUND', 'The provider does not have that resource.')
-  if (isHubTagged(seen.tags) && seen.tags[`${HUB_TAG_PREFIX}resource`]) {
-    const owner = await readResource(Number(seen.tags[`${HUB_TAG_PREFIX}resource`]))
-    if (owner && !owner.deleted_at)
-      throw new ResourceChangeError(
-        'RESOURCE_ALREADY_MANAGED',
-        'The Hub already manages this resource.'
-      )
-  }
 
   const stored = scrubObserved(t.type, seen)
   // Provider ids of other managed resources → rows, so ref fields become real refs.
