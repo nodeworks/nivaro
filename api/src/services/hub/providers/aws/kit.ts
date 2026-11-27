@@ -27,6 +27,11 @@ import { regionsOf, resolveRegion } from './client.js'
  * engine hands calls a `ctx.region`; an op carries its own region in `op.data.region`.
  */
 
+export interface AwsMade {
+  id: string
+  outputs?: Record<string, string>
+}
+
 export interface AwsListPage {
   items: Observed[]
   next: string | null
@@ -48,14 +53,18 @@ export interface AwsTypeDef {
   probe?: Pick<AwsProbe, 'need' | 'run' | 'dryRun'>
   observe(ctx: ProviderContext, id: string, region: string): Promise<Observed | null>
   list(ctx: ProviderContext, region: string, token: string | null): Promise<AwsListPage>
-  /** Creates the resource; answers its provider id. Parents already exist (`desired.refs`). */
+  /**
+   * Creates the resource; answers its provider id, or `{id, outputs}` when the provider handed
+   * out values (Task 13: they travel as `OpResult.outputs` only). Parents already exist
+   * (`desired.refs`).
+   */
   create(
     ctx: ProviderContext,
     desired: DesiredResource,
     region: string,
     op: PlannedOp
-  ): Promise<string>
-  /** Reconciles the changed fields against the freshly read `observed`. */
+  ): Promise<string | AwsMade>
+  /** Reconciles the changed fields against the freshly read `observed`; may answer outputs. */
   update?(
     ctx: ProviderContext,
     id: string,
@@ -64,7 +73,16 @@ export interface AwsTypeDef {
     observed: Observed,
     changed: Set<string>,
     op: PlannedOp
-  ): Promise<void>
+  ): Promise<void | { outputs?: Record<string, string> }>
+  /** Outputs the provider shows again (never a `onceOnly` one). */
+  readOutputs?(ctx: ProviderContext, id: string, region: string): Promise<Record<string, string>>
+  /** Type-specific health (scan findings, sandbox mode); else the status-based default. */
+  health?(
+    ctx: ProviderContext,
+    id: string,
+    region: string,
+    observed: Observed
+  ): Promise<Omit<HealthAnswer, 'checkedAt'>>
   remove(ctx: ProviderContext, id: string, region: string, op: PlannedOp): Promise<void>
   /** A resource a half-finished create already made (tag / name lookup), or null. */
   findExisting?(
@@ -185,6 +203,7 @@ export function planFor(
     const changes: FieldChange[] = []
     for (const f of settable) {
       const v = wanted(desired, f)
+      if (f.trigger && v !== true) continue
       if (v === undefined || v === null || (Array.isArray(v) && !v.length)) continue
       changes.push(f.kind === 'secret' ? { field: f.key, secret: true } : { field: f.key, to: v })
     }
@@ -206,6 +225,7 @@ export function planFor(
     }
     const want = wanted(dn, f)
     if (want === undefined) continue
+    if (f.trigger && want !== true) continue // a one-shot trigger that is off changes nothing
     const have = observed.fields[f.key]
     if (have === undefined && f.createOnly) continue // write-only: the provider does not echo it
     // An unresolved ref (parent not created yet) counts as a change unless nothing is set.
@@ -257,7 +277,7 @@ function pre(observed: Observed, changes: FieldChange[]): Record<string, unknown
 // ── Apply ──
 
 const DUPLICATE =
-  /^(InvalidGroup\.Duplicate|InvalidVpc\.Duplicate|.*AlreadyExists.*|BucketAlreadyOwnedByYou|Duplicate\w+)$/
+  /^(InvalidGroup\.Duplicate|InvalidVpc\.Duplicate|.*AlreadyExists.*|.*ExistsException|BucketAlreadyOwnedByYou|Duplicate\w+)$/
 
 const changedKeys = (op: PlannedOp) => new Set(op.changes.map((c) => c.field))
 
@@ -281,10 +301,17 @@ async function applyOp(
   const id = op.externalId ?? desired?.externalId ?? null
   const done = async (
     externalId: string | null,
-    answer?: Record<string, unknown>
+    answer?: Record<string, unknown>,
+    outputs?: Record<string, string>
   ): Promise<OpResult> => {
     const observed = externalId ? await def.observe(ctx, externalId, region) : null
-    return { ok: true, externalId, observed, answer: { region, ...answer } }
+    return {
+      ok: true,
+      externalId,
+      observed,
+      answer: { region, ...answer },
+      ...(outputs && Object.keys(outputs).length ? { outputs } : {})
+    }
   }
 
   if (op.kind === 'noop') return done(id)
@@ -313,8 +340,11 @@ async function applyOp(
     if (!have) throw new ProviderError('NOT_FOUND', `${def.spec.label} ${id} no longer exists.`)
     // Read-before-write: only what still differs.
     const todo = planFor(ctx, def, desired, have).find((o) => o.kind === 'update')
-    if (todo && def.update) await def.update(ctx, id, region, desired, have, changedKeys(todo), op)
-    return done(id, { changed: todo ? [...changedKeys(todo)] : [] })
+    const made =
+      todo && def.update
+        ? await def.update(ctx, id, region, desired, have, changedKeys(todo), op)
+        : undefined
+    return done(id, { changed: todo ? [...changedKeys(todo)] : [] }, made?.outputs)
   }
 
   // create / replace
@@ -346,8 +376,11 @@ async function applyOp(
     return done(existing.externalId, { reused: true })
   }
   let newId: string
+  let outputs: Record<string, string> | undefined
   try {
-    newId = await def.create(ctx, desired, region, op)
+    const made = await def.create(ctx, desired, region, op)
+    newId = typeof made === 'string' ? made : made.id
+    outputs = typeof made === 'string' ? undefined : made.outputs
   } catch (err) {
     if (err instanceof ProviderError && DUPLICATE.test(err.code))
       throw new ProviderError(
@@ -356,7 +389,7 @@ async function applyOp(
       )
     throw err
   }
-  return done(newId)
+  return done(newId, undefined, outputs)
 }
 
 // ── The adapter ──
@@ -543,10 +576,30 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
       )
     },
 
+    async readOutputs(ctx, type, externalId) {
+      const def = defOf(type)
+      if (!def.readOutputs) return {}
+      return guard(ctx, null, () =>
+        (def.readOutputs as NonNullable<AwsTypeDef['readOutputs']>)(
+          ctx,
+          externalId,
+          resolveRegion(ctx, ctx.region)
+        )
+      )
+    },
+
     async health(ctx, type, externalId): Promise<HealthAnswer> {
-      const o = await defOf(type).observe(ctx, externalId, resolveRegion(ctx, ctx.region))
+      const def = defOf(type)
+      const region = resolveRegion(ctx, ctx.region)
+      const o = await def.observe(ctx, externalId, region)
       const checkedAt = ctx.now().toISOString()
       if (!o) return { status: 'down', message: 'The resource is gone.', checkedAt }
+      if (def.health) {
+        const h = await guard(ctx, null, () =>
+          (def.health as NonNullable<typeof def.health>)(ctx, externalId, region, o)
+        )
+        return { ...h, checkedAt }
+      }
       const s = (o.status ?? '').toLowerCase()
       const good = ['available', 'running', 'active', 'issued', 'in-use', 'associated', 'ok']
       return {

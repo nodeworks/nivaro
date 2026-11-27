@@ -1,0 +1,11 @@
+{
+  "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:shop/db-AbCdEf",
+  "Name": "shop/db",
+  "DeletedDate": 1790300000.0,
+  "Tags": [
+    {
+      "Key": "team",
+      "Value": "finance"
+    }
+  ]
+}

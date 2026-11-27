@@ -1,0 +1,4 @@
+{
+  "__type": "LifecyclePolicyNotFoundException",
+  "message": "Lifecycle policy does not exist for the repository with name 'shop/api'"
+}

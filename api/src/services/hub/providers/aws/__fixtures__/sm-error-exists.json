@@ -1,0 +1,4 @@
+{
+  "__type": "ResourceExistsException",
+  "Message": "The operation failed because the secret shop/db already exists."
+}

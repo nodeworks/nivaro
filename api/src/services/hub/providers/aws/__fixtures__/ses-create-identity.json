@@ -1,0 +1,13 @@
+{
+  "IdentityType": "DOMAIN",
+  "VerifiedForSendingStatus": false,
+  "DkimAttributes": {
+    "SigningEnabled": true,
+    "Status": "NOT_STARTED",
+    "Tokens": [
+      "tok1fake",
+      "tok2fake",
+      "tok3fake"
+    ]
+  }
+}

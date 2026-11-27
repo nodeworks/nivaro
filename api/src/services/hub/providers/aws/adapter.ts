@@ -3,14 +3,18 @@ import { awsConnection, awsPriceList, awsQuery } from './client.js'
 import { getMetricData } from './cloudwatch.js'
 import { computeDefs } from './compute.js'
 import { child, text } from './ec2.js'
+import { ecrDefs } from './ecr.js'
 import { elbDefs } from './elb.js'
 import { type AwsTypeDef, makeAwsAdapter } from './kit.js'
 import { networkDefs } from './network.js'
 import { AWS_BUNDLED_PRICES } from './pricing.js'
+import { AWS_PART3_BUNDLED_PRICES } from './pricing-part3.js'
 import { rdsDefs } from './rds.js'
 import { route53Defs } from './route53.js'
 import { s3Defs } from './s3.js'
+import { secretsManagerDefs } from './secrets-manager.js'
 import { securityGroupDef } from './security-group.js'
+import { sesDefs } from './ses.js'
 
 /** The `aws` provider: every AWS type this build manages. */
 export const AWS_DEFS: AwsTypeDef[] = [
@@ -21,7 +25,10 @@ export const AWS_DEFS: AwsTypeDef[] = [
   ...s3Defs,
   ...route53Defs,
   ...elbDefs,
-  ...acmDefs
+  ...acmDefs,
+  ...ecrDefs,
+  ...sesDefs,
+  ...secretsManagerDefs
 ]
 
 export const awsProvider = makeAwsAdapter({
@@ -29,7 +36,10 @@ export const awsProvider = makeAwsAdapter({
   label: 'Amazon Web Services',
   connection: awsConnection,
   defs: AWS_DEFS,
-  bundledPrices: AWS_BUNDLED_PRICES,
+  bundledPrices: {
+    ...AWS_BUNDLED_PRICES,
+    items: { ...AWS_BUNDLED_PRICES.items, ...AWS_PART3_BUNDLED_PRICES.items }
+  },
   optionalProbes: [
     {
       type: 'costs',
