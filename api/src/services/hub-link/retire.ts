@@ -207,17 +207,24 @@ export function isHubLinkFirstAdmin(url: string, routeUrl?: string | null): bool
 }
 
 /**
- * The hub-link routes that write the app's own data (a person, a template's schema) rather than
- * steer a move: the first administrator and, since Hub enhancement 24, the template install
- * (`/hub-link/template`, its status reads included). Frozen by maintenance and refused once
+ * The hub-link routes that write the app's own data (a person, a template's schema, settings)
+ * rather than steer a move: the first administrator, since Hub enhancement 24 the template install
+ * (`/hub-link/template`, its status reads included) and since Hub providers Task 13 the settings
+ * a managed resource's outputs set (`/hub-link/settings/apply`). Frozen by maintenance and refused once
  * retired, however the path is spelled; an undecodable path counts as one (never exempt).
  */
 export function isHubLinkAppWrite(url: string, routeUrl?: string | null): boolean {
   if (isHubLinkFirstAdmin(url, routeUrl)) return true
-  if (routeUrl && /\/hub-link\/template(\/|$)/i.test(routeUrl)) return true
+  // Hub providers (Task 13): /hub-link/settings/apply writes the app's own settings too.
+  if (routeUrl && /\/hub-link\/(template|settings)(\/|$)/i.test(routeUrl)) return true
   const p = normalizedPath(url)
   if (p === null) return true
-  return p === '/api/hub-link/template' || p.startsWith('/api/hub-link/template/')
+  return (
+    p === '/api/hub-link/template' ||
+    p.startsWith('/api/hub-link/template/') ||
+    p === '/api/hub-link/settings' ||
+    p.startsWith('/api/hub-link/settings/')
+  )
 }
 
 /**

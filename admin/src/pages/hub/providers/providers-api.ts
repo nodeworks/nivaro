@@ -85,12 +85,18 @@ export interface ResourceTypeInfo {
   refs: ResourceTypeRef[]
   name_field: string
   has_cost_class: boolean
+  /** Task 13: values the provider hands out (absent on an older Hub). */
+  outputs?: Array<{ key: string; label: string; secret: boolean; onceOnly?: boolean }>
+  /** Task 13: its resources send messages (notify routes may name them). */
+  sends?: boolean
 }
 
 export interface ProviderInfo {
   key: string
   label: string
   connection: { fields: ConnectionField[] }
+  /** Task 13: its resources can send Hub events out (notify routes). */
+  notify?: boolean
   types: ResourceTypeInfo[]
 }
 
@@ -856,6 +862,27 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
   HOST_NOT_ALLOWED: {
     title: 'That address is not one this provider may call',
     hint: 'Check the connection’s settings (region, tenant, domain).'
+  },
+  // Task 13: outputs, bindings and notify routes.
+  SETTING_NOT_ALLOWED: {
+    title: 'The Hub may not set that app setting',
+    hint: 'Pick one of the listed app settings, or bind it to a stack secret instead.'
+  },
+  SECRET_TO_PLAIN: {
+    title: 'A secret cannot go into a plain setting',
+    hint: 'Bind it to a stack secret or an app credential.'
+  },
+  ENV_NOT_OF_APP: {
+    title: 'That environment belongs to another app',
+    hint: 'An app’s resource feeds that app’s environments only.'
+  },
+  BINDING_TAKEN: {
+    title: 'Another resource already fills that setting',
+    hint: 'Remove that binding first, or pick another setting.'
+  },
+  NOT_A_SENDER: {
+    title: 'That resource cannot send messages',
+    hint: 'Pick a sending resource (a Slack channel, a Teams webhook…) that exists at the provider.'
   }
 }
 

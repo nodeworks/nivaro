@@ -58,6 +58,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
+import { hubNotify } from './providers/notify-hook.js'
 import { freezeRefusal, recordedRunningVersion, rollbackExempt } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
@@ -1425,6 +1426,10 @@ export async function startPromotion(
     }
     live.set(deployId, entry)
     markLive(deployId, envId)
+    hubNotify('deploy.started', {
+      envId,
+      detail: `${apply ? 'apply' : req.kind} ${req.version} on ${env.key}`
+    })
     handedOff = true
     if (checklist) await checklist.link('deploy', deployId).catch(() => undefined)
     entry.done = runInBackgroundPool(() =>
@@ -1644,6 +1649,11 @@ async function runPromotion(o: {
         kind: outcome.status === 'success' ? 'promote_done' : 'promote_failed',
         envId,
         deployId,
+        detail: `${o.plan.apply ? 'apply' : o.kind} ${o.version} on ${o.envKey}`
+      })
+    if (outcome.status === 'success' || outcome.status === 'failed')
+      hubNotify(outcome.status === 'success' ? 'deploy.finished' : 'deploy.failed', {
+        envId,
         detail: `${o.plan.apply ? 'apply' : o.kind} ${o.version} on ${o.envKey}`
       })
     const what = o.plan.apply

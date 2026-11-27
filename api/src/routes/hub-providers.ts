@@ -523,7 +523,10 @@ function typeOut(t: ResourceTypeSpec) {
     refs: t.refs,
     name_field: t.nameField ?? 'name',
     has_cost_class: typeof t.costClass === 'function',
-    has_estimate: typeof t.estimate === 'function'
+    has_estimate: typeof t.estimate === 'function',
+    // Task 13: what it hands out (keys and labels; values never leave the Hub).
+    outputs: t.outputs ?? [],
+    sends: t.sends === true
   }
 }
 
@@ -553,6 +556,8 @@ export async function hubProviderRoutes(app: FastifyInstance) {
               )
             ]
           },
+          // Task 13: its resources can send Hub events out (notify routes).
+          notify: typeof p.notify === 'function',
           types: p.types.map(typeOut)
         }))
       }

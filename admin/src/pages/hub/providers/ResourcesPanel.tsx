@@ -1,6 +1,6 @@
 import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, ExternalLink, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
+import { ChevronRight, ExternalLink, KeyRound, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
 import { ProductionGuard } from '@/components/hub-brand/HubBits'
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import type { HubAppFull, HubEnvironment } from '../hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import { ChangesList, ChangeView } from './ChangeView'
+import { OutputsCard } from './OutputsCard'
 import {
   type ChangeModel,
   changeAction,
@@ -156,7 +157,14 @@ export function ResourcesPanel({
 
 export type RowAction =
   | { kind: 'edit'; resource: HubResource }
-  | { kind: 'plan'; resource: HubResource; action: PlanAction }
+  | {
+      kind: 'plan'
+      resource: HubResource
+      action: PlanAction
+      /** An update planned at once (an outputs rotation). */
+      fields?: Record<string, unknown>
+    }
+  | { kind: 'outputs'; resource: HubResource }
   | { kind: 'add' }
   | null
 
@@ -214,6 +222,7 @@ function PanelBody({
                     canDeploy={canDeploy}
                     active={isOpen(r) ? action : null}
                     onAction={(a) => setAction(isOpen(r) && sameAction(action, a) ? null : a)}
+                    showOutputs
                   />
                   {isOpen(r) && action?.kind === 'edit' && idx.type(r.type) && (
                     <div className='mt-2'>
@@ -235,15 +244,36 @@ function PanelBody({
                     <div className='mt-2'>
                       {guard(
                         <PlanNow
-                          key={action.action}
+                          key={`${action.action}${action.fields ? '+' : ''}`}
                           resource={r}
                           action={action.action}
+                          fields={action.fields}
                           appId={app.id}
                           environmentId={env.id}
                           isAdmin={isAdmin}
                           onClose={close}
                         />
                       )}
+                    </div>
+                  )}
+                  {isOpen(r) && action?.kind === 'outputs' && idx.type(r.type) && (
+                    <div className='mt-2'>
+                      <OutputsCard
+                        resource={r}
+                        type={idx.type(r.type) as ResourceTypeInfo}
+                        environments={app.environments}
+                        canDeploy={canDeploy}
+                        idPrefix={`${idPrefix}-out-${r.id}`}
+                        onRotate={() =>
+                          setAction({
+                            kind: 'plan',
+                            resource: r,
+                            action: 'update',
+                            fields: { rotate_outputs: true }
+                          })
+                        }
+                        onClose={close}
+                      />
                     </div>
                   )}
                 </li>
@@ -296,7 +326,7 @@ export const sameAction = (a: RowAction, b: RowAction) =>
   !!a &&
   !!b &&
   a.kind === b.kind &&
-  (a.kind !== 'plan' || (b.kind === 'plan' && a.action === b.action))
+  (a.kind !== 'plan' || (b.kind === 'plan' && a.action === b.action && !!a.fields === !!b.fields))
 
 /** One resource: name, type, state, provider status, and what may be done. */
 export function ResourceRow({
@@ -306,7 +336,8 @@ export function ResourceRow({
   active,
   onAction,
   extra,
-  deleteBlocked
+  deleteBlocked,
+  showOutputs
 }: {
   resource: HubResource
   type: ResourceTypeInfo | null
@@ -317,6 +348,8 @@ export function ResourceRow({
   extra?: ReactNode
   /** Why a delete cannot be planned now (a shared resource still in use), or undefined. */
   deleteBlocked?: string
+  /** Offer the Outputs button when the type hands out values (Task 13). */
+  showOutputs?: boolean
 }) {
   const state = resourceState(r)
   const copy = RESOURCE_STATE_COPY[state]
@@ -352,6 +385,8 @@ export function ResourceRow({
   const del: RowAction = { kind: 'plan', resource: r, action: 'delete' }
   const reapply: RowAction = { kind: 'plan', resource: r, action: 'reapply' }
   const accept: RowAction = { kind: 'plan', resource: r, action: 'accept' }
+  const outputs: RowAction = { kind: 'outputs', resource: r }
+  const hasOutputs = showOutputs && !pending && (type?.outputs?.length ?? 0) > 0
   return (
     <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
       <div className='min-w-0 flex-[1_1_220px]'>
@@ -458,6 +493,18 @@ export function ResourceRow({
             </button>
           </>
         )}
+        {hasOutputs && (
+          <button
+            type='button'
+            aria-label={`Outputs of ${name}`}
+            aria-pressed={pressed(outputs)}
+            data-tip='What it hands out, and where it goes'
+            className={cn(ghostButton, 'w-8 px-0', pressed(outputs) && 'bg-accent')}
+            onClick={() => onAction(outputs)}
+          >
+            <KeyRound className='h-3.5 w-3.5' aria-hidden />
+          </button>
+        )}
         {canDeploy && !pending && type?.capabilities.update && state !== 'gone' && (
           <button
             type='button'
@@ -502,7 +549,8 @@ export function PlanNow({
   appId,
   environmentId,
   isAdmin,
-  onClose
+  onClose,
+  fields
 }: {
   resource: HubResource
   action: PlanAction
@@ -510,6 +558,8 @@ export function PlanNow({
   environmentId?: number
   isAdmin: boolean
   onClose: () => void
+  /** Fields of an update planned at once (an outputs rotation). */
+  fields?: Record<string, unknown>
 }) {
   const [change, setChange] = useState<ChangeModel | null>(null)
   const plan = useMutation({
@@ -519,7 +569,7 @@ export function PlanNow({
         scope: resource.scope,
         ...(resource.scope === 'app' && appId != null ? { appId } : {}),
         ...(resource.scope === 'app' && environmentId != null ? { environmentId } : {}),
-        ops: [{ action, resourceId: resource.id }]
+        ops: [{ action, resourceId: resource.id, ...(fields ? { fields } : {}) }]
       }),
     onSuccess: (p) => setChange(changeFromPlan(p))
   })

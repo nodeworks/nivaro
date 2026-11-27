@@ -184,6 +184,7 @@ import { hubDeploymentCloneRoutes, hubLinkCloneRoutes } from './hub-link-clone.j
 import { hubOidcRoutes } from './hub-oidc.js'
 import { hubOpsRoutes } from './hub-ops.js'
 import { hubOpsDeploymentRoutes, hubOpsLinkRoutes } from './hub-ops-link.js'
+import { hubProviderOutputRoutes } from './hub-provider-outputs.js'
 import { hubProviderRoutes } from './hub-providers.js'
 import { hubSigninAdminRoutes } from './hub-signin-admin.js'
 import { hubStatusPublicRoutes } from './hub-status-public.js'
@@ -552,6 +553,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(hubTemplateRoutes, { prefix: '/hub' })
   // Third-party providers (connections, resources, changes): Hub mode only.
   await app.register(hubProviderRoutes, { prefix: '/hub' })
+  // Hub providers, Wave 2 (Task 13): outputs, bindings and notify routes.
+  await app.register(hubProviderOutputRoutes, { prefix: '/hub' })
   // Hub fleet page, uptime + SLO, drift alerts, audit timeline (HUB=on only).
   await app.register(hubFleetRoutes, { prefix: '/hub' })
   // Hub incidents, on-call rotas + paging, status pages, post-mortems (HUB=on only).

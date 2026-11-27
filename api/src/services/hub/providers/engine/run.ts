@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { db } from '../../../../db/index.js'
 import { runInBackgroundPool } from '../../../../db/pool-context.js'
 import { openSecret, sealSecret } from '../../secrets.js'
+import { scrubValues } from '../context.js'
+import { hubNotify } from '../notify-hook.js'
 import { findType } from '../registry.js'
 import {
   HubProviderStoreError,
@@ -26,6 +28,13 @@ import type {
   ResourceTypeSpec
 } from '../types.js'
 import { approversOf, auditChange, opAuditAction, opAuditDetail, tellAboutChange } from './audit.js'
+import {
+  forgetOutputs,
+  pushBindings,
+  schedulePush,
+  splitOutputs,
+  storeOutputs
+} from './bindings.js'
 import {
   type ChangePlan,
   type ChangeStatus,
@@ -327,6 +336,12 @@ export async function startChange(
       'An app owner asked for a resource change that adds a monthly cost. Approve or decline it.',
       'You are a Hub administrator or an owner of this app.'
     )
+    hubNotify('approval.needed', {
+      appId: row.app_id,
+      envId: row.environment_id,
+      detail: `resource change ${row.id}`,
+      link: `/hub/connections?change=${row.id}`
+    })
     return viewOf(pending)
   }
   return beginRun(row, actor, {
@@ -927,7 +942,9 @@ async function execute(changeId: number, runKey: string, hold: ResourceHold): Pr
           ...(er?.status !== undefined ? { status: er.status } : {})
         })
       }
-      const cleanResult = scrubResult(ctx, result)
+      // Task 13: outputs are sealed at once and never reach the result, the step or a log.
+      const split = splitOutputs(type, result)
+      const cleanResult = scrubResult(ctx, split.result)
       const ext = cleanResult.externalId ?? externalId
       if (op.kind === 'delete') {
         await updateResource(res.id, {
@@ -935,11 +952,15 @@ async function execute(changeId: number, runKey: string, hold: ResourceHold): Pr
           observed: null,
           drift: false
         })
+        await forgetOutputs(res.id).catch(() => undefined)
         return finishStep(i, op, res.id, ext, cleanResult, snapshot ?? null)
       }
+      const outputValues = Object.values(split.values)
+      const changedOutputs = outputValues.length ? await storeOutputs(res.id, split.values) : []
       let after = cleanResult.observed
       if (!after && ext)
         after = await conn.adapter.observe(readCtx, type.key, ext).catch(() => null)
+      if (after && outputValues.length) after = scrubbedObserved(after, outputValues)
       try {
         await updateResource(res.id, {
           external_id: ext,
@@ -965,7 +986,16 @@ async function execute(changeId: number, runKey: string, hold: ResourceHold): Pr
           })
         throw e
       }
-      return finishStep(i, op, res.id, ext, cleanResult, snapshot ?? null)
+      await finishStep(i, op, res.id, ext, cleanResult, snapshot ?? null)
+      // Task 13: a changed output goes to its bindings (never deploys a stack).
+      if (changedOutputs.length) {
+        if (deps.inline)
+          await pushBindings(res.id, {
+            keys: changedOutputs,
+            actorId: change.requested_by
+          }).catch(() => [])
+        else schedulePush(res.id, { keys: changedOutputs, actorId: change.requested_by })
+      }
     }
 
     async function finishStep(
@@ -1041,6 +1071,15 @@ async function execute(changeId: number, runKey: string, hold: ResourceHold): Pr
     clearInterval(timer)
     await hold.release()
     row = null
+  }
+}
+
+/** Task 13: an observed state with every output value masked (an adapter that echoed one). */
+function scrubbedObserved(o: Observed, values: string[]): Observed {
+  try {
+    return JSON.parse(scrubValues(JSON.stringify(o), values)) as Observed
+  } catch {
+    return { ...o, fields: {} }
   }
 }
 

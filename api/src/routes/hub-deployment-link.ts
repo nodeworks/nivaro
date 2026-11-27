@@ -27,6 +27,7 @@ import type { TenantRecord, TenantRegistry } from '../services/tenancy/types.js'
 import { NIVARO_VERSION } from '../version.js'
 import { deploymentLinkDataRoutes } from './hub-link-data.js'
 import { deploymentLinkSecurityRoutes } from './hub-link-security.js'
+import { deploymentLinkSettingsRoutes } from './hub-link-settings.js'
 
 /**
  * Deployment link (Hub phase 6) — the shared twin of the per-app hub link (routes/hub-link.ts):
@@ -147,6 +148,8 @@ export async function hubDeploymentLinkRoutes(app: FastifyInstance): Promise<voi
   deploymentLinkDataRoutes(app)
   // Hub security (0.3.215): /apps/:id/security/* (routes/hub-link-security.ts).
   deploymentLinkSecurityRoutes(app)
+  // Hub providers (Task 13): /apps/:id/settings/apply (routes/hub-link-settings.ts).
+  deploymentLinkSettingsRoutes(app)
 
   const registryOr503 = (reply: FastifyReply): TenantRegistry | null => {
     const r = getTenantRegistry()

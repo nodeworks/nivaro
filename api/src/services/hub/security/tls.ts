@@ -3,6 +3,7 @@ import { type PeerCertificate, connect as tlsConnect } from 'node:tls'
 import { db } from '../../../db/index.js'
 import { parseJson } from '../../pipeline-engine.js'
 import { deliverHubNotice, hubEventRecipients } from '../notify-events.js'
+import { hubNotify } from '../providers/notify-hook.js'
 import { dropCalendarEntry, putCalendarEntry } from './seams.js'
 
 /**
@@ -302,6 +303,13 @@ async function record(t: HostTarget, f: CertFacts, now: Date, deps: TlsDeps): Pr
       j.level <= 3,
       deps
     )
+    hubNotify('cert.expiring', {
+      appId: t.app_id,
+      envId: t.environment_id,
+      detail: j.level === 0 ? `${t.hostname} expired` : `${t.hostname} expires in ${j.days} days`,
+      link: '/hub/security',
+      dedupKey: `cert:${key}`
+    })
   }
   const dnsWarnedBefore = prev?.dns_warned === true || prev?.dns_warned === 1
   let dnsWarned = dnsWarnedBefore
