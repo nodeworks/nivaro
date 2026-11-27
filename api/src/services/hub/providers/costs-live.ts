@@ -1020,6 +1020,16 @@ async function defaultOverBudget(p: OverBudgetNotice): Promise<void> {
     source: { kind: 'hub-cost-budget', label: p.appKey, id: p.appId },
     why: 'You are a Hub administrator or an owner of this app.'
   })
+  // Task 13: the app's and the Hub's notify routes for this event (Slack, Teams, email, SMS…).
+  const { notifyHub } = await import('./notify.js')
+  void notifyHub('cost.over_budget', {
+    appId: p.appId,
+    title: `${p.appKey}: forecast at ${p.pct}% of its budget`,
+    body: `This month's forecast is ${money(p.forecastCents)} against a budget of ${money(p.budgetCents)} (${p.month}).`,
+    link: `/hub/costs?app=${p.appId}`,
+    severity: p.pct >= 100 ? 'critical' : 'warning',
+    dedupKey: `cost:${p.appId}:${p.month}:${p.pct}`
+  })
 }
 
 /** Checks every budget against its app's forecast; answers how many alerts went out. */
