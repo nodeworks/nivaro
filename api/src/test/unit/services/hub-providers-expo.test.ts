@@ -330,7 +330,11 @@ describe('expo adapter: apply', () => {
     const res = await expoAdapter.apply(
       ctx,
       op,
-      desired({ type: 'expo.project', fields: { name: 'field-app', privacy: 'unlisted' } })
+      desired({
+        type: 'expo.project',
+        externalId: 'app-1',
+        fields: { name: 'field-app', privacy: 'unlisted' }
+      })
     )
     expect(res).toMatchObject({ ok: true, externalId: 'app-1', answer: { existed: true } })
     expect(sent.some((s) => s.op === 'HubCreateApp')).toBe(false)
@@ -441,6 +445,150 @@ describe('expo adapter: apply', () => {
       environments: ['PRODUCTION']
     })
     expect(JSON.stringify(res)).not.toContain('test-secret-env-value-1')
+  })
+
+  it('refuses to bind an existing project/branch/channel/env var the Hub did not create', async () => {
+    const p = setup((op) =>
+      op === 'HubAppByFullName'
+        ? { data: { app: { byFullName: FIX.HubAppById.app.byId } } }
+        : undefined
+    )
+    const proj = desired({ type: 'expo.project', fields: { name: 'field-app' } })
+    await expect(
+      expoAdapter.apply(p.ctx, expoAdapter.plan(p.ctx, proj, null)[0], proj)
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS', retryable: false })
+    // A resumed run (this row already records the id) may continue.
+    await expect(
+      expoAdapter.apply(p.ctx, expoAdapter.plan(p.ctx, proj, null)[0], {
+        ...proj,
+        externalId: 'app-1'
+      })
+    ).resolves.toMatchObject({ ok: true })
+    const mk = (type: string, fields: Record<string, unknown>) =>
+      desired({
+        type,
+        fields: { project: { resourceId: 2 }, ...fields },
+        refs: { project: 'app-1' }
+      })
+    const s = setup()
+    for (const d of [
+      mk('expo.branch', { name: 'release-1' }),
+      mk('expo.channel', { name: 'production' }),
+      mk('expo.env_var', {
+        name: 'API_URL',
+        value: { fingerprint: 'f', changed: true, plain: 'test-secret-env-value-2' },
+        visibility: 'plaintext',
+        environments: ['production']
+      })
+    ])
+      await expect(
+        expoAdapter.apply(s.ctx, expoAdapter.plan(s.ctx, d, null)[0], d)
+      ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' })
+    expect(s.sent.some((x) => /Update|Create|Point/.test(x.op))).toBe(false)
+  })
+
+  it('named ops refuse a target that does not match desired.refs', async () => {
+    const { ctx } = setup()
+    const op: PlannedOp = {
+      kind: 'update',
+      type: 'expo.channel',
+      resourceId: 1,
+      externalId: 'app-1:ch-1',
+      reason: '',
+      changes: [],
+      preconditions: {},
+      risk: [],
+      action: 'point'
+    }
+    await expect(
+      expoAdapter.apply(
+        ctx,
+        op,
+        desired({
+          type: 'expo.channel',
+          externalId: 'app-1:ch-1',
+          refs: { project: 'app-other', branch: 'app-other:br-2' }
+        })
+      )
+    ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
+    const b = desired({
+      type: 'expo.build',
+      fields: { platform: 'ios', profile: 'production' },
+      refs: { project: 'app-1' }
+    })
+    await expect(
+      expoAdapter.apply(
+        ctx,
+        {
+          ...op,
+          kind: 'create',
+          type: 'expo.build',
+          action: 'build',
+          data: { platform: 'android', profile: 'production' }
+        },
+        b
+      )
+    ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
+  })
+
+  it('refuses an app of another account on observe, delete and update', async () => {
+    const other = (op: string) =>
+      op === 'HubAppById'
+        ? { data: { app: { byId: { ...FIX.HubAppById.app.byId, fullName: '@rival/field-app' } } } }
+        : undefined
+    const { ctx, sent } = setup(other)
+    await expect(expoAdapter.observe(ctx, 'expo.project', 'app-1')).rejects.toMatchObject({
+      code: 'EXPO_OUT_OF_ACCOUNT'
+    })
+    await expect(expoAdapter.observe(ctx, 'expo.branch', 'app-1:br-1')).rejects.toMatchObject({
+      code: 'EXPO_OUT_OF_ACCOUNT'
+    })
+    const base: PlannedOp = {
+      kind: 'delete',
+      type: 'expo.project',
+      resourceId: 1,
+      externalId: 'app-1',
+      reason: '',
+      changes: [],
+      preconditions: {},
+      risk: []
+    }
+    await expect(expoAdapter.apply(ctx, base, null)).rejects.toMatchObject({
+      code: 'EXPO_OUT_OF_ACCOUNT'
+    })
+    await expect(
+      expoAdapter.apply(
+        ctx,
+        { ...base, kind: 'update' },
+        desired({ type: 'expo.project', externalId: 'app-1', fields: { name: 'field-app' } })
+      )
+    ).rejects.toMatchObject({ code: 'EXPO_OUT_OF_ACCOUNT' })
+    expect(sent.some((x) => /Delete|Update/.test(x.op))).toBe(false)
+  })
+
+  it('masks an env value Expo echoes in an error', async () => {
+    const plain = 'test-secret-env-value-3'
+    const { ctx } = setup((op) =>
+      op === 'HubEnvVars'
+        ? { data: { app: { byId: { id: 'app-1', environmentVariables: [] } } } }
+        : op === 'HubCreateEnvVar'
+          ? { errors: [{ message: `Invalid value ${plain} for variable` }] }
+          : undefined
+    )
+    const d = desired({
+      type: 'expo.env_var',
+      fields: {
+        project: { resourceId: 2 },
+        name: 'TOKEN',
+        value: { fingerprint: 'f', changed: true, plain },
+        visibility: 'secret',
+        environments: ['production']
+      },
+      refs: { project: 'app-1' }
+    })
+    const err = await expoAdapter.apply(ctx, expoAdapter.plan(ctx, d, null)[0], d).catch((e) => e)
+    expect(err).toMatchObject({ code: 'EXPO_GRAPHQL' })
+    expect(err.message).not.toContain(plain)
   })
 
   it('triggers a build once: a known external id is read, not re-triggered', async () => {

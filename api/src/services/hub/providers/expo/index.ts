@@ -1,3 +1,4 @@
+import { scrubValues } from '../context.js'
 import type {
   ConnectionTest,
   DesiredResource,
@@ -42,6 +43,18 @@ function sameValue(a: unknown, b: unknown): boolean {
     return x.length === y.length && x.every((s, i) => s === y[i])
   }
   return (a ?? null) === (b ?? null)
+}
+
+/**
+ * A create that meets a resource the Hub did not make is never bound silently: unless this
+ * resource row already records that very id (a resumed run), the person must adopt it.
+ */
+function refuseUnlessResumed(d: DesiredResource, existingId: string, what: string): void {
+  if (d.externalId && d.externalId === existingId) return
+  throw new ProviderError(
+    'ALREADY_EXISTS',
+    `${what} already exists in Expo and was not created by the Hub. Adopt it instead of creating it.`
+  )
 }
 
 function appIdOf(desired: DesiredResource): string {
@@ -153,7 +166,15 @@ function mapBuild(appId: string, row: any): Observed {
 async function readProject(ctx: ProviderContext, appId: string): Promise<Observed | null> {
   try {
     const d = await gql(ctx, Q.Q_APP_BY_ID, { id: appId })
-    return d.app?.byId ? mapProject(d.app.byId) : null
+    if (!d.app?.byId) return null
+    const o = mapProject(d.app.byId)
+    // The connection is pinned to one account: an app of another account is out of reach.
+    if (String(o.fields.account ?? '').toLowerCase() !== account(ctx).toLowerCase())
+      throw new ProviderError(
+        'EXPO_OUT_OF_ACCOUNT',
+        `That project is not in account ${account(ctx)}.`
+      )
+    return o
   } catch (err) {
     if (isGone(err)) return null
     throw err
@@ -168,6 +189,16 @@ async function projectByName(ctx: ProviderContext, slug: string): Promise<Observ
     if (isGone(err)) return null
     throw err
   }
+}
+
+/** true = the app exists in the pinned account; false = gone; throws EXPO_OUT_OF_ACCOUNT. */
+async function guardApp(ctx: ProviderContext, appId: string): Promise<boolean> {
+  return (await readProject(ctx, appId)) !== null
+}
+
+async function requireApp(ctx: ProviderContext, appId: string): Promise<void> {
+  if (!(await guardApp(ctx, appId)))
+    throw new ProviderError('EXPO_NOT_FOUND', 'The project is gone.')
 }
 
 async function branchRows(ctx: ProviderContext, appId: string): Promise<any[]> {
@@ -207,6 +238,7 @@ async function observeType(
 ): Promise<Observed | null> {
   if (type === 'expo.project') return readProject(ctx, externalId)
   const { appId, id } = splitId(externalId)
+  if (!(await guardApp(ctx, appId))) return null
   try {
     if (type === 'expo.branch') {
       const row = (await branchRows(ctx, appId)).find((r) => String(r.id) === id)
@@ -223,7 +255,10 @@ async function observeType(
     if (type === 'expo.build') {
       const d = await gql(ctx, Q.Q_BUILD, { id })
       const row = d.builds?.byId
-      return row ? mapBuild(appId, row) : null
+      if (!row) return null
+      if (row.app?.id && String(row.app.id) !== appId)
+        throw new ProviderError('EXPO_OUT_OF_ACCOUNT', 'That build belongs to another project.')
+      return mapBuild(appId, row)
     }
   } catch (err) {
     if (isGone(err)) return null
@@ -292,7 +327,7 @@ function planOps(desired: DesiredResource | null, observed: Observed | null): Pl
         reason:
           d.type === 'expo.build'
             ? 'Start a build.'
-            : `Create ${d.type} ${String(d.fields.name ?? '')}.`.trim(),
+            : `Create ${d.type} ${String(d.fields.name ?? '')}. If one with this name already exists in Expo the change stops with ALREADY_EXISTS: adopt it instead.`.trim(),
         changes: EXPO_TYPES.find((t) => t.key === d.type)!.fields.flatMap((f): FieldChange[] => {
           if (f.readOnly) return []
           if (f.kind === 'secret')
@@ -377,7 +412,10 @@ const done = (externalId: string | null, observed: Observed | null, answer?: obj
 async function createProject(ctx: ProviderContext, d: DesiredResource): Promise<OpResult> {
   const slug = String(d.fields.name ?? '')
   const existing = await projectByName(ctx, slug)
-  if (existing) return done(existing.externalId, existing, { existed: true })
+  if (existing) {
+    refuseUnlessResumed(d, existing.externalId, `Project ${slug}`)
+    return done(existing.externalId, existing, { existed: true })
+  }
   const acc = await gql(ctx, Q.Q_ACCOUNT, { name: account(ctx) })
   const accountId = acc.account?.byName?.id
   if (!accountId)
@@ -392,10 +430,12 @@ async function createProject(ctx: ProviderContext, d: DesiredResource): Promise<
 
 async function createBranch(ctx: ProviderContext, d: DesiredResource): Promise<OpResult> {
   const appId = appIdOf(d)
+  await requireApp(ctx, appId)
   const name = String(d.fields.name ?? '')
   const existing = (await branchRows(ctx, appId)).find((r) => r.name === name)
   if (existing) {
     const o = mapBranch(appId, existing)
+    refuseUnlessResumed(d, o.externalId, `Branch ${name}`)
     return done(o.externalId, o, { existed: true })
   }
   const out = await gql(ctx, Q.M_CREATE_BRANCH, { appId, name })
@@ -407,6 +447,7 @@ async function createBranch(ctx: ProviderContext, d: DesiredResource): Promise<O
 
 async function createChannel(ctx: ProviderContext, d: DesiredResource): Promise<OpResult> {
   const appId = appIdOf(d)
+  await requireApp(ctx, appId)
   const name = String(d.fields.name ?? '')
   const branchId = branchIdOf(d.refs.branch)
   const existing = (await channelRows(ctx, appId)).find((r) => r.name === name)
@@ -422,12 +463,24 @@ async function createChannel(ctx: ProviderContext, d: DesiredResource): Promise<
     created = true
   }
   if (!row?.id) throw new ProviderError('EXPO_BAD_ANSWER', 'Expo did not return the new channel.')
+  if (!created) refuseUnlessResumed(d, composeId(appId, String(row.id)), `Channel ${name}`)
   if (!created && branchId && pointedBranch(row.branchMapping) !== branchId) {
     const out = await gql(ctx, Q.M_POINT_CHANNEL, { id: row.id, branchMapping: mapping(branchId) })
     row = out.updateChannel?.editUpdateChannel ?? row
   }
   const o = mapChannel(appId, row)
   return done(o.externalId, o, created ? undefined : { existed: true })
+}
+
+/** Runs a call that carries a plain secret; masks that value in any error Expo echoes back. */
+async function scrubbing<T>(secret: SecretValue | null, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (err) {
+    if (err instanceof ProviderError && secret?.plain)
+      err.message = scrubValues(err.message, [secret.plain])
+    throw err
+  }
 }
 
 function envInput(d: DesiredResource): Record<string, unknown> {
@@ -446,16 +499,21 @@ async function upsertEnvVar(
   knownId?: string
 ): Promise<OpResult> {
   const appId = appIdOf(d)
+  await requireApp(ctx, appId)
   const name = String(d.fields.name ?? '')
   const rows = await envVarRows(ctx, appId)
   const existing = knownId
     ? rows.find((r) => String(r.id) === knownId)
     : rows.find((r) => r.name === name)
+  // Create-time match: never update (or downgrade a secret to plain) a variable the Hub did not make.
+  if (existing && !knownId)
+    refuseUnlessResumed(d, composeId(appId, String(existing.id)), `Variable ${name}`)
   const input = envInput(d)
+  const secret = normalizeSecret(d.fields.value)
   if (!existing) {
     if (!('value' in input))
       throw new ProviderError('EXPO_VALUE_REQUIRED', 'A new variable needs a value.')
-    const out = await gql(ctx, Q.M_CREATE_ENV_VAR, { appId, input })
+    const out = await scrubbing(secret, () => gql(ctx, Q.M_CREATE_ENV_VAR, { appId, input }))
     const row = out.environmentVariable?.createEnvironmentVariableForApp
     if (!row?.id) throw new ProviderError('EXPO_BAD_ANSWER', 'Expo did not return the variable.')
     const o = mapEnvVar(appId, row)
@@ -467,7 +525,9 @@ async function upsertEnvVar(
     sameValue(current.fields.environments, d.fields.environments)
   if (sameShape && !('value' in input)) return done(current.externalId, current, { existed: true })
   const { name: _name, ...rest } = input
-  const out = await gql(ctx, Q.M_UPDATE_ENV_VAR, { input: { id: existing.id, ...rest } })
+  const out = await scrubbing(secret, () =>
+    gql(ctx, Q.M_UPDATE_ENV_VAR, { input: { id: existing.id, ...rest } })
+  )
   const row = out.environmentVariable?.updateEnvironmentVariable ?? existing
   const o = mapEnvVar(appId, { ...existing, ...row })
   return done(o.externalId, o)
@@ -480,11 +540,19 @@ async function triggerBuild(
 ): Promise<OpResult> {
   // Read-before-write: a build this resource already started is never started twice.
   if (d.externalId) {
+    if (d.refs.project && splitId(d.externalId).appId !== d.refs.project)
+      throw new ProviderError('TARGET_MISMATCH', 'The build belongs to another project.')
     const o = await observeType(ctx, 'expo.build', d.externalId)
     if (o) return done(o.externalId, o, { existed: true })
   }
   const appId = appIdOf(d)
+  await requireApp(ctx, appId)
   const data = (op.data ?? {}) as Record<string, unknown>
+  if (
+    (data.platform !== undefined && data.platform !== d.fields.platform) ||
+    (data.profile !== undefined && data.profile !== d.fields.profile)
+  )
+    throw new ProviderError('TARGET_MISMATCH', 'The build request does not match the planned one.')
   const out = await gql(ctx, Q.M_TRIGGER_BUILD, {
     appId,
     platform: String(data.platform ?? d.fields.platform ?? '').toUpperCase(),
@@ -503,6 +571,19 @@ async function pointChannel(
   d: DesiredResource
 ): Promise<OpResult> {
   const { appId, id } = splitId(String(op.externalId))
+  const project = typeof d.refs.project === 'string' ? d.refs.project : null
+  const branchRef = typeof d.refs.branch === 'string' ? d.refs.branch : null
+  if (
+    d.type !== 'expo.channel' ||
+    project !== appId ||
+    (d.externalId && d.externalId !== op.externalId) ||
+    (branchRef && splitId(branchRef).appId !== appId)
+  )
+    throw new ProviderError(
+      'TARGET_MISMATCH',
+      'The channel or branch is not in the project this change is for.'
+    )
+  await requireApp(ctx, appId)
   const row = (await channelRows(ctx, appId)).find((r) => String(r.id) === id)
   if (!row) throw new ProviderError('EXPO_NOT_FOUND', 'The channel is gone.')
   const target = branchIdOf(d.refs.branch)
