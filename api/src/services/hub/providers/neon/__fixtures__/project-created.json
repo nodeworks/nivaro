@@ -1,0 +1,17 @@
+{
+  "project": {
+    "id": "prj-test-new-0003",
+    "name": "acme-new",
+    "region_id": "aws-us-east-2",
+    "pg_version": 17,
+    "org_id": "org-test-acme-0001",
+    "owner": { "subscription_type": "launch" }
+  },
+  "roles": [{ "name": "neondb_owner", "password": "test-secret-first-role-pass" }],
+  "connection_uris": [
+    {
+      "connection_uri": "postgres://neondb_owner:test-secret-first-role-pass@ep-test-0001.example/neondb"
+    }
+  ],
+  "operations": [{ "id": "op-test-1", "action": "create_timeline", "status": "finished" }]
+}

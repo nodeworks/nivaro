@@ -1,0 +1,5 @@
+{
+  "databases": [
+    { "id": 1, "name": "appdb", "owner_name": "app_owner", "branch_id": "br-test-stage-0002" }
+  ]
+}

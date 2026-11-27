@@ -1,0 +1,10 @@
+{
+  "project": {
+    "id": "prj-test-other-0009",
+    "name": "someone-elses",
+    "region_id": "aws-us-east-2",
+    "pg_version": 16,
+    "org_id": "org-test-other-0002",
+    "owner": { "subscription_type": "launch" }
+  }
+}

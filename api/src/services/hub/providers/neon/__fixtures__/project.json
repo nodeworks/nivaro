@@ -1,0 +1,14 @@
+{
+  "project": {
+    "id": "prj-test-cool-0001",
+    "name": "acme-api",
+    "region_id": "aws-us-east-2",
+    "pg_version": 17,
+    "org_id": "org-test-acme-0001",
+    "history_retention_seconds": 86400,
+    "synthetic_storage_size": 2147483648,
+    "owner": { "subscription_type": "launch" },
+    "created_at": "2026-11-01T10:00:00Z",
+    "updated_at": "2026-11-20T10:00:00Z"
+  }
+}

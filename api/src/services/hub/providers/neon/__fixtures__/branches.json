@@ -1,0 +1,21 @@
+{
+  "branches": [
+    {
+      "id": "br-test-main-0001",
+      "name": "production",
+      "default": true,
+      "protected": false,
+      "current_state": "ready",
+      "updated_at": "2026-11-20T10:00:00Z"
+    },
+    {
+      "id": "br-test-stage-0002",
+      "name": "staging",
+      "parent_id": "br-test-main-0001",
+      "default": false,
+      "protected": false,
+      "current_state": "ready",
+      "updated_at": "2026-11-21T10:00:00Z"
+    }
+  ]
+}
