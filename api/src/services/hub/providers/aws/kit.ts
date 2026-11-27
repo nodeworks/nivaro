@@ -481,6 +481,22 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
     apply: (ctx, op, desired) =>
       guard(ctx, desired, () => applyOp(ctx, defOf(op.type), op, desired)),
 
+    /**
+     * Plan time: what a create would collide with (an S3 bucket of that name, a security group of
+     * that name in the VPC …). What the Hub's own earlier, interrupted create made (its resource
+     * tag) is not a collision: apply picks that one up again.
+     */
+    async findExisting(ctx, type, desired) {
+      const def = defOf(type)
+      if (!def.findExisting || desired.externalId) return null
+      const found = await guard(ctx, desired, () =>
+        def.findExisting?.(ctx, desired, resolveRegion(ctx, desired.fields.region))
+      )
+      const mark = desired.tags['nivaro-hub:resource']
+      if (found && mark && found.tags['nivaro-hub:resource'] === mark) return null
+      return found ?? null
+    },
+
     async snapshot(ctx, type, externalId) {
       const def = defOf(type)
       if (!def.snapshot)

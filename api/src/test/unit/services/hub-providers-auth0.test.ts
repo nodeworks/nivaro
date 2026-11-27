@@ -710,6 +710,28 @@ describe('auth0 apply is idempotent (read-before-write)', () => {
     expect(res.externalId).toBe('rs_test_01')
   })
 
+  it('findExisting (plan time): an API by identifier; an application is not looked up by name; reads only', async () => {
+    const { ctx, calls } = setup((c) =>
+      c.method === 'GET' && c.url.pathname.startsWith('/api/v2/resource-servers/')
+        ? { status: 200, body: fixture('resource-server.json') }
+        : undefined
+    )
+    const hit = await auth0Provider.findExisting?.(ctx, 'auth0.api', desiredApi())
+    expect(hit).toMatchObject({ type: 'auth0.api' })
+    expect(calls.find((c) => c.url.pathname.startsWith('/api/v2/resource-servers/'))).toBeTruthy()
+    const before = calls.length
+    expect(await auth0Provider.findExisting?.(ctx, 'auth0.application', desiredApp())).toBeNull()
+    expect(
+      await auth0Provider.findExisting?.(ctx, 'auth0.api', {
+        ...desiredApi(),
+        externalId: 'rs_test_01'
+      })
+    ).toBeNull()
+    expect(calls.slice(before).filter((c) => c.method !== 'GET')).toHaveLength(0)
+    const free = setup(() => ({ status: 404, body: { message: 'Not found' } }))
+    expect(await auth0Provider.findExisting?.(free.ctx, 'auth0.api', desiredApi())).toBeNull()
+  })
+
   it('enables a connection for an application with one PATCH, and does nothing when already on', async () => {
     let enabled = false
     const { ctx, calls } = setup((c) => {

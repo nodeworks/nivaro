@@ -487,6 +487,50 @@ describe('expo adapter: apply', () => {
     expect(s.sent.some((x) => /Update|Create|Point/.test(x.op))).toBe(false)
   })
 
+  it('findExisting (plan time): project by slug, branch / channel / variable by name; reads only', async () => {
+    const p = setup((op) =>
+      op === 'HubAppByFullName'
+        ? { data: { app: { byFullName: FIX.HubAppById.app.byId } } }
+        : undefined
+    )
+    const proj = await expoAdapter.findExisting?.(
+      p.ctx,
+      'expo.project',
+      desired({ type: 'expo.project', fields: { name: 'field-app' } })
+    )
+    expect(proj).toMatchObject({ type: 'expo.project', externalId: 'app-1' })
+    expect(p.sent[0].vars.fullName).toBe('@acme-mobile/field-app')
+    const mk = (type: string, fields: Record<string, unknown>) =>
+      desired({
+        type,
+        fields: { project: { resourceId: 2 }, ...fields },
+        refs: { project: 'app-1' }
+      })
+    const s = setup()
+    for (const [type, name] of [
+      ['expo.branch', 'release-1'],
+      ['expo.channel', 'production'],
+      ['expo.env_var', 'API_URL']
+    ])
+      expect(await expoAdapter.findExisting?.(s.ctx, type, mk(type, { name }))).toMatchObject({
+        type
+      })
+    expect(
+      await expoAdapter.findExisting?.(s.ctx, 'expo.branch', mk('expo.branch', { name: 'nope-1' }))
+    ).toBeNull()
+    // The project is made in the same change: nothing to collide with, no call.
+    const n = s.sent.length
+    expect(
+      await expoAdapter.findExisting?.(
+        s.ctx,
+        'expo.branch',
+        desired({ type: 'expo.branch', fields: { name: 'release-1' }, refs: {} })
+      )
+    ).toBeNull()
+    expect(s.sent.length).toBe(n)
+    expect(s.sent.some((x) => /Update|Create|Point/.test(x.op))).toBe(false)
+  })
+
   it('named ops refuse a target that does not match desired.refs', async () => {
     const { ctx } = setup()
     const op: PlannedOp = {

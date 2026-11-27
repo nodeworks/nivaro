@@ -665,6 +665,43 @@ describe('github adapter: apply is idempotent (read-before-write)', () => {
     expect(f.calls.filter((c) => c.method !== 'GET')).toHaveLength(0)
   })
 
+  it('findExisting (plan time) answers what a create would collide with, by name, and reads only', async () => {
+    const f = fake({
+      ...repoRoutes(),
+      'GET /repos/acme/web/environments/production': { body: fx('environment') }
+    })
+    const repo = await githubAdapter.findExisting?.(
+      ctxFor(f.impl),
+      'github.repository',
+      desired('github.repository', { name: 'web' })
+    )
+    expect(repo).toMatchObject({ type: 'github.repository', externalId: 'acme/web' })
+    const env = await githubAdapter.findExisting?.(
+      ctxFor(f.impl),
+      'github.environment',
+      desired('github.environment', { name: 'production' })
+    )
+    expect(env).toMatchObject({ type: 'github.environment' })
+    // Nothing there: null. A parent the same change creates has no id yet: null, no call.
+    expect(
+      await githubAdapter.findExisting?.(
+        ctxFor(f.impl),
+        'github.environment',
+        desired('github.environment', { name: 'staging' })
+      )
+    ).toBeNull()
+    const before = f.calls.length
+    expect(
+      await githubAdapter.findExisting?.(
+        ctxFor(f.impl),
+        'github.environment',
+        desired('github.environment', { name: 'x' }, { refs: {} })
+      )
+    ).toBeNull()
+    expect(f.calls.length).toBe(before)
+    expect(f.calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
   it('a resumed create (external id recorded) continues onto its own resource without a second create', async () => {
     const f = fake(repoRoutes())
     const d = desired(
