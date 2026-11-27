@@ -5,6 +5,11 @@ import {
   type ResourceTypeSpec,
   ROTATE_OUTPUTS_FIELD
 } from '../types.js'
+import {
+  environmentChangeIsTightening,
+  isAllowListedPath,
+  rulesetChangeIsTightening
+} from './weakening.js'
 
 /**
  * Task 19: the resource types added to the GitHub adapter (full coverage). External ids, every
@@ -73,10 +78,13 @@ const repoNames = (help: string): FieldSpec => ({
   help
 })
 
-/** A workflow runs with the repository's secrets; CODEOWNERS decides who must review. */
+/**
+ * Every repository file write needs a Hub administrator unless the path is on the narrow
+ * allow-list (README*, docs/**, *.md outside .github/): workflows, actions, scripts, Dockerfiles,
+ * package manifests and CODEOWNERS all run code or decide who reviews.
+ */
 export function isSensitivePath(path: string): boolean {
-  const p = path.replace(/^\/+/, '')
-  return /^\.github\/workflows\//.test(p) || /(^|\/)CODEOWNERS$/.test(p)
+  return !isAllowListedPath(path)
 }
 
 export const EXTRA_TYPES: ResourceTypeSpec[] = [
@@ -227,15 +235,12 @@ export const EXTRA_TYPES: ResourceTypeSpec[] = [
     reversible: true,
     refs: [{ field: 'repository', type: 'github.repository', required: false }],
     risk(op, desired) {
-      if (op.kind === 'delete') return ['destructive']
-      // Switching a ruleset off, or to log-only, lowers the protection it gave.
-      if (
-        op.kind === 'update' &&
-        op.changes.some((c) => c.field === 'enforcement') &&
-        str(desired, 'enforcement') !== 'active'
-      )
+      // Anything that is not provably a tightening needs a Hub administrator.
+      if (op.kind === 'delete') return ['destructive', 'public_exposure']
+      if (str(desired, 'enforcement') !== undefined && str(desired, 'enforcement') !== 'active')
         return ['public_exposure']
-      return []
+      if (op.kind === 'create' || op.kind === 'noop') return []
+      return op.changes.every(rulesetChangeIsTightening) ? [] : ['public_exposure']
     }
   },
   {
@@ -310,17 +315,10 @@ export const EXTRA_TYPES: ResourceTypeSpec[] = [
     reversible: true,
     refs: environmentRefs,
     risk(op) {
-      if (op.kind === 'delete') return ['destructive']
-      if (op.kind !== 'update') return []
-      // Fewer reviewers, a shorter wait or any branch allowed all weaken the gate.
-      const weaker = op.changes.some((c) => {
-        if (c.field === 'reviewers')
-          return Array.isArray(c.from) && Array.isArray(c.to) && c.to.length < c.from.length
-        if (c.field === 'wait_timer') return Number(c.to) < Number(c.from)
-        if (c.field === 'deployment_branches') return c.to === 'all'
-        return false
-      })
-      return weaker ? ['public_exposure'] : []
+      // Deleting protection removes the gate; any change that is not provably tighter weakens it.
+      if (op.kind === 'delete') return ['destructive', 'public_exposure']
+      if (op.kind !== 'update' && op.kind !== 'replace') return []
+      return op.changes.every(environmentChangeIsTightening) ? [] : ['public_exposure']
     }
   },
   {
@@ -520,7 +518,8 @@ export const EXTRA_TYPES: ResourceTypeSpec[] = [
     reversible: true,
     refs: repoRefs,
     risk(op, desired) {
-      if (op.kind === 'delete') return ['destructive']
+      // A delete does not know the path (no desired values): it is admin-only too.
+      if (op.kind === 'delete') return ['destructive', 'public_exposure']
       return isSensitivePath(String(str(desired, 'path') ?? '')) ? ['public_exposure'] : []
     }
   }

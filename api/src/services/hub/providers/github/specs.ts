@@ -9,6 +9,7 @@ import type {
 } from '../types.js'
 import { githubRepositoryEstimate, githubWorkflowEstimate } from './pricing.js'
 import { EXTRA_TYPES } from './specs-extra.js'
+import { branchProtectionChangeIsTightening } from './weakening.js'
 
 /**
  * The GitHub adapter's connection form and resource type specs. External ids:
@@ -220,7 +221,12 @@ const BASE_TYPES: ResourceTypeSpec[] = [
     capabilities: caps(),
     reversible: true,
     refs: repoRefs,
-    risk: (op) => (op.kind === 'delete' ? ['destructive'] : [])
+    risk(op) {
+      if (op.kind === 'delete') return ['destructive']
+      // A change that is not provably a tightening needs a Hub administrator.
+      if (op.kind !== 'update' && op.kind !== 'replace') return []
+      return op.changes.every(branchProtectionChangeIsTightening) ? [] : ['public_exposure']
+    }
   },
   {
     key: 'github.environment',

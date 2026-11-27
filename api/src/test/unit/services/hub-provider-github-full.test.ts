@@ -1246,14 +1246,18 @@ describe('github full: risk flags per type', () => {
   it('deletes: teams and rulesets destructive, secrets also lose data, groups destructive', () => {
     const del = op({ kind: 'delete' })
     expect(spec('github.team').risk(del, null)).toEqual(['destructive'])
-    expect(spec('github.ruleset').risk(del, null)).toEqual(['destructive'])
+    expect(spec('github.ruleset').risk(del, null)).toEqual(['destructive', 'public_exposure'])
     expect(spec('github.org_secret').risk(del, null)).toEqual(['destructive', 'data_loss'])
     expect(spec('github.environment_secret').risk(del, null)).toEqual(['destructive', 'data_loss'])
     expect(spec('github.dependabot_secret').risk(del, null)).toEqual(['destructive', 'data_loss'])
     expect(spec('github.org_variable').risk(del, null)).toEqual(['destructive'])
     expect(spec('github.runner_group').risk(del, null)).toEqual(['destructive'])
     expect(spec('github.pages').risk(del, null)).toEqual(['destructive'])
-    expect(spec('github.repo_file').risk(del, null)).toEqual(['destructive'])
+    expect(spec('github.environment_protection').risk(del, null)).toEqual([
+      'destructive',
+      'public_exposure'
+    ])
+    expect(spec('github.repo_file').risk(del, null)).toEqual(['destructive', 'public_exposure'])
   })
 
   it('exposure: admin access, all-repository secrets, public runners, Pages, workflow files', () => {
@@ -1313,5 +1317,121 @@ describe('github full: risk flags per type', () => {
     expect(
       rs.risk(change('enforcement', 'disabled', 'active'), desired('x', { enforcement: 'active' }))
     ).toEqual([])
+  })
+})
+
+describe('github full: anything not provably a tightening is admin-only (security findings)', () => {
+  const spec = (k: string) => githubAdapter.types.find((t) => t.key === k)!
+  type Ch = { field: string; from?: unknown; to?: unknown }
+  const upd = (changes: Ch[]): PlannedOp => ({
+    kind: 'update',
+    type: 'x',
+    resourceId: 1,
+    externalId: 'x',
+    reason: '',
+    changes,
+    preconditions: {},
+    risk: []
+  })
+  const kind = (k: PlannedOp['kind']): PlannedOp => ({ ...upd([]), kind: k })
+  const flagged = (key: string, c: Ch) => spec(key).risk(upd([c]), desired('x', {}))
+  const ADMIN = ['public_exposure']
+
+  it('environment protection is judged as a set difference, not a length', () => {
+    const k = 'github.environment_protection'
+    expect(
+      flagged(k, {
+        field: 'reviewers',
+        from: ['user:a', 'user:b'],
+        to: ['user:a', 'user:c', 'user:d']
+      })
+    ).toEqual(ADMIN)
+    expect(flagged(k, { field: 'reviewers', from: ['user:a'], to: ['user:a', 'user:c'] })).toEqual(
+      []
+    )
+    expect(flagged(k, { field: 'prevent_self_review', from: true, to: false })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'prevent_self_review', from: false, to: true })).toEqual([])
+    expect(flagged(k, { field: 'wait_timer', from: 30, to: 29 })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'wait_timer', from: 30, to: 60 })).toEqual([])
+    expect(flagged(k, { field: 'deployment_branches', from: 'all', to: 'selected' })).toEqual([])
+    expect(flagged(k, { field: 'deployment_branches', from: 'protected', to: 'selected' })).toEqual(
+      ADMIN
+    )
+    expect(flagged(k, { field: 'deployment_branches', from: 'selected', to: 'all' })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'branch_patterns', from: ['main', 'rel/*'], to: ['main'] })).toEqual(
+      []
+    )
+    expect(flagged(k, { field: 'branch_patterns', from: ['main'], to: ['main', 'dev'] })).toEqual(
+      ADMIN
+    )
+    expect(flagged(k, { field: 'branch_patterns', from: ['main'], to: ['other'] })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'reviewers' })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'surprise', from: 1, to: 2 })).toEqual(ADMIN)
+    expect(spec(k).risk(kind('delete'), null)).toContain('public_exposure')
+  })
+
+  it('rulesets: every protective field getting weaker, any condition change, enforcement not active', () => {
+    const k = 'github.ruleset'
+    expect(flagged(k, { field: 'required_reviews', from: 2, to: 1 })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'required_reviews', from: 1, to: 2 })).toEqual([])
+    for (const f of [
+      'block_deletions',
+      'block_force_pushes',
+      'require_linear_history',
+      'require_signatures',
+      'require_code_owner_review',
+      'dismiss_stale_reviews',
+      'require_conversation_resolution',
+      'strict_status_checks'
+    ]) {
+      expect(flagged(k, { field: f, from: true, to: false }), f).toEqual(ADMIN)
+      expect(flagged(k, { field: f, from: false, to: true }), f).toEqual([])
+    }
+    expect(
+      flagged(k, { field: 'required_status_checks', from: ['ci', 'lint'], to: ['ci', 'e2e'] })
+    ).toEqual(ADMIN)
+    expect(
+      flagged(k, { field: 'required_status_checks', from: ['ci'], to: ['ci', 'lint'] })
+    ).toEqual([])
+    for (const f of ['include', 'exclude', 'repositories', 'target', 'bypass_actors'])
+      expect(flagged(k, { field: f, from: ['a'], to: ['a', 'b'] }), f).toEqual(ADMIN)
+    expect(spec(k).risk(upd([]), desired('x', { enforcement: 'evaluate' }))).toEqual(ADMIN)
+    expect(spec(k).risk(kind('create'), desired('x', { enforcement: 'disabled' }))).toEqual(ADMIN)
+    expect(spec(k).risk(kind('delete'), null)).toContain('public_exposure')
+  })
+
+  it('branch protection (Task 5 type): weakening updates are admin-only, tightening is not', () => {
+    const k = 'github.branch_protection'
+    expect(flagged(k, { field: 'required_reviews', from: 2, to: 0 })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'enforce_admins', from: true, to: false })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'allow_force_pushes', from: false, to: true })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'allow_deletions', from: true, to: false })).toEqual([])
+    expect(flagged(k, { field: 'required_status_checks', from: ['ci'], to: [] })).toEqual(ADMIN)
+    expect(flagged(k, { field: 'required_reviews', from: 1, to: 2 })).toEqual([])
+  })
+
+  it('repo files: only README*, docs/** and *.md outside .github/ skip the admin gate', () => {
+    const k = spec('github.repo_file')
+    const risk = (path: string) => k.risk(kind('create'), desired('x', { path }))
+    for (const p of ['README', 'README.md', 'docs/guide.md', 'docs/img/a.txt', 'notes/todo.md'])
+      expect(risk(p), p).toEqual([])
+    for (const p of [
+      '.github/workflows/ci.yml',
+      '.github/dependabot.yml',
+      '.github/README.md',
+      'docs/.github/x.md',
+      'action.yml',
+      'sub/action.yaml',
+      'Dockerfile',
+      'Dockerfile.prod',
+      'scripts/build.sh',
+      'docs/run.sh',
+      'package.json',
+      'CODEOWNERS',
+      'src/index.ts',
+      'Makefile'
+    ])
+      expect(risk(p), p).toEqual(ADMIN)
+    expect(k.risk(kind('delete'), null)).toContain('public_exposure')
   })
 })
