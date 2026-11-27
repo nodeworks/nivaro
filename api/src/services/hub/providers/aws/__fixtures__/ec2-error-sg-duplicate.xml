@@ -1,0 +1,1 @@
+<Response><Errors><Error><Code>InvalidGroup.Duplicate</Code><Message>The security group already exists</Message></Error></Errors><RequestID>req-fake-0007</RequestID></Response>

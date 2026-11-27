@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DescribeVpcsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-fake-0001</requestId><vpcSet><item><vpcId>vpc-0aaa1111</vpcId><state>available</state><cidrBlock>10.0.0.0/16</cidrBlock><isDefault>false</isDefault><tagSet><item><key>Name</key><value>core</value></item><item><key>nivaro-hub:managed</key><value>true</value></item></tagSet></item></vpcSet></DescribeVpcsResponse>

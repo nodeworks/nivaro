@@ -1,0 +1,1 @@
+<Response><Errors><Error><Code>InvalidVpcID.NotFound</Code><Message>The vpc ID does not exist</Message></Error></Errors><RequestID>req-fake-0006</RequestID></Response>

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DescribeSecurityGroupsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-fake-0001</requestId><securityGroupInfo><item><ownerId>123456789012</ownerId><groupId>sg-0ccc3333</groupId><groupName>web</groupName><groupDescription>Managed by Nivaro Hub</groupDescription><vpcId>vpc-0aaa1111</vpcId>
+<ipPermissions><item><ipProtocol>tcp</ipProtocol><fromPort>443</fromPort><toPort>443</toPort><groups/><ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges><ipv6Ranges/></item></ipPermissions>
+<ipPermissionsEgress><item><ipProtocol>-1</ipProtocol><groups/><ipRanges><item><cidrIp>0.0.0.0/0</cidrIp></item></ipRanges><ipv6Ranges/></item></ipPermissionsEgress>
+<tagSet><item><key>Name</key><value>web</value></item></tagSet></item></securityGroupInfo></DescribeSecurityGroupsResponse>

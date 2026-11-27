@@ -1,0 +1,1 @@
+<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult><Arn>arn:aws:sts::123456789012:assumed-role/nivaro-hub/nivaro-hub</Arn><UserId>AROAFAKEFAKEFAKE:nivaro-hub</UserId><Account>123456789012</Account></GetCallerIdentityResult><ResponseMetadata><RequestId>req-fake-0002</RequestId></ResponseMetadata></GetCallerIdentityResponse>
