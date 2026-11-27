@@ -7,7 +7,7 @@ import type { DocSection } from '../types.js'
 // provider section says what still needs one live check.
 
 const HUB_ONLY =
-  'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it: the routes answer 404 and the Apps hub has no Connections or Shared infra tab.'
+  'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it: the routes answer 404 and the Hub pages show no outside accounts or resources.'
 
 export const hubProvidersDocs: DocSection = {
   id: 'hub-providers',
@@ -22,7 +22,7 @@ export const hubProvidersDocs: DocSection = {
     { type: 'h2', id: 'hub-providers-connections', text: 'Connections' },
     {
       type: 'p',
-      text: 'A connection is one account at one provider. Administrators create them on the Connections tab of the Apps hub (`/hub/connections`). The form is drawn from the provider’s own list of fields. A field marked secret goes into one sealed secret; every read answers only a mask (`••••••`), a fingerprint and the names of the secret fields that hold a value. Nothing a person types into a secret field is shown again, logged, put in a URL or sent to an AI tool.'
+      text: 'A connection is one account at one provider. Administrators connect one on the page of its kind ("Connect a DNS provider" on Domains & certificates, "Connect a database provider" on Databases…, each offering only providers of that kind) or on Access → Outside accounts (`/hub/connections`), the full list. The form is drawn from the provider’s own list of fields. A field marked secret goes into one sealed secret; every read answers only a mask (`••••••`), a fingerprint and the names of the secret fields that hold a value. Nothing a person types into a secret field is shown again, logged, put in a URL or sent to an AI tool.'
     },
     {
       type: 'ul',
@@ -63,7 +63,7 @@ export const hubProvidersDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Environment rows have a collapsed "Outside resources" summary (count, drifted, gone) that opens to the resources grouped by provider; the Shared infra tab (`/hub/shared-infra`, administrators) lists shared resources by connection with a "Used by N" chip.',
+        'Environment rows have a collapsed "Outside resources" summary (count, drifted, gone) that opens to the resources grouped by what they are for (the Hub’s sections), and the app’s page lists all of them across its environments; shared resources show on the page of their kind and, all together, under Outside accounts (`/hub/shared-infra` redirects there; administrators), by connection with a "Used by N" chip.',
         'Adopt: a resource that already exists at the provider (created by hand, say) is not touched until you adopt it. The "Not managed by the Hub" list on a connection (`GET /api/hub/connections/:id/unmanaged?type=`) shows what the provider has that the Hub does not manage and did not make; Adopt binds one to an app environment or, for administrators, to the shared scope. Adopt writes nothing at the provider. It stores the readable, non-secret values as the desired state, so a later change at the provider shows as drift. Adoption is refused when any connection of the provider already manages it (`RESOURCE_ALREADY_MANAGED`).',
         'Drift: every 15 minutes (cron `hub-resources-observe`, Hub only, one leader at a time) the Hub reads each managed resource, stalest first (up to 300 per connection per tick, four connections at once, a five-minute budget per connection). A value that differs from the desired state sets the drift flag. A resource the provider no longer has shows as gone. An unreadable field is never drift, a failed read keeps the old state, and secret fields drift only when both sides carry a fingerprint and they differ. Each tick first marks changes whose run died as interrupted.',
         'A drifted resource is fixed with Re-apply (put the provider back to the Hub’s values) or Accept (take the provider’s values as the new desired state); both go through the change flow below.',
@@ -153,7 +153,7 @@ export const hubProvidersDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Open changes: the Connections and Shared infra tabs list planned, pending approval, applying, failed and interrupted changes (the Connections tab counts those waiting for approval). A row opens `?change=<id>` on the tab, a panel above the tab content that shows the whole change; Close drops the parameter. Notices (approval needed, failed, applied) link there.',
+        'Open changes: Outside accounts lists planned, pending approval, applying, failed and interrupted changes (it counts those waiting for approval). A row opens `?change=<id>` on the tab, a panel above the tab content that shows the whole change; Close drops the parameter. Notices (approval needed, failed, applied) link there.',
         'Audit: the Hub audit timeline has a Resources category: every `hub-resource-*` action (plan, start, cancel, resume, undo, approve, decline, adopt, discard) and connection action is logged with field names, ids and codes only, never values.',
         'Smoke checks: an applied change that touched a serving type (`vercel.deployment`, `vercel.domain`, `aws.route53_record`, `aws.load_balancer`, `aws.listener`, `aws.target_group`, `aws.rds_instance`) queues the environment’s smoke suite with trigger "Resource change". Carried changes are skipped; their promotion queues its own run.'
       ]

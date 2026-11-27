@@ -32,13 +32,13 @@ export const hubOverviewDocs: DocSection = {
       items: [
         'Its own mark and name: a signal tower in amber on deep slate-navy, with "Nivaro Hub", in the top bar, on the sign-in page, on the loading screen, in the browser tab ("Hub · Apps — Nivaro Hub"), as the favicon and installed-app icons (`/hub-brand/`), in Hub email and as the `logo_url` of `GET /api/app-info` (the phone app shows it).',
         'An operator\'s own branding still wins: a logo uploaded in Settings → Project replaces the mark (the name "Hub" stays), a project name replaces "Nivaro Hub" (the database default "Nivaro CMS" counts as no name), and a chosen project or workspace colour replaces the amber everywhere: primary buttons, focus rings, links and selection, with text on it chosen by contrast.',
-        "A top bar with the Hub sections (Fleet, Apps, Deploys, Shared, Moves, People, Settings; a section this version does not have is left out) and a System menu for the other pages the Hub keeps, in place of the icon rail. Sections and System follow the person's role and its UI permissions exactly as the sidebar did. Team chat, refresh, the watch list, the instance switcher and the theme stay in the bar; do-not-disturb and browser chaos are in the account menu. Below tablet width the sections fold into a menu, and on a phone the smaller tools move into it.",
+        "A top bar with the Hub's sections (Apps, Deploys, Hosting, Databases, Domains, Messaging, Monitoring, Costs, Access; see Finding your way below) and a System menu for the other pages the Hub keeps (Users, Roles, Settings…), in place of the icon rail. Sections and System follow the person's role and its UI permissions exactly as the sidebar did: a section shows when the person may open at least one of its pages, and opens on the first one they may. The grid button opens every page on one sheet; Find (also Ctrl/Cmd+K) finds a page by what it holds. Team chat, refresh, the watch list, the instance switcher and the theme stay in the bar; do-not-disturb and browser chaos are in the account menu. Below desktop width the sections fold into a menu that lists every page under its section, and on a phone the smaller tools move into it.",
         "A fleet strip under the top bar: one dot per environment, green running, amber needs a look, red not answering, hollow not checked yet. It is one read of the Hub's cached status (`GET /api/hub/strip`, never a live check of an app; an environment nobody looked at lately shows hollow), refreshed once a minute; a dot opens its app.",
         'Environment colours on every Hub screen, read from the environment key: production red-orange, staging violet, development teal, anything else grey (row stripes, tags, deploy history).',
         'Promotions, moves, shared upgrades and app creations show a run timeline (plan → run → check) above their step list; the running step pulses unless the browser asks for reduced motion.',
         'Any action on a production environment (promote, move, place on shared) sits in a red-orange frame and keeps its typed confirmation.',
         'Versions, digests, hosts and ids are set in a monospace face with tabular figures; Hub pages run denser.',
-        'The Apps hub groups its tabs in two strips: the groups (Apps, Deploy, Run, Data, Watch, People & access, Build), then the open group’s tabs. Choosing a group opens its first tab; every tab keeps its own path (`/hub/smoke`, `/hub/costs`…). A tab the top bar already links (Fleet, Shared deployments, People) is left out of the strip in the Hub look.'
+        'Under the bar a page shows one strip: the pages of the section it is in. A Hub that also holds app data keeps the sidebar and shows two strips instead (the sections, then the open section’s pages). Either way every page keeps its own path (`/hub/smoke`, `/hub/costs`…).'
       ]
     },
     {
@@ -77,6 +77,69 @@ export const hubOverviewDocs: DocSection = {
     {
       type: 'note',
       text: 'Hub tokens and driver tokens are stored encrypted and need `ENCRYPTION_KEY` on the Hub. Without it, saving one answers 400 `HUB_NEEDS_ENCRYPTION_KEY` and nothing is stored in plain text. Every GET shows a saved secret as ••••••; sending •••••• back on a save keeps the stored value, and sending an empty value clears it.'
+    },
+    { type: 'h2', id: 'hub-overview-nav', text: 'Finding your way' },
+    {
+      type: 'p',
+      text: 'The Hub is organised by what things are, not by how the Hub works. Each section is the home of one kind of thing, and holds the Hub’s own things of that kind beside the outside accounts and resources of the same kind: an RDS instance is on Databases, a Route 53 zone on Domains, a Slack channel on Messaging. The section names are the provider groups’ names (`GET /api/hub/provider-types` → `categories`), so one word means one thing in the navigation, in the provider picker and on an app’s page.'
+    },
+    {
+      type: 'table',
+      head: ['Section', 'Pages', 'Outside providers that live here'],
+      rows: [
+        [
+          'Apps',
+          'Apps · Usage · Dependencies · App services · Templates · New app defaults · Clone & retire',
+          'Payments, AI, calls and video (Stripe, Anthropic, OpenAI, LiveKit) on App services'
+        ],
+        [
+          'Deploys (Code and deploys)',
+          'Releases · Change calendar · Smoke checks · Extensions · Config promotion · Code & pipelines',
+          'GitHub, GitLab, Vercel, Expo, Docker Hub, Jira; ECR repositories'
+        ],
+        [
+          'Hosting (Hosting and servers)',
+          'Hosts & regions · Deploy locations · Shared deployments · Capacity · Scaling · Storage · Cloud accounts',
+          'AWS, Azure, Portainer: networks, servers, buckets, load balancers'
+        ],
+        [
+          'Databases (Databases and caches)',
+          'Databases · Backups & refresh',
+          'Neon, Upstash, Redis Cloud; RDS and Azure SQL'
+        ],
+        [
+          'Domains (Domains, DNS and certificates)',
+          'Domains & certificates',
+          'Cloudflare, Namecheap, Let’s Encrypt; Route 53 zones and records, ACM certificates'
+        ],
+        [
+          'Messaging (Messaging and alerts)',
+          'Channels & routes · On-call',
+          'Slack, Teams, PagerDuty, SendGrid, Mailgun, Twilio, Firebase; SES and SNS; notify routes'
+        ],
+        [
+          'Monitoring (Monitoring and security)',
+          'Fleet · Health · Issues · Incidents · Status pages · Security · Ask the Hub',
+          'Sentry and Snyk on Security'
+        ],
+        ['Costs', 'Costs', 'Provider spend, budgets and spend limits'],
+        [
+          'Access (People and access)',
+          'People · Sign-in · Access reviews · Secrets · Outside accounts · Audit log',
+          'Entra and Auth0 on Sign-in; every account in one list on Outside accounts'
+        ]
+      ]
+    },
+    {
+      type: 'ul',
+      items: [
+        'Connecting an account is a step on the page where it is needed: "Connect a DNS provider" on Domains & certificates offers only providers that hold domains, DNS or certificates (AWS is among them, for Route 53). The full list of accounts, with what each shares between apps, is Access → Outside accounts (`/hub/connections`).',
+        'Each of those pages lists what apps hold of that kind (name, kind, environment, state, drift, cost). Open takes you to the app, on that environment’s outside resources, where a change is planned.',
+        'An app’s page shows every outside resource the app uses, grouped the same way, with state, drift and cost; Change opens the environment’s panel, and the group name opens its home. Under the app’s name a row of links opens the Hub pages about that app, already narrowed to it where the page can be (Health, Issues, Versions and uptime, Config promotion by app; Smoke checks, Backups and Usage by environment).',
+        'Find (Ctrl/Cmd+K) knows the pages by meaning: "dns", "certificate" and "route 53" find Domains & certificates, "postgres" and "rds" Databases, "slack" Channels & routes, "github" Code & pipelines, "budget" Costs. It also finds an app by name.',
+        'Renamed on 2026-11-27, paths unchanged: Changes → Change calendar, Config → Config promotion, Drivers → Deploy locations, Hosts → Hosts & regions, Targets → New app defaults, Backups & data → Backups & refresh, Access → Access reviews, Audit → Audit log, Connections → Outside accounts. Shared infra merged into Outside accounts and into each kind’s page; `/hub/shared-infra` redirects to `/hub/connections` with its query (`?change=<id>` still opens the change). Certificates and Domains moved from Security to Domains & certificates; notify routes from Connections to Channels & routes.',
+        'Every earlier address still opens its page, and a role’s UI permissions still hide the same pages: no page changed its path.'
+      ]
     },
     { type: 'h2', id: 'hub-overview-adopt', text: 'Adopting an app' },
     {
@@ -1798,7 +1861,7 @@ export const hubCreateDocs: DocSection = {
     { type: 'h2', id: 'hub-create-targets', text: 'Targets: where new apps go' },
     {
       type: 'p',
-      text: 'A target (the Targets tab of the Hub, administrators only: Apps · Drivers · Targets · Databases) holds everything about one place apps are created through GitLab. Targets are of kind `gitlab` only: a Docker creation names a Docker driver and a shared one a shared deployment directly, so neither needs a target. Settings:'
+      text: 'A target (Apps → New app defaults, `/hub/targets`, administrators only) holds everything about one place apps are created through GitLab. Targets are of kind `gitlab` only: a Docker creation names a Docker driver and a shared one a shared deployment directly, so neither needs a target. Settings:'
     },
     {
       type: 'table',
@@ -1810,7 +1873,7 @@ export const hubCreateDocs: DocSection = {
         ],
         [
           '`connection_id`',
-          "Optional: a `gitlab` provider connection (Connections tab) whose address and token the target uses. The target then stores neither (`api` and `secret` are left out; sending a token answers `BAD_SECRET`, another address `BAD_CONFIG`), and `namespace` and `template_project` must be paths inside the group the connection is pinned to. `null` = stop using it: the target's own `api` and token are sent in the same request (`SECRET_REQUIRED` otherwise). A connection that is not a GitLab one is `BAD_TARGET_CONNECTION`."
+          "Optional: a `gitlab` provider connection (Outside accounts, or Code & pipelines) whose address and token the target uses. The target then stores neither (`api` and `secret` are left out; sending a token answers `BAD_SECRET`, another address `BAD_CONFIG`), and `namespace` and `template_project` must be paths inside the group the connection is pinned to. `null` = stop using it: the target's own `api` and token are sent in the same request (`SECRET_REQUIRED` otherwise). A connection that is not a GitLab one is `BAD_TARGET_CONNECTION`."
         ],
         [
           '`api`',

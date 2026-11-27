@@ -24,7 +24,7 @@ export const hubProvidersGitlabDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'On the Targets tab a GitLab target signs in to GitLab with its own token or with a GitLab connection (`connection_id`). With a connection the target keeps no token and no address: they are read from the connection each time, and the target’s namespace and template must sit inside the connection’s pinned group. Each app created on the target has a driver with its own sealed copy of the token.'
+      text: 'On New app defaults (`/hub/targets`) a GitLab target signs in to GitLab with its own token or with a GitLab connection (`connection_id`). With a connection the target keeps no token and no address: they are read from the connection each time, and the target’s namespace and template must sit inside the connection’s pinned group. Each app created on the target has a driver with its own sealed copy of the token.'
     },
     {
       type: 'ul',
