@@ -689,6 +689,10 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
     title: 'Not while viewing as someone else',
     hint: 'Changes start only from your own sign-in.'
   },
+  NOT_IMPLEMENTED: {
+    title: 'This Hub cannot do that yet',
+    hint: 'The Hub on this server is missing this part. Update the Hub, then try again.'
+  },
   STALE_PLAN: {
     title: 'The plan changed since you read it',
     hint: 'Plan again, check it, then start.'
