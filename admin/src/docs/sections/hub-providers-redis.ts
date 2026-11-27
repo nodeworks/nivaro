@@ -10,6 +10,10 @@ export const hubProvidersUpstashDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-upstash', text: 'Provider: Upstash — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: the account `email` and a secret `apiKey` (HTTP Basic). The only host is `api.upstash.com`. An Upstash API key is account-wide, so the connection is the pin and Test can only say whether the key reads databases. Upstash has no resource tags.'
     },
@@ -41,6 +45,10 @@ export const hubProvidersRedisCloudDocs: DocSection = {
   label: 'Provider: Redis Cloud',
   content: [
     { type: 'h1', id: 'hub-providers-redis-cloud', text: 'Provider: Redis Cloud — Hub mode only' },
+    {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
     {
       type: 'p',
       text: 'Connection fields: the pinned `accountId` and two secrets, the API `accountKey` (sent as `x-api-key`) and the `userKey` (`x-api-secret-key`). The only host is `api.redislabs.com`. Test reads the account and refuses keys that belong to another account than the pinned one; every read and write re-checks it (every few minutes per connection), so a mixed-up key can never touch another account (`REDIS_CLOUD_OUT_OF_ACCOUNT`).'

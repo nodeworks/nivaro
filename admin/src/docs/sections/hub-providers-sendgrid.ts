@@ -9,6 +9,10 @@ export const hubProvidersSendgridDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-sendgrid', text: 'Provider: SendGrid — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'One secret connection field, `apiKey` (a SendGrid API key with full access; the Hub makes narrower keys for each app). The only host is `api.sendgrid.com`. SendGrid has no account id to pin: the key is the account, so every call goes through that one key. Test reads the key’s permissions and probes the domain, sender and IP-access lists, and says which of those the key lacks.'
     },

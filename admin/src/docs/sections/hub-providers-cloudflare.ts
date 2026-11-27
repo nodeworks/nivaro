@@ -10,6 +10,10 @@ export const hubProvidersCloudflareDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-cloudflare', text: 'Provider: Cloudflare — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: `accountId` (the 32-character account id; the connection is pinned to it) and secret `apiToken` (an account or user API token). The only host is `api.cloudflare.com`. Account-level calls carry the pinned account in the path; zone-level calls first read the zone and refuse it (`CLOUDFLARE_OUT_OF_ACCOUNT`) when it belongs to another account, so a token that can see more than one account never leads the Hub into the others. Test verifies the token, names the account, probes a read for each resource type and, when Cloudflare lets the token list its own permission groups, checks the write group each type needs (DNS Write, Cloudflare Tunnel Write, Access: Apps and Policies Write, Workers R2 Storage Write, Workers Routes Write, Workers Scripts Write, Zone WAF Write). When it cannot list them, only read access is checked and the message says so.'
     },

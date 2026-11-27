@@ -9,6 +9,10 @@ export const hubProvidersSlackDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-slack', text: 'Provider: Slack — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: `team_id` (the workspace id, `T0123ABCD`, pinned) and a secret `token` (a bot token, `xoxb-…`, from a Slack app you install). The only host is `slack.com`. Every operation first checks, once per ten minutes, that the token belongs to the pinned workspace and refuses with `SLACK_OUT_OF_ACCOUNT` otherwise; channels of another workspace, direct messages and group DMs read as missing. Test lists which of these scopes the token has: `channels:manage`, `channels:read`, `groups:write`, `groups:read`, `chat:write`, `users:read`, `users:read.email`, `bookmarks:write`, `bookmarks:read`.'
     },

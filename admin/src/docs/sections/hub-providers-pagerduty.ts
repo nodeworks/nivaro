@@ -10,6 +10,10 @@ export const hubProvidersPagerdutyDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-pagerduty', text: 'Provider: PagerDuty — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: `region` (US or EU: the hosts are `api.pagerduty.com` + `events.pagerduty.com`, or the `.eu.` pair), `from_email` (the email of a PagerDuty user the Hub writes as; PagerDuty requires it on every write) and a secret `token` (a general access REST API key). A REST key belongs to one PagerDuty account, so an id from another account answers 404 and reads as missing. PagerDuty lists no rights for a key: Test checks that the key can read each kind of resource and that the From email is a real user, and assumes a key that reads can also write (a read-only key fails at its first change). PagerDuty bills per user seat, not per resource, so none of these types has a cost estimate.'
     },
@@ -62,6 +66,7 @@ export const hubProvidersPagerdutyDocs: DocSection = {
       type: 'ul',
       items: [
         'Outputs: `routing_key` (secret). PagerDuty shows it again on request, so it is never once-only and the Hub can re-read it. Bind it to a stack secret; an app setting is not offered for it.',
+        'Costs: PagerDuty bills the account’s plan and seats, not each resource, so no type has an estimate.',
         'People are matched by email. An email PagerDuty does not know stops the change with `UNKNOWN_USERS` and the address named; nothing is guessed or invited.',
         'A create that finds a service, policy, schedule, integration (same name on the service) or an identical maintenance window the Hub did not make stops with `ALREADY_EXISTS`: adopt it instead.',
         'Needs a live check: PagerDuty’s handling of the weekly layer across a daylight-saving change (a fixed 604800-second turn), the `events_api_v2_inbound_integration` create type, and whether a policy delete is refused while a service still uses it.'
