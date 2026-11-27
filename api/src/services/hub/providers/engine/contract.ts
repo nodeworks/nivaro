@@ -121,7 +121,31 @@ export interface StoredChangePlan {
    * `{fingerprint, changed}`. Never answer it: use plan.ts `publicStoredPlan`.
    */
   sealed?: string | null
+  /**
+   * Task 11a: the Hub run that carries this change (a promotion's provider step, a creation's
+   * providers step, a retirement's resource deletes). Set only by the server through
+   * planCarriedResourceChange, never by a request; re-judged at every plan and start.
+   */
+  origin?: ChangeOrigin | null
 }
+
+/**
+ * Task 11a: a change made BY another Hub run, as its mechanism. Each kind is a narrow, explicit
+ * exception the engine re-checks against the run's own row (gates.ts judgeOrigin):
+ *  - promotion  the running deploy row of this environment: adopt / update only; the promotion
+ *               already judged freezes, deploy windows and its checklist (rollbacks are exempt from
+ *               freezes), so those are not judged twice; a retired app is still refused.
+ *  - creation   the running creation of this environment: create / adopt / update only; the
+ *               production checklist is the creation's, freezes and windows still apply.
+ *  - retirement the open retirement of this app, its `remove` step running: deletes only; the
+ *               app may be archived (ENV_ARCHIVED is not judged) and the retirement's own freeze
+ *               `retire:<id>` is left out — every other freeze and window (action `retire`) still
+ *               stops it, as for the retirement's own steps.
+ */
+export type ChangeOrigin =
+  | { kind: 'promotion'; deployId: number }
+  | { kind: 'creation'; creationId: number }
+  | { kind: 'retirement'; retirementId: number }
 
 /** One entry of `nivaro_hub_resource_changes.steps`, one per op (same order as plan.ops). */
 export interface ChangeStep {
@@ -183,6 +207,8 @@ export const RESOURCE_CHANGE_CODES = {
   LOCK_UNAVAILABLE: 503,
   CONNECTION_DISABLED: 409,
   ALREADY_EXISTS: 409,
+  // Task 11a: a carried change whose run is not (or no longer) the one it names.
+  ORIGIN_INVALID: 409,
   NOT_IMPLEMENTED: 501
 } as const
 
@@ -208,6 +234,19 @@ export class ResourceChangeError extends Error {
 export async function planResourceChange(req: PlanRequest, actor: HubActor): Promise<ChangePlan> {
   const { createPlannedChange } = await import('./run.js')
   return createPlannedChange(req, actor, { mode: 'request' })
+}
+
+/**
+ * Task 11a: plans a change carried by another Hub run (see ChangeOrigin). Never reachable from a
+ * request body: only Hub runs call it, with the origin they are.
+ */
+export async function planCarriedResourceChange(
+  req: PlanRequest,
+  actor: HubActor,
+  origin: ChangeOrigin
+): Promise<ChangePlan> {
+  const { createPlannedChange } = await import('./run.js')
+  return createPlannedChange(req, actor, { mode: 'request', origin })
 }
 
 /**

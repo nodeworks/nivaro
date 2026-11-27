@@ -38,7 +38,13 @@ import {
   type StoredChangePlan
 } from './contract.js'
 import { engineDeps } from './deps.js'
-import { assertMayWrite, claimResourceChecklist, judgeAccess, judgeChangeGates } from './gates.js'
+import {
+  assertMayWrite,
+  claimResourceChecklist,
+  judgeAccess,
+  judgeChangeGates,
+  judgeOrigin
+} from './gates.js'
 import {
   holdResourceLocks,
   hubResourceChangeLockKey,
@@ -180,7 +186,8 @@ export async function replanFresh(
   const fresh = await computePlan(plan.request, actor, {
     mode: 'stored',
     sealed: plan.sealed ?? null,
-    undoOf: plan.undoOf ?? null
+    undoOf: plan.undoOf ?? null,
+    origin: plan.origin ?? null
   })
   if (fresh.planHash !== row.plan_hash) {
     await updateChange(
@@ -322,7 +329,8 @@ export async function startChange(
   return beginRun(row, actor, {
     expect: 'planned',
     checklistRunId: input.checklistRunId,
-    claimChecklist: true,
+    // Task 11a: a carried change runs under its run's own checklist.
+    claimChecklist: !plan.origin,
     audit: 'hub-resource-change-start'
   })
 }
@@ -349,11 +357,20 @@ async function judgeForRun(row: HubResourceChangeRow, actor: HubActor): Promise<
     },
     actor
   )
+  // Task 11a: a carried change resumes only while its run still carries it.
+  if (plan.origin)
+    await judgeOrigin(plan.origin, {
+      scope: row.scope,
+      appId: row.app_id,
+      environmentId: row.environment_id,
+      actions: plan.request.ops.map((o) => o.action)
+    })
   const gates = await judgeChangeGates({
     scope: row.scope,
     appId: row.app_id,
     environmentId: row.environment_id,
-    production: access.production
+    production: access.production,
+    origin: plan.origin ?? null
   })
   if (gates.refusal) throw gates.refusal
 }

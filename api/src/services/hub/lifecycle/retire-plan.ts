@@ -102,11 +102,30 @@ export async function gatherPlan(appId: number): Promise<RetirePlan> {
       files_target: !!policy?.files_target
     })
   }
+  const { appResources, resourceLines } = await import('./retire-resources.js')
+  const resources = resourceLines(await appResources(Number(app.id)))
   return {
     app: { id: Number(app.id), key: String(app.key), name: String(app.name || app.key) },
     environments,
-    production: environments.some((e) => e.production)
+    production: environments.some((e) => e.production),
+    ...(resources.length ? { resources } : {})
   }
+}
+
+/**
+ * Task 11a: what `remove` does with the app's provider resources: every one the Hub manages is
+ * deleted after the environments stop, environment parts before the app's own, each with its own
+ * way back (RDS final snapshot, the GitHub repository archived, the engine's before-state).
+ */
+function resourceRemoveLines(p: RetirePlan): string[] {
+  const list = p.resources ?? []
+  if (!list.length) return []
+  const where = (id: number | null) =>
+    id == null ? 'the app' : (p.environments.find((e) => e.id === id)?.key ?? `environment ${id}`)
+  return [
+    `${list.length} provider resource${list.length === 1 ? '' : 's'} the Hub manages ${list.length === 1 ? 'is' : 'are'} deleted after the environments stop (environment parts first, the app's own last; an RDS instance keeps a final snapshot, a GitHub repository is archived unless it is marked delete permanently):`,
+    ...list.map((r) => `  ${r.type} ${r.name ?? `#${r.id}`} (${where(r.environment_id)})`)
+  ]
 }
 
 /** Plain sentences per step for the plan (the wizard shows them under each step). */
@@ -137,13 +156,16 @@ export function planLines(p: RetirePlan): Record<string, string[]> {
     notice: [
       'The final notice (at most 500 characters) goes to the Hub inbox and by email of the people who signed in to the app through the Hub, its owners and the Hub administrators, and shows on the maintenance page. People who sign in to the app directly see only the maintenance page.'
     ],
-    remove: envs.map((e) =>
-      e.kind === 'docker'
-        ? `${name(e)}: the Docker stack ${e.stack} is removed (its volumes and its database stay).`
-        : e.kind === 'shared'
-          ? `${name(e)}: taken off its shared deployment (its database stays).`
-          : `${name(e)}: the Hub cannot stop it — stop it yourself and confirm at sign-off.`
-    ),
+    remove: [
+      ...envs.map((e) =>
+        e.kind === 'docker'
+          ? `${name(e)}: the Docker stack ${e.stack} is removed (its volumes and its database stay).`
+          : e.kind === 'shared'
+            ? `${name(e)}: taken off its shared deployment (its database stays).`
+            : `${name(e)}: the Hub cannot stop it — stop it yourself and confirm at sign-off.`
+      ),
+      ...resourceRemoveLines(p)
+    ],
     archive: [
       'Every environment is archived and the app is marked retired. From then on every promotion, move, scale or restart of it is refused.'
     ]

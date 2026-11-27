@@ -423,6 +423,7 @@ describe('create on a Docker driver', () => {
       expect(c?.status, c?.error ?? '').toBe('done')
       expect(c?.steps.map((s) => [s.key, s.status])).toEqual([
         ['database', 'done'],
+        ['providers', 'done'],
         ['stack', 'done'],
         ['deploy', 'done'],
         ['name', 'done'],
@@ -666,6 +667,7 @@ describe('create on a shared deployment', () => {
     expect(c?.status, c?.error ?? '').toBe('done')
     expect(c?.steps.map((s) => [s.key, s.status])).toEqual([
       ['database', 'done'],
+      ['providers', 'done'],
       ['place', 'done']
     ])
     expect(placeCalls).toHaveLength(1)

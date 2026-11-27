@@ -50,6 +50,12 @@ export interface HubDbServerRow {
   user_host: string | null
   notes: string | null
   admin_secret: SealedAdminSecret | null
+  /**
+   * Task 11a (Hub providers): the managed `aws.rds_instance` this server is (nivaro_hub_resources
+   * id), or null. Its endpoint fills an empty host and port; deleting the instance is refused while
+   * another app's databases are on it (providers/engine/gates.ts hubRecordBlockers).
+   */
+  resource_id?: number | null
 }
 
 /** A server as the API shows it: the provisioning login is only ever the mask. */
@@ -141,8 +147,21 @@ export function validateServerInput(
   if (typeof engine !== 'string' || !(PROVISION_ENGINES as readonly string[]).includes(engine))
     return fail('BAD_ENGINE', 'The engine must be one of mssql, pg, mysql2 or mariadb.')
 
-  const host = cleanHost(pick('host'))
-  if (!host) return fail('BAD_HOST', 'The host must be a host name or an IP address.')
+  const resRaw = pick('resource_id')
+  let resource_id: number | null = null
+  if (resRaw !== undefined && resRaw !== null && resRaw !== '') {
+    if (typeof resRaw !== 'number' || !Number.isSafeInteger(resRaw) || resRaw < 1)
+      return fail('BAD_RESOURCE', 'resource_id must name a managed RDS instance, or be null.')
+    resource_id = resRaw
+  }
+  const rawHost = pick('host')
+  // A server linked to an RDS instance may leave the host empty: its endpoint fills it.
+  const host =
+    cleanHost(rawHost) ??
+    (resource_id != null && (rawHost === undefined || rawHost === null || rawHost === '')
+      ? ''
+      : null)
+  if (host === null) return fail('BAD_HOST', 'The host must be a host name or an IP address.')
 
   const portRaw = pick('port')
   let port: number | null = null
@@ -244,9 +263,64 @@ export function validateServerInput(
       collation,
       user_host,
       notes,
-      admin_secret
+      admin_secret,
+      resource_id
     }
   }
+}
+
+/** RDS engines → the Hub's database engines. */
+function engineOfRds(engine: unknown): HubDbEngine | null {
+  const e = String(engine ?? '').toLowerCase()
+  if (e === 'postgres' || e === 'aurora-postgresql') return 'pg'
+  if (e === 'mysql' || e === 'aurora-mysql') return 'mysql2'
+  if (e === 'mariadb') return 'mariadb'
+  if (e.startsWith('sqlserver')) return 'mssql'
+  return null
+}
+
+/**
+ * Task 11a: a server's RDS link, checked against the managed resource (a live `aws.rds_instance`
+ * of the same engine). An empty host (and port) come from the instance's observed endpoint; an
+ * instance with no endpoint yet (still creating) is refused BAD_RESOURCE. Answers the fields to
+ * store.
+ */
+export async function resolveServerResource(f: ServerFields): Promise<ServerFields> {
+  if (f.resource_id == null) {
+    if (!f.host)
+      throw new HubDbError('BAD_HOST', 'The host must be a host name or an IP address.', 400)
+    return f
+  }
+  const r = (await db('nivaro_hub_resources')
+    .where({ id: f.resource_id })
+    .whereNull('deleted_at')
+    .first('id', 'type', 'observed')) as Record<string, unknown> | undefined
+  if (!r || String(r.type) !== 'aws.rds_instance')
+    throw new HubDbError('BAD_RESOURCE', 'That is not an RDS instance the Hub manages.', 400)
+  let observed: { fields?: Record<string, unknown> } | null = null
+  try {
+    observed = typeof r.observed === 'string' ? JSON.parse(r.observed) : (r.observed as never)
+  } catch {
+    observed = null
+  }
+  const fields = observed?.fields ?? {}
+  const engine = engineOfRds(fields.engine)
+  if (engine && engine !== f.engine)
+    throw new HubDbError(
+      'ENGINE_MISMATCH',
+      `That RDS instance runs ${String(fields.engine)}, not this server's engine.`,
+      400
+    )
+  const endpoint = typeof fields.endpoint === 'string' ? cleanHost(fields.endpoint) : null
+  const port = typeof fields.port === 'number' ? fields.port : null
+  if (f.host) return f
+  if (!endpoint)
+    throw new HubDbError(
+      'BAD_RESOURCE',
+      'That RDS instance has no address yet (it may still be starting): try again when it is available, or enter the host.',
+      400
+    )
+  return { ...f, host: endpoint, port: f.port ?? port }
 }
 
 function toRow(r: Record<string, unknown>): HubDbServerRow {
@@ -262,7 +336,8 @@ function toRow(r: Record<string, unknown>): HubDbServerRow {
     collation: (r.collation as string | null) ?? null,
     user_host: (r.user_host as string | null) ?? null,
     notes: (r.notes as string | null) ?? null,
-    admin_secret: (r.admin_secret as SealedAdminSecret | null) ?? null
+    admin_secret: (r.admin_secret as SealedAdminSecret | null) ?? null,
+    resource_id: r.resource_id == null ? null : Number(r.resource_id)
   }
 }
 
@@ -321,6 +396,13 @@ export async function getServerRow(id: number): Promise<HubDbServerRow | null> {
   return r ? toRow(r) : null
 }
 
+/** The RDS link column, written only when it holds (or held) a value: a schema before 583 has none. */
+function resourceColumn(f: ServerFields, before?: Record<string, unknown> | null) {
+  return f.resource_id != null || (before?.resource_id ?? null) != null
+    ? { resource_id: f.resource_id }
+    : {}
+}
+
 function columns(f: ServerFields) {
   return {
     name: f.name,
@@ -337,11 +419,13 @@ function columns(f: ServerFields) {
   }
 }
 
-export async function createServer(f: ServerFields): Promise<HubDbServer> {
+export async function createServer(given: ServerFields): Promise<HubDbServer> {
+  const f = await resolveServerResource(given)
   if (await nameTaken(f.name))
     throw new HubDbError('NAME_TAKEN', 'A database server with this name already exists.')
   const id = await insertReturningId(db, 'nivaro_hub_db_servers', {
     ...columns(f),
+    ...resourceColumn(f),
     created_at: now(),
     updated_at: now()
   })
@@ -368,7 +452,8 @@ async function pinnedRows(serverId: number, k: Knex): Promise<boolean> {
   return false
 }
 
-export async function updateServer(id: number, f: ServerFields): Promise<HubDbServer | null> {
+export async function updateServer(id: number, given: ServerFields): Promise<HubDbServer | null> {
+  const f = await resolveServerResource(given)
   if (await nameTaken(f.name, id))
     throw new HubDbError('NAME_TAKEN', 'A database server with this name already exists.')
   const n = await db.transaction(async (trx) => {
@@ -383,7 +468,7 @@ export async function updateServer(id: number, f: ServerFields): Promise<HubDbSe
       )
     return trx('nivaro_hub_db_servers')
       .where({ id })
-      .update({ ...columns(f), updated_at: now() })
+      .update({ ...columns(f), ...resourceColumn(f, before), updated_at: now() })
   })
   if (!n) return null
   return publicServer({ id, ...f })

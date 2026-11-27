@@ -168,6 +168,7 @@ vi.mock('../../../services/hub/create/steps.js', async (orig) => {
         if (m.hold?.key === 'database') await m.hold.until
         return database(ctx)
       },
+      providers: stub('providers'),
       repository: stub('repository'),
       variables: stub('variables'),
       config: stub('config'),

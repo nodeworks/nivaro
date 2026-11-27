@@ -16,8 +16,14 @@ export interface HubComponent {
   placement_id: number
   position: number
   name: string
-  /** stack (phase 4): the one component of a Docker placement, deployed through the Hub agent. */
-  kind: 'api' | 'frontend' | 'stack'
+  /**
+   * stack (phase 4): the one component of a Docker placement, deployed through the Hub agent.
+   * github_actions / vercel / eas_update (Task 11a): deployed through a provider resource
+   * (promote-providers.ts); driver_id is 0 for them.
+   */
+  kind: 'api' | 'frontend' | 'stack' | 'github_actions' | 'vercel' | 'eas_update'
+  /** Task 11a: the managed resource a provider component deploys through (null otherwise). */
+  resource_id?: number | null
   driver_id: number
   source_branch: string
   /** null = the driver config's branch. */
@@ -220,6 +226,8 @@ export interface PlanInput {
   drivers: Record<number, PlanDriver>
   /** phase 4: per component position (stack) — what gather learned (stack-gather.ts). */
   stacks?: Record<number, StackFacts>
+  /** Task 11a: per component position (provider kinds) — what the step would make live. */
+  providers?: Record<number, import('./promote-providers.js').ProviderFact>
   /** phase 4: published x.y.z tags of the Nivaro image, newest first (first all-stack environment). */
   registryVersions?: string[]
   /** phase 4: why the published releases could not be read (registryVersions is then []). */
@@ -273,6 +281,8 @@ export type PromotionBlockerCode =
   | 'STACK_STATE_UNKNOWN'
   /** Phase 6: the environment runs on a shared deployment (upgrade the deployment instead). */
   | 'SHARED_PLACEMENT'
+  /** Task 11a: a provider component cannot say what it would make live (see its text). */
+  | 'PROVIDER_NOT_READY'
 
 export interface PromotionBlocker {
   code: PromotionBlockerCode
@@ -282,7 +292,7 @@ export interface PromotionBlocker {
 export interface PromotionStep {
   position: number
   component: string
-  kind: 'api' | 'frontend' | 'stack'
+  kind: HubComponent['kind']
   driverId: number
   /**
    * The repository the driver pointed at when the plan was made (GitLab base | project path,
@@ -301,8 +311,24 @@ export interface PromotionStep {
   verifyField: string
   /** What verifyUrl's field must answer: the version (api) or the short sha (frontend). */
   want: string
-  /** phase 4: the executor — absent = gitlab (push + deploy job), docker = the Hub agent. */
-  driver?: 'gitlab' | 'docker'
+  /**
+   * phase 4: the executor — absent = gitlab (push + deploy job), docker = the Hub agent,
+   * provider (Task 11a) = one change of the provider change engine.
+   */
+  driver?: 'gitlab' | 'docker' | 'provider'
+  /**
+   * Task 11a, provider steps: what the step makes live, bound in the plan hash. `ref` = the branch
+   * (github_actions) or the resource id of the deployment (vercel) / branch (eas_update).
+   */
+  provider?: {
+    kind: 'github_actions' | 'vercel' | 'eas_update'
+    connectionId: number
+    resourceId: number
+    ref: string
+    refLabel: string
+  }
+  /** Task 11a, provider steps: the resource change that made it live (written by the runner). */
+  deployedChangeId?: number | null
   /** phase 4, docker steps: what the runner renders and applies. Never a setting or a secret. */
   stack?: {
     name: string

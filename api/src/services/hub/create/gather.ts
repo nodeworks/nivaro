@@ -27,6 +27,8 @@ import { HUB_MASK, sealSecret } from '../secrets.js'
 import { lastRoutedNames, sharedPoolUsed } from '../shared/place.js'
 import { getShared } from '../shared/store.js'
 import { hubOwnHostnames, isCreatableKey, stackName } from './app-config.js'
+import { route53Zone } from './dns-route53.js'
+import { getGithubTarget, githubTargetProblem } from './github-target.js'
 import { projectExists as gitlabProjectExists } from './gitlab-provision.js'
 import {
   databaseNameProblem,
@@ -42,6 +44,7 @@ import {
   creationKindOf,
   type DockerCreationFacts,
   type DockerStackInput,
+  githubTargetIdOf,
   gitlabTargetIdOf,
   type SharedCreationFacts
 } from './types.js'
@@ -147,6 +150,13 @@ export async function gatherCreationFacts(
   const kind = creationKindOf(i)
   const targetId = kind === 'gitlab' ? gitlabTargetIdOf(i) : 0
   const target = Number.isInteger(targetId) && targetId > 0 ? await getTargetRow(targetId) : null
+  // Task 11a: a GitHub target (github-target.ts).
+  const ghId = kind === 'github' ? githubTargetIdOf(i) : Number.NaN
+  const ghTarget = Number.isSafeInteger(ghId) ? await getGithubTarget(ghId) : null
+  const github =
+    kind === 'github'
+      ? { target: ghTarget, problem: ghTarget ? await githubTargetProblem(ghTarget) : null }
+      : undefined
 
   // Servers + existing databases named by the request
   const servers: Record<number, HubDbServerRow> = {}
@@ -254,6 +264,26 @@ export async function gatherCreationFacts(
     kind === 'shared' ? gatherShared(i) : undefined
   ])
 
+  // Task 11a: a route53 target / Docker driver names a hosted zone the Hub manages.
+  const naming =
+    kind === 'gitlab'
+      ? target?.config
+      : kind === 'docker'
+        ? docker?.driver?.config
+        : kind === 'github'
+          ? ghTarget?.config
+          : null
+  const dnsZone =
+    naming?.dns_mode === 'route53'
+      ? await (async () => {
+          const id = Number(naming.dns_zone_resource_id)
+          if (!Number.isSafeInteger(id) || id < 1)
+            return { ok: false, message: 'The DNS mode is route53 but no hosted zone is named.' }
+          const z = await route53Zone(id, naming.wildcard_domain ?? null)
+          return z.ok ? { ok: true } : { ok: false, message: z.message }
+        })()
+      : undefined
+
   return {
     keyTaken,
     unknownOwners,
@@ -271,7 +301,9 @@ export async function gatherCreationFacts(
     hubUrl: hubUrlFrom(env),
     kind,
     ...(docker ? { docker } : {}),
-    ...(shared ? { shared } : {})
+    ...(shared ? { shared } : {}),
+    ...(dnsZone ? { dnsZone } : {}),
+    ...(github ? { github } : {})
   }
 }
 

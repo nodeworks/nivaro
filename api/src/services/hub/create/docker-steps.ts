@@ -50,6 +50,7 @@ import { hubImage } from '../registry.js'
 import { PlaceSharedError, placeForCreation } from '../shared/place.js'
 import type { SharedDeployment } from '../shared/store.js'
 import { redirectUriFor, stackName } from './app-config.js'
+import { stepProviders } from './provider-step.js'
 import {
   type BaseStepContext,
   dbIdOf,
@@ -455,6 +456,19 @@ export function destSteps(
     link: stepLink,
     admin: stepAdmin,
     place: (ctx) => stepPlace(ctx, deps),
-    template: stepTemplate
+    template: stepTemplate,
+    // Task 11a: provider parts (and a route53 Docker driver's name record)
+    providers: (ctx) =>
+      stepProviders(
+        ctx,
+        ctx.dest.kind === 'docker'
+          ? {
+              dns_mode: ctx.dest.driver.config.dns_mode,
+              dns_zone_resource_id: ctx.dest.driver.config.dns_zone_resource_id,
+              wildcard_domain: ctx.dest.driver.config.wildcard_domain,
+              edge: ctx.dest.driver.config.edge_target
+            }
+          : null
+      )
   }
 }

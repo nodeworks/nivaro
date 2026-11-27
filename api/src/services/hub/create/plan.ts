@@ -41,6 +41,7 @@ import {
 } from './app-config.js'
 import { namingForDocker, namingForShared, sharedHostname } from './dest.js'
 import { dnsSuffix, httpAllowed } from './dns.js'
+import { type CreateProviderType, partLine, providerPartsOf } from './provider-parts.js'
 import { type HubTargetRow, knownHostsCover, parseKnownHosts, validTemplateRef } from './targets.js'
 import type {
   CreateAppInput,
@@ -50,7 +51,7 @@ import type {
   CreationPlanDatabase,
   CreationPlanEnvironment
 } from './types.js'
-import { creationKindOf, gitlabTargetIdOf } from './types.js'
+import { creationKindOf, githubTargetIdOf, gitlabTargetIdOf } from './types.js'
 
 /** At most this many environments per created app. */
 export const MAX_CREATE_ENVIRONMENTS = 6
@@ -160,8 +161,9 @@ export function targetProblem(t: HubTargetRow): string | null {
   if (!known) return `${t.name} has no manager host keys (manager_known_hosts).`
   if (typeof c.deploy_host !== 'string' || !knownHostsCover(known, c.deploy_host))
     return `${t.name}'s manager host keys do not cover its deploy host: add the host key of ${cut(String(c.deploy_host ?? ''), 60)}.`
-  if (c.dns_mode !== 'automatic' && c.dns_mode !== 'manual') return `${t.name} has no DNS mode.`
-  if (c.dns_mode === 'automatic' && !dnsSuffix(c.wildcard_domain))
+  if (c.dns_mode !== 'automatic' && c.dns_mode !== 'manual' && c.dns_mode !== 'route53')
+    return `${t.name} has no DNS mode.`
+  if (c.dns_mode !== 'manual' && !dnsSuffix(c.wildcard_domain))
     return `${t.name} makes names automatically but has no wildcard domain.`
   if (c.scheme !== 'https' && c.scheme !== 'http')
     return `${t.name} must use https (http only for localhost and .test).`
@@ -249,9 +251,21 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
   const t = gitlab && facts.target && facts.target.id === gitlabTargetIdOf(i) ? facts.target : null
   const dk = kind === 'docker' ? (facts.docker ?? null) : null
   const sh = kind === 'shared' ? (facts.shared?.deployment ?? null) : null
+  // Task 11a: a GitHub target (github-target.ts).
+  const gh =
+    kind === 'github' && facts.github?.target && facts.github.target.id === githubTargetIdOf(i)
+      ? facts.github.target
+      : null
   let targetOk = false
   let targetName: string | null = null
-  if (gitlab) {
+  if (kind === 'github') {
+    if (!gh) block('BAD_TARGET', 'Pick the GitHub target the app is created on.')
+    else {
+      targetName = gh.name
+      if (facts.github?.problem) block('BAD_TARGET', facts.github.problem)
+      else targetOk = true
+    }
+  } else if (gitlab) {
     if (!t) block('BAD_TARGET', 'Pick the target the app is created on.')
     else {
       targetName = t.name
@@ -392,6 +406,9 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     else poolMax = n
   }
 
+  // Task 11a: names made in Route 53 need the hosted zone the config names.
+  if (facts.dnsZone && !facts.dnsZone.ok)
+    block('DNS_ZONE_MISSING', facts.dnsZone.message ?? 'The Route 53 hosted zone is not usable.')
   if (!facts.encryptionKey)
     block(
       'NEEDS_ENCRYPTION_KEY',
@@ -422,13 +439,15 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
   const appHosts: string[] = []
   const naming: NamingConfig | null = !targetOk
     ? null
-    : t
-      ? t.config
-      : dk?.driver
-        ? namingForDocker(dk.driver.config)
-        : sh
-          ? namingForShared(sh)
-          : null
+    : gh
+      ? gh.config
+      : t
+        ? t.config
+        : dk?.driver
+          ? namingForDocker(dk.driver.config)
+          : sh
+            ? namingForShared(sh)
+            : null
   const edge = dk?.health?.edge === 'publish' ? 'publish' : 'traefik'
   const seenPort = new Set<number>()
   const stackSize = dk?.settings.ok ? dk.settings.row.fields.size : 'small'
@@ -568,6 +587,10 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
         `${database.database_name} already holds a Nivaro install: an app that has served moves to a shared deployment instead.`,
         label
       )
+    // Task 11a: the environment's provider parts (provider-parts.ts), shape only — the change
+    // engine judges each when the providers step plans it.
+    const parts = providerPartsOf((e as { providers?: unknown }).providers)
+    if (!parts.ok) block('BAD_PROVIDER_PART', parts.text, label)
     planned.push({
       key: envKey,
       position,
@@ -583,6 +606,10 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
         ? { stack: { size: stackSize, redis: stackRedis, publish_port: publishPort } }
         : {}),
       ...(kind === 'shared' ? { pool_max: poolMax } : {}),
+      ...(parts.ok && parts.parts.length
+        ? { providers: parts.parts.map((p) => ({ type: p.type, connection_id: p.connection_id })) }
+        : {}),
+      ...(facts.dnsZone ? { dns_record: true } : {}),
       database
     })
   })
@@ -863,6 +890,10 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
   // Preview lines: names only.
   const lines: string[] = []
   if (t) lines.push(`Fork ${t.config.template_project} into ${projectPath} (target ${t.name}).`)
+  if (gh)
+    lines.push(
+      `Create the GitHub repository ${key} from ${gh.config.template} (target ${gh.name}); each environment gets a GitHub environment with its secrets, and ${gh.config.deploy_workflow} deploys it.`
+    )
   if (dk?.driver) {
     lines.push(
       `Deploy through the Hub agent of ${dk.driver.name}${dk.health ? ` (${edge === 'publish' ? 'published port' : 'traefik'} edge)` : ''}.`
@@ -908,6 +939,16 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
         sh
           ? `${p.key}: add the redirect URI ${p.redirect_uri} to the deployment's app registration.`
           : `${p.key}: add the redirect URI ${p.redirect_uri} to the app registration.`
+      )
+    // Task 11a: provider parts and a Route 53 name record (the providers step).
+    if (p.dns_record && p.hostname)
+      lines.push(`${p.key}: the Hub makes the Route 53 record ${p.hostname} in the hosted zone.`)
+    for (const part of p.providers ?? [])
+      lines.push(
+        partLine(p.key, {
+          type: part.type as CreateProviderType,
+          connection_id: part.connection_id
+        })
       )
   }
   if (email && EMAIL_RE.test(email)) lines.push(`First administrator: ${email}.`)

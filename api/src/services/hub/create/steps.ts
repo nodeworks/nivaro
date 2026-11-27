@@ -71,6 +71,7 @@ import {
 import { hasKeyNotInstalledLine, KEY_NOT_INSTALLED } from './key-marker.js'
 import type { requestFirstAdmin } from './link-client.js'
 import type { checkName } from './name-check.js'
+import { stepProviders } from './provider-step.js'
 import {
   appMade,
   CREATE_LOCK_RENEW_MS,
@@ -306,7 +307,7 @@ export async function checkDatabaseWait(
 // ── repository ───────────────────────────────────────────────────────────────
 
 /** Runs `fn` holding the app's repository lock; another leg of the app waits its turn. */
-async function withRepoLock<T>(ctx: StepContext, fn: () => Promise<T>): Promise<T> {
+export async function withRepoLock<T>(ctx: BaseStepContext, fn: () => Promise<T>): Promise<T> {
   const key = hubCreateRepoLockKey(ctx.app.id)
   const lock = ctx.deps.repoLock
   for (let i = 0; ; i++) {
@@ -931,7 +932,15 @@ export const STEPS: Record<
   name: stepName,
   link: stepLink,
   admin: stepAdmin,
-  template: stepTemplate
+  template: stepTemplate,
+  // Task 11a: provider parts (and a route53 target's name record)
+  providers: (ctx) =>
+    stepProviders(ctx, {
+      dns_mode: ctx.target.config.dns_mode,
+      dns_zone_resource_id: ctx.target.config.dns_zone_resource_id,
+      wildcard_domain: ctx.target.config.wildcard_domain,
+      edge: ctx.target.config.edge_address
+    })
 }
 
 // ── target changes ───────────────────────────────────────────────────────────

@@ -28,6 +28,7 @@ import {
 import {
   type ChangeBlocker,
   type ChangeGate,
+  type ChangeOrigin,
   type HubActor,
   type PlanAction,
   type PlanRequest,
@@ -38,7 +39,13 @@ import {
   type StoredChangePlan
 } from './contract.js'
 import { engineDeps } from './deps.js'
-import { type AccessAnswer, judgeAccess, judgeChangeGates } from './gates.js'
+import {
+  type AccessAnswer,
+  hubRecordBlockers,
+  judgeAccess,
+  judgeChangeGates,
+  judgeOrigin
+} from './gates.js'
 
 /**
  * Hub provider changes, step 1 — the plan (spec "The change engine"). Reads the provider
@@ -320,6 +327,8 @@ export interface PlanOptions {
   mode: 'request' | 'stored' | 'internal'
   sealed?: string | null
   undoOf?: number | null
+  /** Task 11a: the Hub run carrying this change (planCarriedResourceChange); never a request's. */
+  origin?: ChangeOrigin | null
 }
 
 export interface ComputedPlan {
@@ -795,6 +804,16 @@ export async function computePlan(
     actor
   )
 
+  // Task 11a: a carried change is judged against the run that carries it, before any provider call.
+  const origin = opts.origin ?? null
+  if (origin)
+    await judgeOrigin(origin, {
+      scope,
+      appId: access.app?.id ?? null,
+      environmentId: access.env?.id ?? null,
+      actions: req.ops.map((o) => o.action)
+    })
+
   // Managed rows of this connection, for provider id → row lookups (refs, adopt).
   const peers = await listResources({ connectionId: conn.row.id })
   const byExternal = new Map(peers.map((p) => [`${p.type}\0${p.external_id}`, p.id]))
@@ -978,6 +997,14 @@ export async function computePlan(
       })
     }
   }
+
+  // Task 11a: Hub records outside the resource table that still use a resource being deleted
+  // (a database server linked to an RDS instance with other apps' databases on it).
+  for (const b of await hubRecordBlockers(
+    work.filter((w) => w.action === 'delete' && w.row).map((w) => w.row as HubResourceRow),
+    access.app?.id ?? null
+  ))
+    blockers.push(b)
 
   const ordered = orderWork(work)
   const ops: PlannedOp[] = []
@@ -1240,7 +1267,8 @@ export async function computePlan(
     scope,
     appId: access.app?.id ?? null,
     environmentId: access.env?.id ?? null,
-    production
+    production,
+    origin
   })
   gates.unshift(...change.gates)
 
@@ -1262,6 +1290,7 @@ export async function computePlan(
     resourceIds,
     sources,
     undoOf: opts.undoOf ?? null,
+    ...(origin ? { origin } : {}),
     sealed: Object.keys(sealedOut).length ? sealSecret(JSON.stringify(sealedOut)) : null
   }
   // Same plaintext, same envelope: a re-plan from a stored plan keeps its sealed blob.

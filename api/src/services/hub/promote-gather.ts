@@ -28,6 +28,7 @@ import {
 } from './gitlab-write.js'
 import { type HealDeps, interruptStaleRows } from './promote-heal.js'
 import { defaultPromoteLock, PromotionError } from './promote-lock.js'
+import { gatherProviderFacts, isProviderKind } from './promote-providers.js'
 import type {
   HubComponent,
   HubDeployKind,
@@ -698,6 +699,17 @@ export async function gatherPlanInput(
     deps
   )
 
+  // Task 11a: what each provider component would make live (promote-providers.ts).
+  const providers = components.some((c) => isProviderKind(c.kind))
+    ? await gatherProviderFacts({
+        kind,
+        target,
+        components,
+        previousComponents,
+        recorded: (c) => recordedBuild(targetRuns, version, c)?.sha ?? null
+      })
+    : undefined
+
   const runningRow = await db(DEPLOYS)
     .where({ environment_id: envId, status: 'running' })
     .first('id')
@@ -724,6 +736,7 @@ export async function gatherPlanInput(
     frontendHeld,
     frontendHead,
     rollbackBuild: rollbackBuilds,
+    ...(providers ? { providers } : {}),
     sources,
     frontendServed,
     frontendOnSource,

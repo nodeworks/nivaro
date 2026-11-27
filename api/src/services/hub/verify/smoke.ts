@@ -5,6 +5,7 @@ import { logActivity } from '../../activity.js'
 import { hubReadTimeoutMs } from '../../hub-link/verify-limits.js'
 import { deliverHubNotice, hubEventRecipients } from '../notify-events.js'
 import { flagOf, productionMap } from '../owner-access.js'
+import { servingChange } from '../providers/hooks/serving.js'
 import {
   type CheckFacts,
   type CheckResult,
@@ -44,6 +45,7 @@ const DEPLOYS = 'nivaro_hub_deploys'
 const MOVES = 'nivaro_hub_moves'
 const SHARED_DEPLOYS = 'nivaro_hub_shared_deploys'
 const PLACEMENTS = 'nivaro_hub_placements'
+const RESOURCE_CHANGES = 'nivaro_hub_resource_changes'
 
 /** A finished deploy older than this is never smoke-tested after the fact. */
 export const LOOKBACK_MS = 6 * 60 * 60_000
@@ -58,6 +60,8 @@ export type RunTrigger =
   | 'move'
   | 'upgrade'
   | 'manual'
+  /** Task 11a: a provider resource change that touched a part the environment serves. */
+  | 'resource'
 /** `unverified`: checks failed only because they could not be judged — told, never rolled back. */
 export type RunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'unverified'
 
@@ -315,6 +319,8 @@ export async function queueNewRuns(now = Date.now()): Promise<number> {
       )
         queued++
 
+    queued += await queueResourceChangeRuns(appId, envId, since, due, suite)
+
     if (env.placement_id != null) {
       const p = (await db(PLACEMENTS)
         .where({ id: env.placement_id })
@@ -342,6 +348,48 @@ export async function queueNewRuns(now = Date.now()): Promise<number> {
             queued++
       }
     }
+  }
+  return queued
+}
+
+/**
+ * Task 11a: a run for every applied provider resource change of the environment that touched a
+ * part it serves (servingChange: a Vercel deployment or domain, a Route 53 record, a load
+ * balancer, listener or target group, an RDS instance). A change a promotion, creation or
+ * retirement carried is left out: the promotion's own deploy row queues its run, a creation or a
+ * retirement is not serving yet / any more. Source `resource-change:<id>`. A Hub without the
+ * provider tables queues none.
+ */
+async function queueResourceChangeRuns(
+  appId: number,
+  envId: number,
+  since: Date,
+  due: (finished: unknown) => Date,
+  suite: SmokeSuite
+): Promise<number> {
+  let rows: Array<Record<string, unknown>>
+  try {
+    rows = (await db(RESOURCE_CHANGES)
+      .where({ environment_id: envId, status: 'applied' })
+      .where('finished_at', '>=', since)
+      .select('id', 'plan', 'finished_at')) as Array<Record<string, unknown>>
+  } catch {
+    return 0
+  }
+  let queued = 0
+  for (const c of rows) {
+    if (!servingChange(c.plan)) continue
+    if (
+      await queueRun({
+        appId,
+        envId,
+        sourceKey: `resource-change:${c.id}`,
+        trigger: 'resource',
+        dueAt: due(c.finished_at),
+        suite
+      })
+    )
+      queued++
   }
   return queued
 }
@@ -509,7 +557,8 @@ const TRIGGER_WORDS: Record<RunTrigger, string> = {
   extension: 'an extension deploy',
   move: 'the move',
   upgrade: 'the shared deployment’s upgrade',
-  manual: 'a run by hand'
+  manual: 'a run by hand',
+  resource: 'a resource change'
 }
 
 /** Claims one queued run (queued → running) and runs it. False when someone else had it. */
