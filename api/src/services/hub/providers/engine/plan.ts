@@ -1268,6 +1268,17 @@ export async function computePlan(
     new Set(opRows.filter((r): r is HubResourceRow => !!r).map((r) => r.id))
   )
 
+  // Task 33: approving a GitHub deployment is refused at plan time too (Task 11c refused it only
+  // at start): no promotion origin → ORIGIN_INVALID, another GitHub environment → TARGET_MISMATCH.
+  // The run-time guard in run.ts stays (the promotion may have ended since).
+  for (const [k, op] of ops.entries()) {
+    if (op.action !== 'approve_deployment') continue
+    const w = work.find((x) => x.index === sources[k])
+    const { approvalRefusal } = await import('../hooks/approval-guard.js')
+    const why = await approvalRefusal(origin, resourceIds[k], w?.fields?.approve_environment)
+    if (why) blockers.push({ code: why.code, message: why.message })
+  }
+
   // Adapter blockers + risk gates.
   const gates: ChangeGate[] = []
   const production = access.production === true

@@ -231,6 +231,28 @@ export async function openIncident(
   return (await readIncident(id)) as Incident
 }
 
+/**
+ * Task 33: an open incident changed (title, severity, summary, a note): routes that take
+ * `incident.updated` hear it under the incident's dedupKey with action `update` — a PagerDuty
+ * incident is re-triggered with the new text, a Slack thread gets a reply. Only what changed is
+ * named; a note's text never leaves the Hub. Never throws, never waits.
+ */
+export function notifyIncidentUpdate(
+  inc: Pick<Incident, 'id' | 'app_id' | 'environment_id' | 'title' | 'status' | 'severity'>,
+  what: string
+): void {
+  if (inc.status !== 'open') return
+  hubNotify('incident.updated', {
+    appId: inc.app_id,
+    envId: inc.environment_id,
+    detail: `${inc.title} (${what})`.slice(0, 300),
+    link: `/hub/incidents?incident=${inc.id}`,
+    severity: inc.severity === 'sev1' ? 'critical' : 'warning',
+    dedupKey: `incident:${inc.id}`,
+    action: 'update'
+  })
+}
+
 /** The tag on every freeze an incident made (nivaro_hub_freezes.source). */
 export const freezeSource = (incidentId: number) => `incident:${incidentId}`
 

@@ -390,16 +390,17 @@ import { hubProvidersLivekitDocs } from './sections/hub-providers-livekit.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
-import { hubProvidersSnykDocs } from './sections/hub-providers-snyk.js'
 import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
 } from './sections/hub-providers-redis.js'
 import { hubProvidersSendgridDocs } from './sections/hub-providers-sendgrid.js'
 import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
+import { hubProvidersSnykDocs } from './sections/hub-providers-snyk.js'
 import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
+import { hubProvidersWave2HooksDocs } from './sections/hub-providers-wave2-hooks.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1288,6 +1289,7 @@ export const navSections: NavGroup[] = [
       hubProvidersTeamsDocs,
       hubProvidersAnthropicDocs,
       hubProvidersHooksDocs,
+      hubProvidersWave2HooksDocs,
       hubProvidersApiDocs
     ]
   },

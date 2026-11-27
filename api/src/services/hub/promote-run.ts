@@ -58,7 +58,7 @@ import type {
   PromotionPlan,
   PromotionStep
 } from './promote-types.js'
-import { hubNotify } from './providers/notify-hook.js'
+import { hubNotify, hubNotifyDeployClosed } from './providers/notify-hook.js'
 import { freezeRefusal, recordedRunningVersion, rollbackExempt } from './releases/freeze.js'
 import { HubSecretError } from './secrets.js'
 import { hubStatusKey } from './status.js'
@@ -1162,6 +1162,25 @@ export interface StartDeps {
   now?: () => number
   /** One writer per GitLab branch (review H1): default the Hub's Redis lock. */
   branchLock?: BranchLock
+  /**
+   * Task 33: after the steps succeeded, before the row closes — records the release on the app's
+   * Sentry projects (default providers/hooks/promote-release.ts). Never fails the promotion.
+   */
+  releases?: (o: {
+    deployId: number
+    envId: number
+    envKey: string
+    version: string
+    signal?: AbortSignal
+    log: (line: string, level?: 'info' | 'warn' | 'error') => void
+  }) => Promise<unknown>
+  /** Task 33: removes a rotated Entra secret's older ones once applied (secret-cleanup.ts). */
+  secretCleanup?: (o: {
+    deployId: number
+    envId: number
+    signal?: AbortSignal
+    log: (line: string, level?: 'info' | 'warn' | 'error') => void
+  }) => Promise<unknown>
 }
 
 export function defaultStartDeps(): StartDeps {
@@ -1636,6 +1655,33 @@ async function runPromotion(o: {
         }
       }
     )
+    // Task 33: while the row is still running (the engine checks each change is carried by it):
+    // a promotion (or rollback) that made a version live records it as a Sentry release; any
+    // successful run (an Apply now included) finishes a rotated Entra secret's clean-up.
+    if (
+      outcome.status === 'success' &&
+      !entry.lockLost &&
+      (o.kind === 'promote' || o.kind === 'rollback')
+    ) {
+      const log = (line: string, level?: 'info' | 'warn' | 'error') => run.log(line, level)
+      if (!o.plan.apply) {
+        const releases =
+          deps.releases ??
+          (await import('./providers/hooks/promote-release.js')).recordPromotionReleases
+        await releases({
+          deployId,
+          envId,
+          envKey: o.envKey,
+          version: o.version,
+          signal: entry.abort.signal,
+          log
+        }).catch(() => undefined)
+      }
+      const cleanup =
+        deps.secretCleanup ??
+        (await import('./providers/hooks/secret-cleanup.js')).removeOlderSecretsAfterRun
+      await cleanup({ deployId, envId, signal: entry.abort.signal, log }).catch(() => undefined)
+    }
   } catch (err) {
     outcome = { status: 'failed', step: null, error: safeMessage(err) }
   } finally {
@@ -1652,8 +1698,10 @@ async function runPromotion(o: {
         detail: `${o.plan.apply ? 'apply' : o.kind} ${o.version} on ${o.envKey}`
       })
     if (outcome.status === 'success' || outcome.status === 'failed')
-      hubNotify(outcome.status === 'success' ? 'deploy.finished' : 'deploy.failed', {
+      hubNotifyDeployClosed({
+        deployId,
         envId,
+        status: outcome.status,
         detail: `${o.plan.apply ? 'apply' : o.kind} ${o.version} on ${o.envKey}`
       })
     const what = o.plan.apply

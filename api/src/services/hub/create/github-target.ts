@@ -18,7 +18,7 @@ export interface HubGithubTargetConfig {
   deploy_workflow: string
   /** The branch environments deploy from (default main). */
   source_branch: string
-  dns_mode: 'automatic' | 'manual' | 'route53'
+  dns_mode: 'automatic' | 'manual' | 'route53' | 'cloudflare'
   dns_zone_resource_id?: number | null
   wildcard_domain: string | null
   edge_address: string | null
@@ -109,8 +109,13 @@ export async function validateGithubTargetInput(
     return fail('BAD_CONFIG', 'Config source_branch must be a branch name.')
 
   const dnsMode = pick('dns_mode')
-  if (dnsMode !== 'automatic' && dnsMode !== 'manual' && dnsMode !== 'route53')
-    return fail('BAD_CONFIG', 'Config dns_mode must be automatic, manual or route53.')
+  if (
+    dnsMode !== 'automatic' &&
+    dnsMode !== 'manual' &&
+    dnsMode !== 'route53' &&
+    dnsMode !== 'cloudflare'
+  )
+    return fail('BAD_CONFIG', 'Config dns_mode must be automatic, manual, route53 or cloudflare.')
   const scheme = pick('scheme') ?? 'https'
   if (scheme !== 'https' && scheme !== 'http')
     return fail('BAD_CONFIG', 'Config scheme must be https or http.')
@@ -165,7 +170,9 @@ export async function validateGithubTargetInput(
         deploy_workflow: workflow,
         source_branch: branchRaw,
         dns_mode: dnsMode,
-        ...(dnsMode === 'route53' ? { dns_zone_resource_id: zoneId } : {}),
+        ...(dnsMode === 'route53' || dnsMode === 'cloudflare'
+          ? { dns_zone_resource_id: zoneId }
+          : {}),
         wildcard_domain: wildcard,
         edge_address: edge,
         scheme,

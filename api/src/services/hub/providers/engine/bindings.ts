@@ -150,6 +150,19 @@ export async function outputMeta(resourceId: number): Promise<StoredOutputMeta[]
   }))
 }
 
+/**
+ * Task 33: one NON-secret output's stored value (a Neon branch's host), for Hub code that links a
+ * record to a resource. A secret output (or an undeclared key) answers null — secrets leave the
+ * outputs table only through a binding push.
+ */
+export async function plainOutput(resourceId: number, key: string): Promise<string | null> {
+  const row = await readResource(resourceId)
+  if (!row || row.deleted_at) return null
+  const spec = declaredOutputs(typeOf(row.type)).find((o) => o.key === key)
+  if (!spec || spec.secret) return null
+  return openOutput(resourceId, key)
+}
+
 /** Opens one stored output (this file only: pushes). */
 async function openOutput(resourceId: number, key: string): Promise<string | null> {
   const row = (await db(OUTPUTS).where({ resource_id: resourceId, key }).first('value')) as

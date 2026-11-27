@@ -151,7 +151,10 @@ export function validateServerInput(
   let resource_id: number | null = null
   if (resRaw !== undefined && resRaw !== null && resRaw !== '') {
     if (typeof resRaw !== 'number' || !Number.isSafeInteger(resRaw) || resRaw < 1)
-      return fail('BAD_RESOURCE', 'resource_id must name a managed RDS instance, or be null.')
+      return fail(
+        'BAD_RESOURCE',
+        'resource_id must name a managed RDS instance or Neon branch, or be null.'
+      )
     resource_id = resRaw
   }
   const rawHost = pick('host')
@@ -295,8 +298,14 @@ export async function resolveServerResource(f: ServerFields): Promise<ServerFiel
     .where({ id: f.resource_id })
     .whereNull('deleted_at')
     .first('id', 'type', 'observed')) as Record<string, unknown> | undefined
+  // Task 33: a Neon branch (Postgres; its pooled host is the branch's `host` output).
+  if (r && String(r.type) === NEON_BRANCH) return resolveNeonBranch(f, Number(r.id))
   if (!r || String(r.type) !== 'aws.rds_instance')
-    throw new HubDbError('BAD_RESOURCE', 'That is not an RDS instance the Hub manages.', 400)
+    throw new HubDbError(
+      'BAD_RESOURCE',
+      'That is not an RDS instance or Neon branch the Hub manages.',
+      400
+    )
   let observed: { fields?: Record<string, unknown> } | null = null
   try {
     observed = typeof r.observed === 'string' ? JSON.parse(r.observed) : (r.observed as never)
@@ -321,6 +330,40 @@ export async function resolveServerResource(f: ServerFields): Promise<ServerFiel
       400
     )
   return { ...f, host: endpoint, port: f.port ?? port }
+}
+
+const NEON_BRANCH = 'neon.branch'
+
+/**
+ * Task 33: a server that is a managed Neon branch. Neon is Postgres only (ENGINE_MISMATCH) and
+ * always TLS (`ssl_mode` defaults to require; `disable` is refused). An empty host comes from the
+ * branch's non-secret `host` output (the pooled host the Hub sealed when it made the branch); a
+ * branch whose host is not known yet is refused BAD_RESOURCE. Port 5432.
+ */
+async function resolveNeonBranch(f: ServerFields, resourceId: number): Promise<ServerFields> {
+  if (f.engine !== 'pg')
+    throw new HubDbError(
+      'ENGINE_MISMATCH',
+      'A Neon branch runs Postgres, not this server’s engine.',
+      400
+    )
+  if (f.ssl_mode === 'disable')
+    throw new HubDbError(
+      'BAD_SSL',
+      'Neon accepts TLS connections only: pick require or verify.',
+      400
+    )
+  const ssl_mode = f.ssl_mode ?? 'require'
+  if (f.host) return { ...f, ssl_mode }
+  const { plainOutput } = await import('../providers/engine/bindings.js')
+  const host = cleanHost(await plainOutput(resourceId, 'host').catch(() => null))
+  if (!host)
+    throw new HubDbError(
+      'BAD_RESOURCE',
+      'The Hub does not know that Neon branch’s host yet: enter the host, or try again once the branch has handed it out.',
+      400
+    )
+  return { ...f, host, port: f.port ?? 5432, ssl_mode }
 }
 
 function toRow(r: Record<string, unknown>): HubDbServerRow {

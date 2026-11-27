@@ -27,7 +27,7 @@ import { HUB_MASK, sealSecret } from '../secrets.js'
 import { lastRoutedNames, sharedPoolUsed } from '../shared/place.js'
 import { getShared } from '../shared/store.js'
 import { hubOwnHostnames, isCreatableKey, stackName } from './app-config.js'
-import { route53Zone } from './dns-route53.js'
+import { isManagedDnsMode, route53Zone } from './dns-route53.js'
 import { getGithubTarget, githubTargetProblem } from './github-target.js'
 import { projectExists as gitlabProjectExists } from './gitlab-provision.js'
 import {
@@ -273,16 +273,20 @@ export async function gatherCreationFacts(
         : kind === 'github'
           ? ghTarget?.config
           : null
-  const dnsZone =
-    naming?.dns_mode === 'route53'
-      ? await (async () => {
-          const id = Number(naming.dns_zone_resource_id)
-          if (!Number.isSafeInteger(id) || id < 1)
-            return { ok: false, message: 'The DNS mode is route53 but no hosted zone is named.' }
-          const z = await route53Zone(id, naming.wildcard_domain ?? null)
-          return z.ok ? { ok: true } : { ok: false, message: z.message }
-        })()
-      : undefined
+  // Route 53 (Task 11a) or Cloudflare (Task 33): the zone the names are made in.
+  const dnsMode = naming?.dns_mode
+  const dnsZone = isManagedDnsMode(dnsMode)
+    ? await (async () => {
+        const id = Number(naming?.dns_zone_resource_id)
+        if (!Number.isSafeInteger(id) || id < 1)
+          return {
+            ok: false,
+            message: `The DNS mode is ${dnsMode} but no ${dnsMode === 'route53' ? 'hosted zone' : 'zone'} is named.`
+          }
+        const z = await route53Zone(id, naming?.wildcard_domain ?? null, dnsMode)
+        return z.ok ? { ok: true } : { ok: false, message: z.message }
+      })()
+    : undefined
 
   return {
     keyTaken,

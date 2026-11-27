@@ -15,7 +15,7 @@ export interface DockerDriverConfig {
    * automatic = a wildcard DNS name already points at the edge; manual = someone adds each name;
    * route53 (Task 11a) = the Hub makes each name's Route 53 record in a hosted zone it manages.
    */
-  dns_mode: 'automatic' | 'manual' | 'route53'
+  dns_mode: 'automatic' | 'manual' | 'route53' | 'cloudflare'
   /** route53: the managed `aws.route53_zone` resource (nivaro_hub_resources.id) names go in. */
   dns_zone_resource_id?: number | null
   /** automatic: every hostname ends with `.<wildcard_domain>`. */
@@ -105,8 +105,8 @@ export function checkDockerConfig(
   }
 
   const mode = pick('dns_mode')
-  if (mode !== 'automatic' && mode !== 'manual' && mode !== 'route53') {
-    return bad('Config dns_mode must be automatic, manual or route53.')
+  if (mode !== 'automatic' && mode !== 'manual' && mode !== 'route53' && mode !== 'cloudflare') {
+    return bad('Config dns_mode must be automatic, manual, route53 or cloudflare.')
   }
 
   let wildcard = optionalText(pick('wildcard_domain'))
@@ -166,7 +166,7 @@ export function checkDockerConfig(
       edge_target: edge,
       edge_scheme: edgeScheme,
       edge_port: edgePort,
-      ...(mode === 'route53' ? { dns_zone_resource_id: zoneId } : {})
+      ...(mode === 'route53' || mode === 'cloudflare' ? { dns_zone_resource_id: zoneId } : {})
     }
   }
 }

@@ -461,7 +461,7 @@ const SENDER_FIELDS: FieldSpec[] = [
     label: 'Hub messages go to',
     kind: 'list',
     items: { key: 'item', label: 'Email address', kind: 'string', pattern: EMAIL_PATTERN },
-    help: 'When a notify route sends through this sender, each of these addresses gets its own copy. Kept in the Hub, not at SendGrid.'
+    help: 'When a notify route sends through this sender, each of these addresses gets its own copy. Leave it empty to mail the route’s people (Hub administrators, or the app’s owners). Kept in the Hub, not at SendGrid.'
   },
   {
     key: RESEND_FIELD,
@@ -1082,6 +1082,8 @@ const TYPES: ResourceTypeSpec[] = [
     refs: [],
     outputs: [{ key: 'smtp_from', label: 'From address', secret: false }],
     sends: true,
+    // Task 33: with no list of its own, the sender mails the route's audience.
+    audience: 'email',
     risk(op) {
       const out: RiskFlag[] = []
       if (op.kind === 'delete' || op.kind === 'replace') out.push('destructive')
@@ -1401,11 +1403,14 @@ export const sendgridAdapter: ProviderAdapter = {
   async notify(ctx, resource: HubResourceRow, msg: OutboundMessage): Promise<OpResult> {
     if (resource.type !== T_SENDER || !resource.external_id)
       throw new ProviderError('NOT_A_SENDER', 'Only a verified sender sends messages.')
-    const recipients = recipientsOf(resource.desired?.recipients)
+    // The sender's own list wins (an override); else the route's audience the engine resolved
+    // (Hub administrators, or the app's owners), checked the same way.
+    const own = recipientsOf(resource.desired?.recipients)
+    const recipients = own.length ? own : recipientsOf(msg.recipients ?? [])
     if (!recipients.length)
       throw new ProviderError(
         'NO_RECIPIENTS',
-        'This sender has no recipients to mail. Add at least one address.'
+        'Nobody to mail: the route has no one to tell and this sender has no list of its own.'
       )
     // Fresh read: a sender verified (or deleted) since the last observation decides here.
     const sender = await readSender(ctx, resource.external_id)

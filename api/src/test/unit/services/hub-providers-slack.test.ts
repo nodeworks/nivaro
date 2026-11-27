@@ -679,6 +679,39 @@ describe('slack adapter: notify', () => {
     ])
   })
 
+  it('replies in the thread the engine remembered (after a restart) and answers it back', async () => {
+    const { ctx, calls } = harness([
+      AUTH,
+      { method: 'chat.postMessage', body: fx('post-reply-ok') }
+    ])
+    const key = 'incident:42'
+    const r = await slackAdapter.notify!(ctx, row(), {
+      ...MSG,
+      dedupKey: key,
+      action: 'update',
+      threadRef: '1699999999.000900'
+    })
+    expect(r.answer).toMatchObject({ threadRef: '1699999999.000900', threaded: true })
+    // A remembered value that is not a Slack ts is never sent as thread_ts.
+    const bad = await slackAdapter.notify!(ctx, row(), {
+      ...MSG,
+      dedupKey: 'incident:43',
+      action: 'update',
+      threadRef: 'C0OTHER/../x'
+    })
+    expect(bad.answer?.threadRef).not.toBe('C0OTHER/../x')
+    const posts = calls.filter((c) => c.method === 'chat.postMessage')
+    expect(posts.map((p) => p.form.get('thread_ts'))).toEqual(['1699999999.000900', null])
+    // A resolve answers no thread to keep.
+    const done = await slackAdapter.notify!(ctx, row(), {
+      ...MSG,
+      dedupKey: key,
+      action: 'resolve',
+      threadRef: '1699999999.000900'
+    })
+    expect(done.answer?.threadRef).toBeUndefined()
+  })
+
   it('notify maps 429 to retryable with the retry-after in the text', async () => {
     const { ctx } = harness([
       AUTH,
