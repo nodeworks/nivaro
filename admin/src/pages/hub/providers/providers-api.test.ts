@@ -289,6 +289,24 @@ describe('every refusal has plain words', () => {
     expect(codes.filter((c) => !PROVIDER_CODE_COPY[c])).toEqual([])
   })
 
+  it('each bindings and notify-route refusal (Task 13 engine, Task 33b screens)', () => {
+    const codes = new Set<string>()
+    for (const f of [
+      'api/src/services/hub/providers/engine/bindings.ts',
+      'api/src/services/hub/providers/notify.ts',
+      'api/src/routes/hub-provider-outputs.ts'
+    ]) {
+      const src = read(f)
+      for (const m of src.matchAll(
+        /(?:Error\(\s*|fail\(reply,\s*\d+,\s*)'([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)'/g
+      ))
+        codes.add(m[1] as string)
+    }
+    for (const known of ['NOT_A_SENDER', 'BINDING_TAKEN', 'NO_STACK_SETTINGS'])
+      expect(codes.has(known)).toBe(true)
+    expect([...codes].filter((c) => !PROVIDER_CODE_COPY[c])).toEqual([])
+  })
+
   it('a field refusal reads as the server’s own sentences', () => {
     const d = providerError(
       {

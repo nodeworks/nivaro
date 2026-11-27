@@ -32,6 +32,7 @@ export const hubProvidersWave2HooksDocs: DocSection = {
     {
       type: 'ul',
       items: [
+        '**On the app page.** Each app’s page has its own Notify routes card for its owners and administrators: that app’s routes, who each one reaches in plain words (“Emails this app’s 3 owners”, “Reaches everyone who can read #shop-alerts”), Test, On/Off and delete. A new route there is for that app and sends through one of the app’s own sending resources (administrators may also pick a shared one). A route an administrator pointed at a shared sender is shown to owners but only administrators change it.',
         '**Who an email sender mails.** A sending type that mails people (a SendGrid sender) gets the route’s audience: the active Hub administrators for a Hub-wide route; the app’s active owners for an app route (its Hub administrators when it has none). People only, never machine accounts, at most 50. A recipient list on the sender itself still wins. Other senders (Slack, Teams, PagerDuty, Twilio) never get anyone’s address.',
         '**Incidents.** Opening an incident sends `incident.opened` (dedup key `incident:<id>`, action open); changing its title, severity or summary, or adding a note, sends the new event `incident.updated` (action update; a note’s text never leaves the Hub); resolving sends `incident.resolved` (action resolve). PagerDuty re-triggers and resolves the same incident; Slack replies in the incident’s thread.',
         '**Failed deploys.** A failed run sends `deploy.failed` with the dedup key `deploy:<id>` (action open). When the environment’s next run succeeds, the `deploy.failed` routes hear that the earlier failure is resolved (same key, action resolve, severity info) — a PagerDuty incident closes.',
@@ -41,7 +42,7 @@ export const hubProvidersWave2HooksDocs: DocSection = {
     { type: 'h2', id: 'hub-providers-wave2-hooks-create', text: 'Create app' },
     {
       type: 'p',
-      text: 'Each environment may name up to six provider parts. New in Wave 2: `entra.app_registration`, `upstash.redis_database`, `redis-cloud.database`, `sentry.project` and `anthropic.workspace`.'
+      text: 'Each environment may name up to six provider parts. New in Wave 2: `entra.app_registration`, `upstash.redis_database`, `redis-cloud.database`, `sentry.project` and `anthropic.workspace`. The Create app form offers them all (the stack-bound ones on a Docker creation only) and says before the preview what the Hub would refuse together: two Entra registrations or two Redis databases in one environment, or a managed Redis while the stack’s Redis is bundled. When every environment has an Entra part, the Sign-in section says it is optional and an empty one is left out of the request.'
     },
     {
       type: 'table',
@@ -72,7 +73,7 @@ export const hubProvidersWave2HooksDocs: DocSection = {
     { type: 'h2', id: 'hub-providers-wave2-hooks-dns', text: 'DNS mode cloudflare' },
     {
       type: 'p',
-      text: 'Docker drivers, GitLab targets and GitHub targets take `dns_mode: "cloudflare"` with `dns_zone_resource_id` naming a managed, shared `cloudflare.zone` whose name covers `wildcard_domain`, and an edge address. Names are made as in automatic mode; the providers step makes each environment’s `cloudflare.dns_record` (an address → A / AAAA, a name → CNAME; not proxied, TTL automatic). A zone of the other kind, or one that does not cover the domain, is refused (`DNS_ZONE_MISSING`). The admin screens offer Route 53 only so far: set cloudflare mode through the API.'
+      text: 'Docker drivers, GitLab targets and GitHub targets take `dns_mode: "cloudflare"` with `dns_zone_resource_id` naming a managed, shared `cloudflare.zone` whose name covers `wildcard_domain`, and an edge address. Names are made as in automatic mode; the providers step makes each environment’s `cloudflare.dns_record` (an address → A / AAAA, a name → CNAME; not proxied, TTL automatic). A zone of the other kind, or one that does not cover the domain, is refused (`DNS_ZONE_MISSING`). In the admin, the driver and target forms list every DNS mode the API accepts; a managed mode shows a zone picker of its own provider (a hosted zone for Route 53, a Cloudflare zone for Cloudflare), and switching provider clears the zone picked for the other.'
     },
     { type: 'h2', id: 'hub-providers-wave2-hooks-db', text: 'Database servers on a Neon branch' },
     {
@@ -82,7 +83,7 @@ export const hubProvidersWave2HooksDocs: DocSection = {
     { type: 'h2', id: 'hub-providers-wave2-hooks-ecr', text: 'ECR scan findings' },
     {
       type: 'p',
-      text: '`GET /api/hub/security/vulnerabilities` answers `repositories`: for each managed `aws.ecr_repository` the reader may see (administrators: all; owners: their apps’), the latest pushed image, its scan status and its finding counts by severity (source `ecr`), read live through the repository’s connection — at most 25 repositories, 8 seconds each. A repository that cannot be read answers its reason (scrubbed) instead of counts. The Security tab does not show them yet.'
+      text: '`GET /api/hub/security/vulnerabilities` answers `repositories`: for each managed `aws.ecr_repository` the reader may see (administrators: all; owners: their apps’), the latest pushed image, its scan status and its finding counts by severity (source `ecr`), read live through the repository’s connection — at most 25 repositories, 8 seconds each. A repository that cannot be read answers its reason (scrubbed) instead of counts. The Security tab shows them in **Provider scans**, grouped by source, beside the scanner’s pinned images: worst severities first, scan state, when the image was pushed, and the reason a repository could not be read. Any other source the answer carries (Snyk) is listed the same way.'
     },
     {
       type: 'note',

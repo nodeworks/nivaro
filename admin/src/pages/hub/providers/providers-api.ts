@@ -92,6 +92,8 @@ export interface ResourceTypeInfo {
   outputs?: Array<{ key: string; label: string; secret: boolean; onceOnly?: boolean }>
   /** Task 13: its resources send messages (notify routes may name them). */
   sends?: boolean
+  /** Task 33: 'email' = a send mails the route's audience (owners, else Hub administrators). */
+  audience?: 'email' | null
 }
 
 export interface ProviderInfo {
@@ -914,6 +916,10 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
   NOT_A_SENDER: {
     title: 'That resource cannot send messages',
     hint: 'Pick a sending resource (a Slack channel, a Teams webhook…) that exists at the provider.'
+  },
+  NO_STACK_SETTINGS: {
+    title: 'That environment has no stack settings yet',
+    hint: 'Open its Stack panel and save once, then bind again.'
   }
 }
 

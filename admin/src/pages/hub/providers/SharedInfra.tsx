@@ -1,5 +1,5 @@
 import { QueryErrorState } from '@nivaro/shared'
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router'
@@ -8,8 +8,10 @@ import { Button } from '@/components/ui/button'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
+import { fetchHubApp, fetchHubApps, hubKeys } from '../hub-api'
 import { ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import { LinkedChange, OpenChanges } from './ChangeView'
+import { OutputsCard } from './OutputsCard'
 import {
   fetchConnections,
   fetchProviderTypes,
@@ -200,6 +202,7 @@ function ConnectionGroup({
                     canDeploy
                     active={a}
                     onAction={(next) => setAction(sameAction(a, next) ? null : next)}
+                    showOutputs
                     deleteBlocked={
                       users.length
                         ? `Used by ${users.length}: remove what points at it first`
@@ -240,10 +243,28 @@ function ConnectionGroup({
                   {a?.kind === 'plan' && (
                     <div className='mt-2'>
                       <PlanNow
-                        key={a.action}
+                        key={`${a.action}${a.fields ? '+' : ''}`}
                         resource={r}
                         action={a.action}
+                        fields={a.fields}
                         isAdmin
+                        onClose={close}
+                      />
+                    </div>
+                  )}
+                  {a?.kind === 'outputs' && type && (
+                    <div className='mt-2'>
+                      <SharedOutputs
+                        resource={r}
+                        type={type}
+                        onRotate={() =>
+                          setAction({
+                            kind: 'plan',
+                            resource: r,
+                            action: 'update',
+                            fields: { rotate_outputs: true }
+                          })
+                        }
                         onClose={close}
                       />
                     </div>
@@ -296,5 +317,50 @@ function ConnectionGroup({
         )}
       </div>
     </SectionCard>
+  )
+}
+
+/**
+ * The outputs card of a shared resource (Task 33b): the same card an app resource opens, fed by
+ * every app's environments — a shared resource may feed any of them (administrators only) — each
+ * named "<app> · <environment>" so a binding says which app it writes to.
+ */
+function SharedOutputs({
+  resource,
+  type,
+  onRotate,
+  onClose
+}: {
+  resource: HubResource
+  type: ResourceTypeInfo
+  onRotate: () => void
+  onClose: () => void
+}) {
+  const apps = useQuery({ queryKey: hubKeys.apps(), queryFn: fetchHubApps })
+  const details = useQueries({
+    queries: (apps.data ?? []).map((a) => ({
+      queryKey: hubKeys.app(a.id),
+      queryFn: () => fetchHubApp(a.id)
+    }))
+  })
+  const environments = details.flatMap((d) =>
+    d.data
+      ? [...d.data.environments]
+          .sort((x, y) => x.position - y.position || x.id - y.id)
+          .map((e) => ({ id: e.id, key: `${d.data.name || d.data.key} · ${e.key}` }))
+      : []
+  )
+  if (apps.isPending || details.some((d) => d.isPending))
+    return <Skeleton className='h-24 w-full' />
+  return (
+    <OutputsCard
+      resource={resource}
+      type={type}
+      environments={environments}
+      canDeploy
+      idPrefix={`hub-shared-out-${resource.id}`}
+      onRotate={onRotate}
+      onClose={onClose}
+    />
   )
 }

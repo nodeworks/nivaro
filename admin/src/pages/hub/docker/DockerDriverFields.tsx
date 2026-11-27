@@ -6,6 +6,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { cn } from '@/lib/utils'
+import {
+  dnsModeOptions,
+  isManagedDns,
+  MANAGED_DNS,
+  managedDnsHint,
+  withDnsMode,
+  zoneFieldWords
+} from '../dns-modes'
 import { hubError } from '../hub-api'
 import { Field, ghostButton, NO_RECORD_ATTRS, NO_RECORD_CLASS, SecretInput } from '../hub-parts'
 import { ManagedResourcePicker } from '../providers/ResourcePickers'
@@ -35,6 +43,11 @@ function edgeAddressHint(d: DockerDraft): string {
  * reaches the edge (automatic wildcard DNS or manual), and the agent token — generated here,
  * shown until the person confirms they saved it (or leaves the page), then only as a mask.
  */
+
+const DRIVER_DNS_OPTIONS = dnsModeOptions({
+  automatic: 'Automatic (wildcard DNS)',
+  manual: 'Manual (add each name)'
+})
 
 export const TOKEN_ONCE_LINE = "Put this in the agent's token secret now — it is never shown again"
 
@@ -107,38 +120,35 @@ export function DockerDriverFields({
         hint={
           draft.dns_mode === 'automatic'
             ? 'A wildcard DNS name already points at the edge, so new names work at once.'
-            : draft.dns_mode === 'route53'
-              ? 'The Hub adds each new name to a Route 53 hosted zone it manages, pointing at the edge.'
+            : isManagedDns(draft.dns_mode)
+              ? managedDnsHint(draft.dns_mode)
               : 'Someone adds a DNS record for each new name; the Hub tells you which.'
         }
       >
         <SimpleSelect
           value={draft.dns_mode}
-          onChange={(v) => onChange({ dns_mode: v as DnsMode })}
-          options={[
-            { value: 'automatic', label: 'Automatic (wildcard DNS)' },
-            { value: 'route53', label: 'Route 53 (the Hub adds each name)' },
-            { value: 'manual', label: 'Manual (add each name)' }
-          ]}
+          onChange={(v) => onChange(withDnsMode(draft, v as DnsMode))}
+          options={DRIVER_DNS_OPTIONS}
           ariaLabel='DNS mode'
           className='h-8 text-[13px]'
           triggerProps={{ id: `${idPrefix}-dns` }}
         />
       </Field>
-      {draft.dns_mode === 'route53' && (
+      {isManagedDns(draft.dns_mode) && (
         <Field
           id={`${idPrefix}-zone`}
-          label='Hosted zone'
+          label={zoneFieldWords(draft.dns_mode).label}
           error={shown('dns_zone_resource_id')}
-          hint='A shared Route 53 zone the Hub manages; it must cover the wildcard domain.'
+          hint={zoneFieldWords(draft.dns_mode).hint}
         >
           <ManagedResourcePicker
+            key={draft.dns_mode}
             id={`${idPrefix}-zone`}
-            type='aws.route53_zone'
+            type={MANAGED_DNS[draft.dns_mode].zoneType}
             filter={{ scope: 'shared' }}
             value={draft.dns_zone_resource_id ?? null}
             onChange={(v) => onChange({ dns_zone_resource_id: v })}
-            placeholder='Pick a hosted zone'
+            placeholder={zoneFieldWords(draft.dns_mode).placeholder}
           />
         </Field>
       )}
@@ -164,7 +174,7 @@ export function DockerDriverFields({
           label='Edge target'
           error={shown('edge_target')}
           hint={
-            draft.dns_mode === 'route53'
+            isManagedDns(draft.dns_mode)
               ? 'An address makes an A or AAAA record, a name a CNAME.'
               : 'What each new name must point at.'
           }

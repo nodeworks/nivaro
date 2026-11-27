@@ -14,6 +14,7 @@ import { cn, formatDate, formatRelative } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
 import { Field, ghostButton, SecretInput, SectionCard, smallButton } from '../hub-parts'
 import HubDomainsCard from './HubDomainsCard'
+import HubSourceFindingsCard from './HubSourceFindingsCard'
 import {
   blobError,
   type CertRow,
@@ -55,6 +56,7 @@ export default function HubSecurity() {
           <CertificatesCard isAdmin={isAdmin} />
           <HubDomainsCard />
           <VulnerabilitiesCard isAdmin={isAdmin} />
+          <HubSourceFindingsCard />
           <ComplianceCard />
           {isAdmin && <SettingsCard />}
         </div>

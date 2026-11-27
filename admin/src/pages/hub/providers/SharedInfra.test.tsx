@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -148,5 +148,84 @@ describe('SharedInfra', () => {
       expect(screen.getByRole('button', { name: /Discard hub-shared-2/ })).toBeTruthy()
     )
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+})
+
+describe('SharedInfra outputs (Task 33b)', () => {
+  it('a shared resource with outputs opens the outputs card over every app’s environments', async () => {
+    const withOutputs = {
+      ...vpcType,
+      outputs: [{ key: 'endpoint', label: 'Endpoint', secret: false }]
+    }
+    const live = { ...failedVpc, external_id: 'vpc-1', name: 'main', pending_create: null }
+    const bindings = {
+      outputs: [
+        {
+          key: 'endpoint',
+          label: 'Endpoint',
+          secret: false,
+          once_only: false,
+          set: true,
+          fingerprint: 'abcdef0123456789',
+          updated_at: null,
+          lost: false,
+          rotate: false
+        }
+      ],
+      bindings: [
+        {
+          id: 1,
+          resource_id: 9,
+          output_key: 'endpoint',
+          environment_id: 5,
+          environment_key: 'staging',
+          target: 'stack_setting',
+          target_key: 'VPC_ENDPOINT',
+          last_pushed_at: null,
+          last_fingerprint: null,
+          last_error: 'x',
+          stale: false,
+          needs_apply: false
+        }
+      ]
+    }
+    const shop = {
+      id: 4,
+      key: 'shop',
+      name: 'Shop',
+      owners: [],
+      environments: [{ id: 5, app_id: 4, key: 'staging', position: 0 }]
+    }
+    const answers: Record<string, unknown> = {
+      '/hub/provider-types': {
+        ...types,
+        providers: [{ ...types.providers[0], types: [withOutputs] }]
+      },
+      '/hub/connections': [conn],
+      '/hub/resources': [live],
+      '/hub/resource-changes': [],
+      '/hub/apps': [{ id: 4, key: 'shop', name: 'Shop' }],
+      '/hub/apps/4': shop,
+      '/hub/resources/9/bindings': bindings
+    }
+    h.get.mockImplementation((url: string) =>
+      url in answers
+        ? Promise.resolve({ data: { data: answers[url] } })
+        : Promise.reject(new Error(url))
+    )
+    render(
+      <MemoryRouter>
+        <QueryClientProvider
+          client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        >
+          <SharedInfra />
+        </QueryClientProvider>
+      </MemoryRouter>
+    )
+    const open = await screen.findByRole('button', { name: 'Outputs of main' })
+    fireEvent.click(open)
+    expect(await screen.findByText('VPC_ENDPOINT')).toBeTruthy()
+    // The binding names the app as well as the environment.
+    expect(screen.getByText('Shop · staging')).toBeTruthy()
   })
 })

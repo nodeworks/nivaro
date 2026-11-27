@@ -15,6 +15,7 @@ import {
   type HubDatabaseRow,
   SSL_LABEL
 } from '../databases/db-api'
+import type { DnsMode } from '../dns-modes'
 import { hubError } from '../hub-api'
 
 /**
@@ -35,9 +36,9 @@ export interface HubTargetConfig {
   deploy_host: string
   manager_known_hosts: string
   proxy_network: string
-  /** route53 (Task 11): the Hub makes each name's record in a managed Route 53 zone. */
-  dns_mode: 'automatic' | 'manual' | 'route53'
-  /** route53: the managed aws.route53_zone names go in. */
+  /** route53 (Task 11) / cloudflare (Task 33): the Hub makes each name's record in a zone it manages. */
+  dns_mode: DnsMode
+  /** route53 / cloudflare: the managed zone resource names go in. */
   dns_zone_resource_id?: number | null
   wildcard_domain: string | null
   edge_address: string | null
@@ -65,7 +66,7 @@ export interface HubGithubTargetConfig {
   /** The workflow file under .github/workflows that deploys an environment. */
   deploy_workflow: string
   source_branch: string
-  dns_mode: 'automatic' | 'manual' | 'route53'
+  dns_mode: DnsMode
   dns_zone_resource_id?: number | null
   wildcard_domain: string | null
   edge_address: string | null
@@ -574,8 +575,14 @@ export const CREATE_COPY: Record<string, Copy> = {
   // Task 11a (Hub providers): provider parts, Route 53 names and GitHub targets
   BAD_PROVIDER_PART: { title: 'A provider part is not complete', detail: true },
   DNS_ZONE_MISSING: {
-    title: 'The Route 53 hosted zone cannot be used',
-    hint: 'Adopt the zone on Shared infrastructure and name it on the driver or target; names must be under it.'
+    title: 'The DNS zone cannot be used',
+    hint: 'Adopt the Route 53 or Cloudflare zone on Shared infrastructure and name it on the driver or target; names must be under it.'
+  },
+  // Task 33: an Entra part's client id / secret or a managed Redis's URL, written to the stack.
+  BINDING_PUSH_FAILED: {
+    title: 'The made values could not be written to the stack',
+    hint: 'Nothing was deployed. Open the part’s resource, check Outputs → Where they go, then retry.',
+    detail: true
   },
   PROVIDER_ACTOR: {
     title: 'The person who started this can no longer act',

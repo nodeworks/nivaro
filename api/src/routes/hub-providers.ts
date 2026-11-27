@@ -545,7 +545,9 @@ function typeOut(t: ResourceTypeSpec) {
     has_estimate: typeof t.estimate === 'function',
     // Task 13: what it hands out (keys and labels; values never leave the Hub).
     outputs: t.outputs ?? [],
-    sends: t.sends === true
+    sends: t.sends === true,
+    // Task 33: 'email' = it mails the route's audience (owners / Hub administrators).
+    audience: t.audience ?? null
   }
 }
 

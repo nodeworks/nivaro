@@ -75,6 +75,7 @@ import {
 } from './move/move-api'
 import { movePrefill } from './move/move-prefill'
 import { mayDeploy, OwnerPolicyCard, useAppAccess } from './owner-access'
+import { NotifyRoutesCard } from './providers/NotifyRoutes'
 import { AppConnectionsCard, ResourcesPanel } from './providers/ResourcesPanel'
 import { HubAppSigninCard } from './signin/HubEnvSigninPanel'
 
@@ -139,6 +140,9 @@ export function HubAppDetail({
       <DeploysCard envs={envs} />
       <OwnersCard app={data} isAdmin={isAdmin} />
       {canPromote && <OwnerPolicyCard appId={data.id} isAdmin={isAdmin} />}
+      {canPromote && (
+        <NotifyRoutesCard app={{ id: data.id, owners: data.owners.length }} isAdmin={isAdmin} />
+      )}
     </div>
   )
 }

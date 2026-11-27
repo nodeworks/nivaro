@@ -7,6 +7,7 @@ import {
 import { type DataTag, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import type { DnsMode } from './dns-modes'
 
 /**
  * Nivaro Hub (phase 1) — what the admin's Apps hub reads from /api/hub/*: types, query keys,
@@ -92,9 +93,9 @@ export interface HubDriverConfig {
 /** A Docker driver's config (phase 4): the Hub agent's address and how names reach the edge. */
 export interface HubDockerDriverConfig {
   agent_url: string
-  /** route53 (Task 11): the Hub makes each name's record in a managed Route 53 zone. */
-  dns_mode: 'automatic' | 'manual' | 'route53'
-  /** route53: the managed aws.route53_zone resource names go in. */
+  /** route53 (Task 11) / cloudflare (Task 33): the Hub makes each name's record in a zone it manages. */
+  dns_mode: DnsMode
+  /** route53 / cloudflare: the managed zone resource names go in. */
   dns_zone_resource_id?: number | null
   wildcard_domain: string | null
   edge_target: string | null

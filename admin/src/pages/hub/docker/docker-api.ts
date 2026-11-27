@@ -1,5 +1,6 @@
 import { type DataTag, useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { type DnsMode, dnsModeOf, isManagedDns, zoneBody, zoneFieldWords } from '../dns-modes'
 import type { HubDockerDriverConfig } from '../hub-api'
 
 /**
@@ -8,7 +9,7 @@ import type { HubDockerDriverConfig } from '../hub-api'
  * the driver form uses. Nothing here ever holds a stored token: the API only shows a mask.
  */
 
-export type DnsMode = 'automatic' | 'manual' | 'route53'
+export type { DnsMode } from '../dns-modes'
 
 /** `GET /api/hub/drivers/:id/agent` — what the Hub agent reports about itself. */
 export interface HubAgentHealth {
@@ -80,7 +81,7 @@ export function useAgentCheck(driverId: number | null) {
 export interface DockerDraft {
   agent_url: string
   dns_mode: DnsMode
-  /** route53: the managed aws.route53_zone names are made in (null = not picked). */
+  /** route53 / cloudflare: the managed zone names are made in (null = not picked). */
   dns_zone_resource_id?: number | null
   wildcard_domain: string
   edge_target: string
@@ -102,7 +103,7 @@ export const EMPTY_DOCKER_DRAFT: DockerDraft = {
 
 export const dockerDraftOf = (c: Partial<HubDockerDriverConfig> | undefined): DockerDraft => ({
   agent_url: c?.agent_url ?? '',
-  dns_mode: c?.dns_mode === 'manual' || c?.dns_mode === 'route53' ? c.dns_mode : 'automatic',
+  dns_mode: dnsModeOf(c?.dns_mode),
   dns_zone_resource_id: c?.dns_zone_resource_id ?? null,
   wildcard_domain: c?.wildcard_domain ?? '',
   edge_target: c?.edge_target ?? '',
@@ -116,7 +117,7 @@ export const dockerConfigBody = (d: DockerDraft) => ({
   dns_mode: d.dns_mode,
   wildcard_domain: d.dns_mode !== 'manual' ? d.wildcard_domain.trim() : null,
   edge_target: d.dns_mode !== 'automatic' ? d.edge_target.trim() : null,
-  ...(d.dns_mode === 'route53' ? { dns_zone_resource_id: d.dns_zone_resource_id } : {}),
+  ...zoneBody(d),
   edge_scheme: d.edge_scheme || null,
   edge_port: d.edge_port.trim() ? Number(d.edge_port.trim()) : null
 })
@@ -131,9 +132,7 @@ export function dockerDraftErrors(d: DockerDraft) {
         ? 'The domain every stack name ends with, e.g. apps.example.com'
         : '',
     dns_zone_resource_id:
-      d.dns_mode === 'route53' && !d.dns_zone_resource_id
-        ? 'Pick the Route 53 hosted zone the names go in'
-        : '',
+      isManagedDns(d.dns_mode) && !d.dns_zone_resource_id ? zoneFieldWords(d.dns_mode).missing : '',
     edge_target:
       d.dns_mode !== 'automatic' && !d.edge_target.trim()
         ? 'What each new name must point at, e.g. edge.example.com or an address'

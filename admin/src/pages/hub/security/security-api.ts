@@ -270,6 +270,9 @@ export const fetchVulns = () =>
     last_scan: LastScan | null
     images: PinnedImage[]
     findings: Finding[]
+    /** Task 33: provider sources (Amazon ECR repositories; Task 43 Snyk) — see source-findings.ts. */
+    repositories?: unknown[]
+    sources?: unknown[]
   }>(api.get('/hub/security/vulnerabilities'))
 export const scanNow = () => api.post('/hub/security/vulnerabilities/scan', {})
 export const fetchSettings = () => data<SecuritySettings>(api.get('/hub/security/settings'))
