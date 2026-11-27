@@ -42,6 +42,8 @@ export interface AwsProbe {
 
 export interface AwsTypeDef {
   spec: ResourceTypeSpec
+  /** Not regional (Route 53): listed once whatever the allowed regions. */
+  global?: boolean
   probe?: Pick<AwsProbe, 'need' | 'run' | 'dryRun'>
   observe(ctx: ProviderContext, id: string, region: string): Promise<Observed | null>
   list(ctx: ProviderContext, region: string, token: string | null): Promise<AwsListPage>
@@ -253,7 +255,8 @@ function pre(observed: Observed, changes: FieldChange[]): Record<string, unknown
 
 // ── Apply ──
 
-const DUPLICATE = /^(InvalidGroup\.Duplicate|InvalidVpc\.Duplicate|.*AlreadyExists.*|Duplicate\w+)$/
+const DUPLICATE =
+  /^(InvalidGroup\.Duplicate|InvalidVpc\.Duplicate|.*AlreadyExists.*|BucketAlreadyOwnedByYou|Duplicate\w+)$/
 
 const changedKeys = (op: PlannedOp) => new Set(op.changes.map((c) => c.field))
 
@@ -453,7 +456,9 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
 
     async list(ctx, type, cursor): Promise<ListPage> {
       const def = defOf(type)
-      const regions = ctx.region ? [resolveRegion(ctx, ctx.region)] : regionsOf(ctx.config)
+      const all = ctx.region ? [resolveRegion(ctx, ctx.region)] : regionsOf(ctx.config)
+      // Global services (Route 53) answer once, not once per region.
+      const regions = def.global ? all.slice(0, 1) : all
       const [idxRaw, ...rest] = (cursor ?? '0|').split('|')
       const idx = Math.max(0, Number.parseInt(idxRaw, 10) || 0)
       const token = rest.join('|') || null

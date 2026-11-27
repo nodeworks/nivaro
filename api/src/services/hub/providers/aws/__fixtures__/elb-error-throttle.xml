@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="http://elasticloadbalancing.amazonaws.com/doc/2015-12-01/"><Error><Type>Sender</Type><Code>Throttling</Code><Message>Rate exceeded</Message></Error><RequestId>req-fake-elb-3</RequestId></ErrorResponse>

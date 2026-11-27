@@ -1,0 +1,4 @@
+{
+  "__type": "com.amazonaws.acm#ResourceNotFoundException",
+  "message": "Could not find certificate arn:aws:acm:us-east-1:123456789012:certificate/gone"
+}

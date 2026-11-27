@@ -1,0 +1,1 @@
+<Error><Code>ServerSideEncryptionConfigurationNotFoundError</Code><Message>The server side encryption configuration was not found</Message><RequestId>req-fake-s3-3</RequestId></Error>

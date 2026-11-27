@@ -1,0 +1,1 @@
+<ListVersionsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>shop-assets</Name><IsTruncated>false</IsTruncated><Version><Key>logo &amp; one.png</Key><VersionId>v1fake</VersionId><IsLatest>true</IsLatest></Version><DeleteMarker><Key>old.png</Key><VersionId>v2fake</VersionId></DeleteMarker></ListVersionsResult>

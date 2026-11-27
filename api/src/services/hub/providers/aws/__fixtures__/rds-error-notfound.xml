@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/"><Error><Type>Sender</Type><Code>DBInstanceNotFound</Code><Message>DBInstance shop-db not found.</Message></Error><RequestId>req-fake-rds-2</RequestId></ErrorResponse>

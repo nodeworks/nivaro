@@ -92,7 +92,9 @@ export function harness(
       ? [`${service}:${action}`]
       : [`${service}:${method} ${u.pathname}${u.search}`, `${service}:${method} ${u.pathname}`]
     const key = keys.find((k) => k in handlers)
-    if (!key) throw new Error(`No fixture handler for ${keys[0]}`)
+    if (!key) {
+      throw new Error(`No fixture handler for ${keys[0]}`)
+    }
     let h = handlers[key]
     if (Array.isArray(h)) {
       const n = counters.get(key) ?? 0
@@ -102,7 +104,8 @@ export function harness(
     const ans = typeof h === 'function' ? h(call) : h
     const a = typeof ans === 'string' ? { file: ans } : ans
     const text = a.body ?? (a.file ? fixture(a.file) : '')
-    return new Response(text, { status: a.status ?? 200, headers: a.headers })
+    const status = a.status ?? 200
+    return new Response(status === 204 ? null : text, { status, headers: a.headers })
   }
   const ctx = makeProviderContext({
     adapter: awsProvider,
@@ -143,3 +146,18 @@ export const observedOf = (
   tags: {},
   ...o
 })
+
+/** Healthy answers for the non-EC2 permission probes (a testConnection test overrides some). */
+export const OTHER_PROBES_OK = {
+  'rds:DescribeDBInstances': 'rds-describe-instances.xml',
+  'rds:DescribeDBSubnetGroups': 'rds-describe-subnet-groups.xml',
+  'rds:DescribeDBParameterGroups': 'rds-describe-param-groups.xml',
+  's3:GET /': {
+    body: '<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Buckets/></ListAllMyBucketsResult>'
+  },
+  'route53:GET /2013-04-01/hostedzone': 'r53-list-zones.xml',
+  'route53:GET /2013-04-01/hostedzone/Z0AAA1111FAKE/rrset': 'r53-list-rrsets.xml',
+  'elbv2:DescribeLoadBalancers': 'elb-describe-lbs.xml',
+  'elbv2:DescribeTargetGroups': 'elb-describe-tg.xml',
+  'acm:ListCertificates': { body: '{"CertificateSummaryList":[]}' }
+}

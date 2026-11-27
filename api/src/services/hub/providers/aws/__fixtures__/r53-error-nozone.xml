@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="https://route53.amazonaws.com/doc/2013-04-01/"><Error><Type>Sender</Type><Code>NoSuchHostedZone</Code><Message>No hosted zone found with ID: Z0GONE</Message></Error><RequestId>req-fake-r53-1</RequestId></ErrorResponse>

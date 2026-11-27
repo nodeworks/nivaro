@@ -1,0 +1,1 @@
+<ListTagsForResourceResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/"><ListTagsForResourceResult><TagList/></ListTagsForResourceResult><ResponseMetadata><RequestId>req-fake-rds-1</RequestId></ResponseMetadata></ListTagsForResourceResponse>

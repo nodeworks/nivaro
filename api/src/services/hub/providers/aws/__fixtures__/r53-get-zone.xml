@@ -1,0 +1,1 @@
+<GetHostedZoneResponse xmlns="https://route53.amazonaws.com/doc/2013-04-01/"><HostedZone><Id>/hostedzone/Z0AAA1111FAKE</Id><Name>example.com.</Name><CallerReference>fake-ref</CallerReference><Config><PrivateZone>false</PrivateZone></Config><ResourceRecordSetCount>4</ResourceRecordSetCount></HostedZone></GetHostedZoneResponse>

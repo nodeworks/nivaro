@@ -3,7 +3,7 @@ import { awsProvider } from '../../../services/hub/providers/aws/adapter.js'
 import { awsConnection } from '../../../services/hub/providers/aws/client.js'
 import { CORE_PROVIDERS } from '../../../services/hub/providers/index.js'
 import { ProviderError } from '../../../services/hub/providers/types.js'
-import { CONFIG, desired, harness, observedOf } from './hub-aws-harness.js'
+import { CONFIG, desired, harness, OTHER_PROBES_OK, observedOf } from './hub-aws-harness.js'
 
 // Nivaro Hub providers, Task 6: the AWS adapter's networking + compute types against recorded
 // (fixture) AWS answers. LocalStack is not available here, so nothing runs against a live API.
@@ -85,7 +85,11 @@ describe('aws testConnection', () => {
         a === 'DescribeInstances'
           ? { status: 403, file: 'ec2-error-unauthorized.xml' }
           : { status: 412, file: 'ec2-error-dryrun.xml' }
-    const h = harness({ 'sts:GetCallerIdentity': 'sts-caller-identity.xml', ...handlers } as never)
+    const h = harness({
+      ...OTHER_PROBES_OK,
+      'sts:GetCallerIdentity': 'sts-caller-identity.xml',
+      ...handlers
+    } as never)
     const t = await awsProvider.testConnection(h.ctx)
     expect(t.ok).toBe(false)
     expect(t.identity).toContain('assumed-role/nivaro-hub')
