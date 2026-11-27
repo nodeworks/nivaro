@@ -581,6 +581,11 @@ export const CREATE_COPY: Record<string, Copy> = {
     title: 'The person who started this can no longer act',
     hint: 'Retry it yourself.'
   },
+  BINDING_PUSH_FAILED: {
+    title: 'A provider value could not be written to the stack',
+    hint: 'Check the connection of the provider part named in Details, then resume the creation.',
+    detail: true
+  },
   PROVIDER_CHANGE_FAILED: {
     title: 'A resource change did not apply',
     hint: 'Open it on Connections to see why, then retry.',
