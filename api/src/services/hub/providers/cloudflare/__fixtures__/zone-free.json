@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "b0000000000000000000000000000001",
+    "name": "example.test",
+    "status": "active",
+    "paused": false,
+    "name_servers": ["ada.ns.cloudflare.test", "bob.ns.cloudflare.test"],
+    "plan": {
+      "name": "Free Website"
+    },
+    "account": {
+      "id": "a0000000000000000000000000000001",
+      "name": "Test Account"
+    }
+  }
+}

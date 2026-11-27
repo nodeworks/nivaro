@@ -1,0 +1,11 @@
+{
+  "success": false,
+  "errors": [
+    {
+      "code": 971,
+      "message": "Too many requests"
+    }
+  ],
+  "messages": [],
+  "result": null
+}

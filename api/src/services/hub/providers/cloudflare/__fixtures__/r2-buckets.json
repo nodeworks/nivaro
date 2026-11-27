@@ -1,0 +1,17 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "buckets": [
+      {
+        "name": "cm-staging-uploads",
+        "creation_date": "2026-11-02T00:00:00Z",
+        "location": "ENAM"
+      }
+    ]
+  },
+  "result_info": {
+    "per_page": 50
+  }
+}

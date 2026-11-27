@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": [
+    {
+      "id": "d0000000000000000000000000000001",
+      "type": "A",
+      "name": "app.example.test",
+      "content": "203.0.113.10",
+      "ttl": 1,
+      "proxied": true,
+      "comment": "made by hand",
+      "zone_id": "b0000000000000000000000000000001",
+      "zone_name": "example.test"
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 100,
+    "total_pages": 1
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "d0000000000000000000000000000001",
+    "type": "TXT",
+    "name": "_acme-challenge.example.test",
+    "content": "\"token-value-1\"",
+    "ttl": 1,
+    "proxied": false,
+    "comment": null,
+    "zone_id": "b0000000000000000000000000000001",
+    "zone_name": "example.test"
+  }
+}

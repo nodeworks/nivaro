@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": [
+    {
+      "id": "b0000000000000000000000000000001",
+      "name": "example.test",
+      "status": "active",
+      "paused": false,
+      "name_servers": ["ada.ns.cloudflare.test", "bob.ns.cloudflare.test"],
+      "plan": {
+        "name": "Pro Website",
+        "legacy_id": "pro"
+      },
+      "account": {
+        "id": "a0000000000000000000000000000001",
+        "name": "Test Account"
+      }
+    }
+  ],
+  "result_info": {
+    "page": 1,
+    "per_page": 50,
+    "total_pages": 1,
+    "count": 1,
+    "total_count": 1
+  }
+}

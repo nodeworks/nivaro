@@ -1,0 +1,11 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "tunnel_id": "11111111-1111-4111-8111-111111111111",
+    "version": 0,
+    "config": null,
+    "source": "cloudflare"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "90000000000000000000000000000001",
+    "rules": [
+      {
+        "id": "f0000000000000000000000000000001",
+        "version": "1",
+        "action": "block",
+        "expression": "(ip.src in {203.0.113.0/24})",
+        "description": "Block office scanner",
+        "enabled": true
+      },
+      {
+        "id": "f0000000000000000000000000000002",
+        "version": "1",
+        "action": "managed_challenge",
+        "expression": "(http.host eq \"x.example.test\")",
+        "description": "New rule",
+        "enabled": true
+      }
+    ]
+  }
+}

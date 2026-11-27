@@ -1,0 +1,10 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "e0000000000000000000000000000001",
+    "pattern": "app.example.test/*",
+    "script": "edge-proxy"
+  }
+}

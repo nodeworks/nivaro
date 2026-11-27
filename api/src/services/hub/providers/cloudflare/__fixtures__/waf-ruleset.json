@@ -1,0 +1,20 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "90000000000000000000000000000001",
+    "name": "zone",
+    "phase": "http_request_firewall_custom",
+    "rules": [
+      {
+        "id": "f0000000000000000000000000000001",
+        "version": "1",
+        "action": "block",
+        "expression": "(ip.src in {203.0.113.0/24})",
+        "description": "Block office scanner",
+        "enabled": true
+      }
+    ]
+  }
+}
