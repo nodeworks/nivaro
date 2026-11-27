@@ -6,6 +6,7 @@ import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
 import { gitlabAdapter } from './gitlab/index.js'
+import { jiraAdapter } from './jira/index.js'
 import { neonAdapter } from './neon/index.js'
 import { pagerdutyAdapter } from './pagerduty/index.js'
 import { redisCloudAdapter } from './redis-cloud/index.js'
@@ -34,6 +35,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   entraAdapter,
   expoAdapter,
   githubAdapter,
+  jiraAdapter,
   sendgridAdapter,
   sentryAdapter,
   slackAdapter,

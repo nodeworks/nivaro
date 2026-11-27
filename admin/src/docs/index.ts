@@ -380,6 +380,7 @@ import {
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
+import { hubProvidersJiraDocs } from './sections/hub-providers-jira.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
 import {
@@ -1268,6 +1269,7 @@ export const navSections: NavGroup[] = [
       hubProvidersPagerdutyDocs,
       hubProvidersSendgridDocs,
       hubProvidersTeamsDocs,
+      hubProvidersJiraDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]
