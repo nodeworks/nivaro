@@ -33,6 +33,7 @@ import {
   sidSeg,
   twilioCall
 } from './client.js'
+import { countryRefusal, smsCountries } from './countries.js'
 import { TWILIO_BUNDLED, twilioNumberEstimate } from './pricing.js'
 
 /**
@@ -141,10 +142,25 @@ function consoleUrl(path: string): string {
 
 // ── Validation (plan and apply) ──
 
-function validateFields(type: string, f: Record<string, unknown>): void {
+function validateFields(
+  type: string,
+  f: Record<string, unknown>,
+  config: Record<string, unknown>
+): void {
   const url = (label: string, v: unknown) => {
     const p = httpsProblem(label, v)
     if (p) throw invalid(p)
+  }
+  const notify = () => {
+    const nums = listOf(f.notify_numbers)
+    if (nums.length > MAX_NOTIFY_NUMBERS)
+      throw invalid(`At most ${MAX_NOTIFY_NUMBERS} numbers get notifications.`)
+    const allowed = smsCountries(config)
+    for (const n of nums) {
+      if (!E164_RE.test(n)) throw invalid(`${n} is not a phone number written with +country.`)
+      const why = countryRefusal(n, allowed)
+      if (why) throw new ProviderError('COUNTRY_NOT_ALLOWED', why)
+    }
   }
   if (type === T_NUMBER) {
     const n = str(f.phone_number)
@@ -156,17 +172,11 @@ function validateFields(type: string, f: Record<string, unknown>): void {
     if (c && !/^[A-Z]{2}$/.test(c)) throw invalid('The country is a two-letter code such as US.')
     url('The SMS webhook', f.sms_url)
     url('The status callback', f.status_callback)
-    for (const n2 of listOf(f.notify_numbers))
-      if (!E164_RE.test(n2)) throw invalid(`${n2} is not a phone number written with +country.`)
-    if (listOf(f.notify_numbers).length > MAX_NOTIFY_NUMBERS)
-      throw invalid(`At most ${MAX_NOTIFY_NUMBERS} numbers get notifications.`)
+    notify()
   }
   if (type === T_SERVICE) {
     url('The status callback', f.status_callback)
-    for (const n2 of listOf(f.notify_numbers))
-      if (!E164_RE.test(n2)) throw invalid(`${n2} is not a phone number written with +country.`)
-    if (listOf(f.notify_numbers).length > MAX_NOTIFY_NUMBERS)
-      throw invalid(`At most ${MAX_NOTIFY_NUMBERS} numbers get notifications.`)
+    notify()
   }
 }
 
@@ -268,7 +278,7 @@ async function searchAvailable(
 }
 
 async function createNumber(ctx: ProviderContext, desired: DesiredResource): Promise<OpResult> {
-  validateFields(T_NUMBER, desired.fields)
+  validateFields(T_NUMBER, desired.fields, ctx.config)
   const name = str(desired.fields.name)
   if (!name) throw invalid('The phone number needs a name.')
   if (desired.externalId) {
@@ -358,7 +368,7 @@ async function updateNumber(
   op: PlannedOp,
   desired: DesiredResource
 ): Promise<OpResult> {
-  validateFields(T_NUMBER, desired.fields)
+  validateFields(T_NUMBER, desired.fields, ctx.config)
   const id = op.externalId as string
   const raw = await numberRaw(ctx, id)
   if (!raw) throw new ProviderError('NOT_FOUND', 'The number no longer exists.', { status: 404 })
@@ -478,7 +488,7 @@ async function setPool(ctx: ProviderContext, serviceSid: string, want: string[])
 }
 
 async function createService(ctx: ProviderContext, desired: DesiredResource): Promise<OpResult> {
-  validateFields(T_SERVICE, desired.fields)
+  validateFields(T_SERVICE, desired.fields, ctx.config)
   const name = str(desired.fields.name)
   if (!name) throw invalid('The messaging service needs a name.')
   const want = refIds(desired, 'numbers') ?? []
@@ -523,7 +533,7 @@ async function updateService(
   op: PlannedOp,
   desired: DesiredResource
 ): Promise<OpResult> {
-  validateFields(T_SERVICE, desired.fields)
+  validateFields(T_SERVICE, desired.fields, ctx.config)
   const id = op.externalId as string
   const raw = await serviceRaw(ctx, id)
   if (!raw)
@@ -555,13 +565,22 @@ async function updateService(
 
 // ── API keys ──
 
-function keyObserved(k: any): Observed {
+const KEY_ID_RE = /^(AC[0-9a-f]{32})\/(SK[0-9a-f]{32})$/
+
+/** A key's provider id: `SK…` in the connection's own account, `AC…/SK…` in one of its subaccounts. */
+function parseKeyId(id: string): { account: string | null; sid: string } {
+  const m = KEY_ID_RE.exec(id)
+  if (m) return { account: m[1], sid: m[2] }
+  return { account: null, sid: sidSeg('SK', id, 'API key id') }
+}
+
+function keyObserved(k: any, account: string | null): Observed {
   const sid = String(k.sid)
   return {
     type: T_KEY,
-    externalId: sid,
+    externalId: account ? `${account}/${sid}` : sid,
     name: k.friendly_name ?? null,
-    fields: { name: k.friendly_name ?? null },
+    fields: { name: k.friendly_name ?? null, subaccount: account },
     tags: {},
     version: null,
     status: null,
@@ -569,63 +588,95 @@ function keyObserved(k: any): Observed {
   }
 }
 
+/** The path of an account's keys; a subaccount must be one of this connection's own. */
+async function keyBase(ctx: ProviderContext, account: string | null): Promise<string> {
+  if (!account || account === accountOf(ctx)) return accountPath(ctx, '/Keys')
+  const sub = await subRaw(ctx, account)
+  if (!sub)
+    throw new ProviderError(
+      'TWILIO_OUT_OF_ACCOUNT',
+      'That subaccount is not one of this connection’s subaccounts.'
+    )
+  return `/2010-04-01/Accounts/${sidSeg('AC', account, 'account id')}/Keys`
+}
+
 async function keyRaw(ctx: ProviderContext, id: string): Promise<any | null> {
-  const r = await twilioCall(
-    ctx,
-    'GET',
-    accountPath(ctx, `/Keys/${sidSeg('SK', id, 'API key id')}.json`),
-    { allow: [404] }
-  )
+  const { account, sid } = parseKeyId(id)
+  const base = await keyBase(ctx, account)
+  const r = await twilioCall(ctx, 'GET', `${base}/${sid}.json`, { allow: [404] })
   return r.status === 404 || !r.body || typeof r.body !== 'object' ? null : r.body
 }
 
 async function keyPage(
   ctx: ProviderContext,
-  cursor?: string | null
+  cursor?: string | null,
+  account: string | null = null
 ): Promise<{ items: any[]; cursor: string | null }> {
-  const r = await twilioCall(ctx, 'GET', accountPath(ctx, '/Keys.json'), {
+  const r = await twilioCall(ctx, 'GET', `${await keyBase(ctx, account)}.json`, {
     query: { PageSize: 50, ...cursorQuery(cursor) }
   })
   return { items: r.body?.keys ?? [], cursor: nextCursor(r.body) }
 }
 
-async function findKeyByName(ctx: ProviderContext, name: string): Promise<any | null> {
+async function keysNamed(
+  ctx: ProviderContext,
+  name: string,
+  account: string | null = null
+): Promise<any[]> {
+  const out: any[] = []
   let cursor: string | null = null
   let pages = 0
   do {
-    const page = await keyPage(ctx, cursor)
-    const hit = page.items.find((k: any) => k.friendly_name === name)
-    if (hit) return hit
+    const page = await keyPage(ctx, cursor, account)
+    out.push(...page.items.filter((k: any) => k.friendly_name === name))
     cursor = page.cursor
   } while (cursor && ++pages < 10)
-  return null
+  return out
 }
 
-function refuseOwnKey(ctx: ProviderContext, id: string): void {
-  if (String(ctx.config.keySid ?? '').trim() === id)
+async function findKeyByName(
+  ctx: ProviderContext,
+  name: string,
+  account: string | null = null
+): Promise<any | null> {
+  return (await keysNamed(ctx, name, account))[0] ?? null
+}
+
+function refuseOwnKey(ctx: ProviderContext, sid: string): void {
+  if (String(ctx.config.keySid ?? '').trim() === sid)
     throw new ProviderError(
       'OWN_KEY',
       'This is the API key the Hub connects with. Use another connection to change or remove it.'
     )
 }
 
-async function makeKey(ctx: ProviderContext, name: string): Promise<{ made: any; out: OpResult }> {
-  const r = await twilioCall(ctx, 'POST', accountPath(ctx, '/Keys.json'), {
+/** The subaccount an app key is made in: the resolved ref, or null for the main account. */
+function keyAccountOf(desired: DesiredResource): string | null {
+  const ref = desired.refs.subaccount
+  if (typeof ref === 'string' && ref) return sidSeg('AC', ref, 'account id')
+  if (desired.fields.subaccount) throw invalid('The subaccount for this key is not created yet.')
+  return null
+}
+
+async function makeKey(
+  ctx: ProviderContext,
+  name: string,
+  account: string | null
+): Promise<{ made: any; out: OpResult }> {
+  const r = await twilioCall(ctx, 'POST', `${await keyBase(ctx, account)}.json`, {
     form: { FriendlyName: name }
   })
   const made = r.body
   if (!made?.sid || typeof made.secret !== 'string')
     throw new ProviderError('PROVIDER_REJECTED', 'Twilio did not return the new API key.')
+  const observed = keyObserved(made, account)
   return {
     made,
     out: ok(
-      String(made.sid),
-      keyObserved(made),
+      observed.externalId,
+      observed,
       { created: true },
-      {
-        sid: String(made.sid),
-        secret: made.secret
-      }
+      { sid: String(made.sid), account_sid: account ?? accountOf(ctx), secret: made.secret }
     )
   }
 }
@@ -633,44 +684,98 @@ async function makeKey(ctx: ProviderContext, name: string): Promise<{ made: any;
 async function createKey(ctx: ProviderContext, desired: DesiredResource): Promise<OpResult> {
   const name = str(desired.fields.name)
   if (!name) throw invalid('The API key needs a name.')
+  const account = keyAccountOf(desired)
   if (desired.externalId) {
     const raw = await keyRaw(ctx, desired.externalId)
     // The secret was shown once with the create: a resumed run cannot show it again.
-    if (raw) return ok(String(raw.sid), keyObserved(raw), { already: 'exists' })
+    if (raw)
+      return ok(desired.externalId, keyObserved(raw, parseKeyId(desired.externalId).account), {
+        already: 'exists'
+      })
   }
-  if (await findKeyByName(ctx, name)) throw alreadyExists('An API key named', name)
-  return (await makeKey(ctx, name)).out
+  if (await findKeyByName(ctx, name, account)) throw alreadyExists('An API key named', name)
+  return (await makeKey(ctx, name, account)).out
 }
 
+const ROTATING = ' (rotating)'
+
+/**
+ * Rotation never leaves two working keys behind and never hides a failure. The new key is made
+ * under a marker name, then the old one is removed (404 = already gone). If the old key cannot be
+ * removed, the new key is taken back and the step FAILS (retryable) naming the old key: its
+ * secret was never handed over, so nothing is lost and a retry starts clean. A marker key a
+ * stopped run left behind is removed first, so a retry never makes the new key twice. Only when
+ * the old key is gone is the new key renamed to the real name.
+ */
 async function rotateKey(
   ctx: ProviderContext,
   op: PlannedOp,
   desired: DesiredResource
 ): Promise<OpResult> {
-  const id = op.externalId as string
-  refuseOwnKey(ctx, id)
-  const current = await keyRaw(ctx, id)
+  const { account, sid } = parseKeyId(op.externalId as string)
+  refuseOwnKey(ctx, sid)
+  const base = await keyBase(ctx, account)
+  const current = await keyRaw(ctx, op.externalId as string)
   if (!current)
     throw new ProviderError('NOT_FOUND', 'The API key no longer exists.', { status: 404 })
   const name = str(current.friendly_name) ?? str(desired.fields.name) ?? 'nivaro-hub'
-  const { out } = await makeKey(ctx, name)
-  let removed = true
+  const marker = `${name}${ROTATING}`
+  for (const stale of await keysNamed(ctx, marker, account))
+    await twilioCall(ctx, 'DELETE', `${base}/${sidSeg('SK', stale.sid, 'API key id')}.json`, {
+      allow: [404]
+    })
+  const { made } = await makeKey(ctx, marker, account)
   try {
-    await twilioCall(
-      ctx,
-      'DELETE',
-      accountPath(ctx, `/Keys/${sidSeg('SK', id, 'API key id')}.json`),
-      {
+    await twilioCall(ctx, 'DELETE', `${base}/${sid}.json`, { allow: [404] })
+  } catch (err) {
+    if (!(err instanceof ProviderError)) throw err
+    let takenBack = true
+    try {
+      await twilioCall(ctx, 'DELETE', `${base}/${sidSeg('SK', made.sid, 'API key id')}.json`, {
         allow: [404]
+      })
+    } catch (e2) {
+      if (!(e2 instanceof ProviderError)) throw e2
+      takenBack = false
+    }
+    return {
+      ok: false,
+      externalId: op.externalId,
+      observed: null,
+      answer: { oldKeySid: sid, newKeyTakenBack: takenBack },
+      error: {
+        code: 'OLD_KEY_NOT_REMOVED',
+        message: clipScrubbed(
+          ctx,
+          `The old API key ${sid} could not be removed (${err.message}). ${
+            takenBack
+              ? 'The new key was taken back; run the rotation again.'
+              : 'The new key could not be taken back either; a retry removes it first.'
+          }`
+        ),
+        retryable: true,
+        ...(err.status ? { status: err.status } : {})
       }
-    )
-  } catch {
-    removed = false
+    }
   }
-  return {
-    ...out,
-    answer: { rotated: true, replaced: id, ...(removed ? {} : { oldKeyNotRemoved: id }) }
+  let finalName = marker
+  try {
+    await twilioCall(ctx, 'POST', `${base}/${sidSeg('SK', made.sid, 'API key id')}.json`, {
+      form: { FriendlyName: name }
+    })
+    finalName = name
+  } catch (err) {
+    // The old key is already gone and the secret must be handed over: a failed rename only
+    // leaves the marker name, which the next plan shows and renames.
+    if (!(err instanceof ProviderError)) throw err
   }
+  const observed = keyObserved({ ...made, friendly_name: finalName }, account)
+  return ok(
+    observed.externalId,
+    observed,
+    { rotated: true, replaced: sid },
+    { sid: String(made.sid), account_sid: account ?? accountOf(ctx), secret: made.secret }
+  )
 }
 
 // ── Subaccounts ──
@@ -815,7 +920,6 @@ function planOf(
       }
     ]
   }
-  validateFields(cfg.type, desired.fields)
   if (!observed)
     return [
       {
@@ -963,6 +1067,14 @@ const SERVICE_FIELDS: FieldSpec[] = [
 const KEY_FIELDS: FieldSpec[] = [
   { key: 'name', label: 'Name', kind: 'string', required: true, pattern: '^.{1,64}$' },
   {
+    key: 'subaccount',
+    label: 'Subaccount',
+    kind: 'ref',
+    refType: T_SUB,
+    createOnly: true,
+    help: 'The key is made inside this subaccount, so it can only reach what that subaccount holds. Without one the key belongs to the main account and can do anything on it: only a Hub administrator may start that.'
+  },
+  {
     key: ROTATE_OUTPUTS_FIELD,
     label: 'Rotate the secret',
     kind: 'boolean',
@@ -1052,26 +1164,86 @@ const CFGS: Record<string, PlanCfg> = {
   [T_SUB]: SUB_CFG
 }
 
-function planAny(desired: DesiredResource | null, observed: Observed | null): PlannedOp[] {
+const NO_SUB_NOTE =
+  ' This key belongs to the main account (no subaccount), so it can do anything on the account: a Hub administrator must start it.'
+
+function withAdminOnly(op: PlannedOp, note: string): PlannedOp {
+  return { ...op, reason: `${op.reason}${note}`, data: { ...(op.data ?? {}), $adminOnly: true } }
+}
+
+const NOTIFY_NOTE =
+  ' Who gets texted (or how often) is changing, so a Hub administrator must start it.'
+
+/** The notify settings a plan would change (they live only in the Hub, mirrored into observed). */
+function notifyChange(desired: DesiredResource, observed: Observed | null): FieldChange[] {
+  const out: FieldChange[] = []
+  const want = listOf(desired.fields.notify_numbers)
+  const have = observed ? listOf(observed.fields.notify_numbers) : []
+  if (!sameSet(want, have)) out.push({ field: 'notify_numbers', from: have, to: want })
+  const wantCritical = desired.fields.critical_only !== false
+  const haveCritical = observed ? observed.fields.critical_only !== false : true
+  if (wantCritical !== haveCritical)
+    out.push({ field: 'critical_only', from: haveCritical, to: wantCritical })
+  return out
+}
+
+function planAny(
+  ctx: ProviderContext,
+  desired: DesiredResource | null,
+  observed: Observed | null
+): PlannedOp[] {
   const type = desired?.type ?? observed?.type
   const cfg = type ? CFGS[type] : undefined
   if (!cfg) throw new ProviderError('UNKNOWN_TYPE', `Twilio has no ${String(type)}.`)
-  if (type === T_KEY && desired && observed && desired.fields[ROTATE_OUTPUTS_FIELD] === true)
-    return [
+  if (desired) validateFields(cfg.type, desired.fields, ctx.config)
+  if (type === T_KEY) {
+    const sub = desired ? !!desired.fields.subaccount : !!observed?.fields.subaccount
+    const ops =
+      desired && observed && desired.fields[ROTATE_OUTPUTS_FIELD] === true
+        ? [
+            {
+              kind: 'update' as const,
+              type: T_KEY,
+              resourceId: desired.resourceId,
+              externalId: observed.externalId,
+              reason: `Rotate ${typedName(cfg.label, observed.name)}: a new key is made and this one is removed, so its secret stops working at once. If the old key cannot be removed the new one is taken back and the step fails.`,
+              changes: [{ field: ROTATE_OUTPUTS_FIELD, to: true }],
+              preconditions: { name: observed.fields.name ?? null },
+              risk: [],
+              action: 'rotate',
+              data: { $oneShot: [ROTATE_OUTPUTS_FIELD] }
+            }
+          ]
+        : planOf(cfg, desired, observed)
+    return sub ? ops : ops.map((o) => withAdminOnly(o, NO_SUB_NOTE))
+  }
+  const ops = planOf(cfg, desired, observed)
+  if (!desired || (type !== T_NUMBER && type !== T_SERVICE)) return ops
+  const change = notifyChange(desired, observed)
+  if (!change.length) return ops
+  if (!observed) return ops.map((o) => withAdminOnly(o, NOTIFY_NOTE))
+  const upd = ops.find((o) => o.kind === 'update')
+  if (upd) {
+    const merged = withAdminOnly({ ...upd, changes: [...upd.changes, ...change] }, NOTIFY_NOTE)
+    return ops.map((o) => (o === upd ? merged : o))
+  }
+  if (ops.some((o) => o.kind === 'replace')) return ops.map((o) => withAdminOnly(o, NOTIFY_NOTE))
+  return [
+    ...ops,
+    withAdminOnly(
       {
         kind: 'update',
-        type: T_KEY,
+        type: cfg.type,
         resourceId: desired.resourceId,
         externalId: observed.externalId,
-        reason: `Rotate ${typedName(cfg.label, observed.name)}: a new key is made and this one is removed, so its secret stops working at once.`,
-        changes: [{ field: ROTATE_OUTPUTS_FIELD, to: true }],
-        preconditions: { name: observed.fields.name ?? null },
-        risk: [],
-        action: 'rotate',
-        data: { $oneShot: [ROTATE_OUTPUTS_FIELD] }
-      }
-    ]
-  return planOf(cfg, desired, observed)
+        reason: `Change ${fieldWords(cfg.fields, change)} on ${typedName(cfg.label, observed.name)}.`,
+        changes: change,
+        preconditions: {},
+        risk: []
+      },
+      NOTIFY_NOTE
+    )
+  ]
 }
 
 // ── Types ──
@@ -1155,9 +1327,10 @@ const TYPES: ResourceTypeSpec[] = [
     fields: KEY_FIELDS,
     capabilities: base(),
     reversible: false,
-    refs: [],
+    refs: [{ field: 'subaccount', type: T_SUB, required: true }],
     outputs: [
       { key: 'sid', label: 'API key SID', secret: false },
+      { key: 'account_sid', label: 'Account SID (the key’s account)', secret: false },
       { key: 'secret', label: 'API key secret', secret: true, onceOnly: true }
     ],
     risk(op) {
@@ -1188,8 +1361,14 @@ async function sendTexts(
   const numbers = listOf(f.notify_numbers)
   if (!numbers.length)
     throw new ProviderError('NO_RECIPIENTS', 'No numbers are set to be texted on this resource.')
-  for (const n of numbers)
+  const allowed = smsCountries(ctx.config)
+  for (const n of numbers) {
     if (!E164_RE.test(n)) throw new ProviderError('BAD_NUMBER', `${n} is not a valid phone number.`)
+    const why = countryRefusal(n, allowed)
+    if (why) throw new ProviderError('COUNTRY_NOT_ALLOWED', why)
+  }
+  const texts = numbers.slice(0, MAX_NOTIFY_NUMBERS)
+  takeRate(ctx, resource.id, texts.length)
   let sender: Record<string, string>
   if (resource.type === T_SERVICE)
     sender = { MessagingServiceSid: sidSeg('MG', resource.external_id, 'messaging service id') }
@@ -1202,7 +1381,7 @@ async function sendTexts(
   const body = textOf(msg)
   const failures: ProviderError[] = []
   let sent = 0
-  for (const to of numbers.slice(0, MAX_NOTIFY_NUMBERS)) {
+  for (const to of texts) {
     try {
       await twilioCall(ctx, 'POST', accountPath(ctx, '/Messages.json'), {
         form: { To: to, Body: body, ...sender }
@@ -1230,11 +1409,118 @@ async function sendTexts(
   return ok(resource.external_id, null, { sent })
 }
 
+// ── Notify rate limit ──
+
+const RATE_PER_HOUR = 20
+const HOUR_MS = 60 * 60 * 1000
+
+/**
+ * At most 20 texts an hour per resource (a stolen route or a flood of events must not run up the
+ * bill). Counted in the connection's token cache, so it is per Hub process and forgotten on a
+ * restart: a ceiling against runaway sends, not an exact meter. Over the limit = RATE_LIMITED,
+ * not retryable (a retry in the same hour would only hit it again); the route records it.
+ */
+function takeRate(ctx: ProviderContext, resourceId: number, count: number): number {
+  const key = `twilio-notify:${resourceId}`
+  const now = ctx.now().getTime()
+  let stamps: number[] = []
+  try {
+    const raw = ctx.tokens.get(key)
+    const parsed = raw ? JSON.parse(raw) : []
+    if (Array.isArray(parsed))
+      stamps = parsed.filter((t) => typeof t === 'number' && now - t < HOUR_MS)
+  } catch {
+    stamps = []
+  }
+  if (stamps.length + count > RATE_PER_HOUR)
+    throw new ProviderError(
+      'RATE_LIMITED',
+      `At most ${RATE_PER_HOUR} texts an hour go out through one resource (${stamps.length} sent in the last hour). This one was not sent.`,
+      { retryable: false }
+    )
+  for (let i = 0; i < count; i++) stamps.push(now)
+  ctx.tokens.set(key, JSON.stringify(stamps), new Date(now + HOUR_MS + 2 * 60 * 1000))
+  return stamps.length
+}
+
+/** The notify settings mirrored into observed, so a later plan can tell they are unchanged. */
+function withNotifyEcho(result: OpResult, desired: DesiredResource | null): OpResult {
+  if (!result.observed || !desired) return result
+  if (result.observed.type !== T_NUMBER && result.observed.type !== T_SERVICE) return result
+  return {
+    ...result,
+    observed: {
+      ...result.observed,
+      fields: {
+        ...result.observed.fields,
+        notify_numbers: listOf(desired.fields.notify_numbers),
+        critical_only: desired.fields.critical_only !== false
+      }
+    }
+  }
+}
+
 // ── The adapter ──
 
 function typeOf(type: string): string {
   if (!CFGS[type]) throw new ProviderError('UNKNOWN_TYPE', `Twilio has no ${type}.`)
   return type
+}
+
+async function applyOp(
+  ctx: ProviderContext,
+  op: PlannedOp,
+  desired: DesiredResource | null
+): Promise<OpResult> {
+  if (op.kind === 'noop') return ok(op.externalId, null)
+  const type = typeOf(op.type)
+  if (op.kind === 'create') {
+    if (!desired) throw invalid('Nothing to create.')
+    if (type === T_NUMBER) return createNumber(ctx, desired)
+    if (type === T_SERVICE) return createService(ctx, desired)
+    if (type === T_KEY) return createKey(ctx, desired)
+    return createSub(ctx, desired)
+  }
+  const id = op.externalId as string
+  if (op.kind === 'delete') {
+    if (type === T_NUMBER) await releaseNumber(ctx, id)
+    else if (type === T_SERVICE)
+      await twilioCall(ctx, 'DELETE', `/v1/Services/${sidSeg('MG', id, 'messaging service id')}`, {
+        origin: MESSAGING_ORIGIN,
+        allow: [404]
+      })
+    else if (type === T_KEY) {
+      const { account, sid } = parseKeyId(id)
+      refuseOwnKey(ctx, sid)
+      await twilioCall(ctx, 'DELETE', `${await keyBase(ctx, account)}/${sid}.json`, {
+        allow: [404]
+      })
+    } else await closeSub(ctx, id)
+    return ok(id, null)
+  }
+  if (!desired) throw invalid('Nothing to write.')
+  if (op.kind === 'replace') {
+    // Only a phone number replaces: release the old one, then buy the new one.
+    if (type !== T_NUMBER) throw invalid(`${type} cannot be replaced.`)
+    await releaseNumber(ctx, id)
+    return createNumber(ctx, { ...desired, externalId: null })
+  }
+  if (type === T_KEY && op.action === 'rotate') return rotateKey(ctx, op, desired)
+  if (type === T_NUMBER) return updateNumber(ctx, op, desired)
+  if (type === T_SERVICE) return updateService(ctx, op, desired)
+  if (type === T_SUB) return updateSub(ctx, op, desired)
+  // A key: only its name changes.
+  const { account, sid } = parseKeyId(id)
+  const raw = await keyRaw(ctx, id)
+  if (!raw) throw new ProviderError('NOT_FOUND', 'The API key no longer exists.', { status: 404 })
+  const name = str(desired.fields.name)
+  if (!name || name === raw.friendly_name)
+    return ok(id, keyObserved(raw, account), { already: 'matches' })
+  await twilioCall(ctx, 'POST', `${await keyBase(ctx, account)}/${sid}.json`, {
+    form: { FriendlyName: name }
+  })
+  const after = await keyRaw(ctx, id)
+  return ok(id, after ? keyObserved(after, account) : null, { changed: ['name'] })
 }
 
 export const twilioAdapter: ProviderAdapter = {
@@ -1259,6 +1545,14 @@ export const twilioAdapter: ProviderAdapter = {
         help: 'Preferred: an API key SID (SK…) with its secret below. Leave empty to sign in with the account SID and auth token instead.'
       },
       {
+        key: 'sms_countries',
+        label: 'Countries the Hub may text',
+        kind: 'string',
+        default: 'US,CA',
+        placeholder: 'US,CA',
+        help: 'Two-letter country codes, comma separated. A notification number in any other country is refused (COUNTRY_NOT_ALLOWED): texts to foreign or premium numbers are how a stolen login costs money.'
+      },
+      {
         key: 'secret',
         label: 'API key secret or auth token',
         kind: 'string',
@@ -1277,6 +1571,14 @@ export const twilioAdapter: ProviderAdapter = {
       const key = String(config.keySid ?? '').trim()
       if (key && !KEY_SID_RE.test(key))
         problems.push('The API key SID is SK followed by 32 letters and digits.')
+      const raw = config.sms_countries
+      if (raw !== undefined && raw !== '') {
+        const list = (Array.isArray(raw) ? raw.map(String) : String(raw).split(/[\s,]+/))
+          .map((c) => c.trim())
+          .filter(Boolean)
+        if (!list.length || list.some((c) => !/^[A-Za-z]{2}$/.test(c)))
+          problems.push('The countries are two-letter codes separated by commas, such as US,CA.')
+      }
       if (secrets.secret !== undefined && !secrets.secret.trim())
         problems.push('The secret is empty.')
       return problems
@@ -1359,7 +1661,7 @@ export const twilioAdapter: ProviderAdapter = {
         return readService(ctx, externalId)
       case T_KEY: {
         const raw = await keyRaw(ctx, externalId)
-        return raw ? keyObserved(raw) : null
+        return raw ? keyObserved(raw, parseKeyId(externalId).account) : null
       }
       default: {
         const raw = await subRaw(ctx, externalId)
@@ -1383,7 +1685,7 @@ export const twilioAdapter: ProviderAdapter = {
       }
       case T_KEY: {
         const p = await keyPage(ctx, cursor)
-        return { items: p.items.map(keyObserved), cursor: p.cursor }
+        return { items: p.items.map((k) => keyObserved(k, null)), cursor: p.cursor }
       }
       default: {
         const p = await subPage(ctx, cursor)
@@ -1408,8 +1710,9 @@ export const twilioAdapter: ProviderAdapter = {
         return hit ? serviceObserved(hit, await poolOf(ctx, String(hit.sid))) : null
       }
       case T_KEY: {
-        const hit = name ? await findKeyByName(ctx, name) : null
-        return hit ? keyObserved(hit) : null
+        const account = keyAccountOf(desired)
+        const hit = name ? await findKeyByName(ctx, name, account) : null
+        return hit ? keyObserved(hit, account) : null
       }
       default: {
         const hit = name
@@ -1420,72 +1723,12 @@ export const twilioAdapter: ProviderAdapter = {
     }
   },
 
-  plan(_ctx, desired, observed) {
-    return planAny(desired, observed)
+  plan(ctx, desired, observed) {
+    return planAny(ctx, desired, observed)
   },
 
   async apply(ctx, op, desired) {
-    if (op.kind === 'noop') return ok(op.externalId, null)
-    const type = typeOf(op.type)
-    if (op.kind === 'create') {
-      if (!desired) throw invalid('Nothing to create.')
-      if (type === T_NUMBER) return createNumber(ctx, desired)
-      if (type === T_SERVICE) return createService(ctx, desired)
-      if (type === T_KEY) return createKey(ctx, desired)
-      return createSub(ctx, desired)
-    }
-    const id = op.externalId as string
-    if (op.kind === 'delete') {
-      if (type === T_NUMBER) await releaseNumber(ctx, id)
-      else if (type === T_SERVICE)
-        await twilioCall(
-          ctx,
-          'DELETE',
-          `/v1/Services/${sidSeg('MG', id, 'messaging service id')}`,
-          {
-            origin: MESSAGING_ORIGIN,
-            allow: [404]
-          }
-        )
-      else if (type === T_KEY) {
-        refuseOwnKey(ctx, id)
-        await twilioCall(
-          ctx,
-          'DELETE',
-          accountPath(ctx, `/Keys/${sidSeg('SK', id, 'API key id')}.json`),
-          {
-            allow: [404]
-          }
-        )
-      } else await closeSub(ctx, id)
-      return ok(id, null)
-    }
-    if (!desired) throw invalid('Nothing to write.')
-    if (op.kind === 'replace') {
-      // Only a phone number replaces: release the old one, then buy the new one.
-      if (type !== T_NUMBER) throw invalid(`${type} cannot be replaced.`)
-      await releaseNumber(ctx, id)
-      return createNumber(ctx, { ...desired, externalId: null })
-    }
-    if (type === T_KEY && op.action === 'rotate') return rotateKey(ctx, op, desired)
-    if (type === T_NUMBER) return updateNumber(ctx, op, desired)
-    if (type === T_SERVICE) return updateService(ctx, op, desired)
-    if (type === T_SUB) return updateSub(ctx, op, desired)
-    // A key: only its name changes.
-    const raw = await keyRaw(ctx, id)
-    if (!raw) throw new ProviderError('NOT_FOUND', 'The API key no longer exists.', { status: 404 })
-    const name = str(desired.fields.name)
-    if (!name || name === raw.friendly_name) return ok(id, keyObserved(raw), { already: 'matches' })
-    await twilioCall(
-      ctx,
-      'POST',
-      accountPath(ctx, `/Keys/${sidSeg('SK', id, 'API key id')}.json`),
-      {
-        form: { FriendlyName: name }
-      }
-    )
-    const after = await keyRaw(ctx, id)
-    return ok(id, after ? keyObserved(after) : null, { changed: ['name'] })
+    return withNotifyEcho(await applyOp(ctx, op, desired), desired)
   },
 
   /** What Twilio shows again: a number's digits, a service's SID, a key's SID (never its secret). */
@@ -1500,7 +1743,9 @@ export const twilioAdapter: ProviderAdapter = {
     }
     if (type === T_KEY) {
       const raw = await keyRaw(ctx, externalId)
-      return raw ? { sid: String(raw.sid) } : {}
+      return raw
+        ? { sid: String(raw.sid), account_sid: parseKeyId(externalId).account ?? accountOf(ctx) }
+        : {}
     }
     return {}
   },

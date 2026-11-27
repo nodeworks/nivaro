@@ -729,7 +729,8 @@ describe('twilio adapter: apply', () => {
       op(T_KEY, { kind: 'create', externalId: null }),
       desired(T_KEY, { name: 'demo-key' })
     )
-    expect(res.outputs).toEqual({ sid: SK, secret: NEW_KEY_SECRET })
+    expect(res.outputs).toEqual({ sid: SK, account_sid: AC, secret: NEW_KEY_SECRET })
+    expect(res.externalId).toBe(SK)
     expect(JSON.stringify({ ...res, outputs: undefined })).not.toContain(NEW_KEY_SECRET)
   })
 
@@ -744,22 +745,162 @@ describe('twilio adapter: apply', () => {
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' })
   })
 
-  it('rotating makes a new key, removes the old and answers the new outputs and id', async () => {
+  it('rotating makes a marker key, removes the old, renames the new and answers the new outputs', async () => {
     const fresh = `SK${'f'.repeat(30)}09`
     const { ctx, calls } = harness([
       { method: 'GET', path: /\/Keys\/SK/, body: fx('key') },
+      { method: 'GET', path: /\/Keys\.json$/, body: { keys: [] } },
       { method: 'POST', path: /\/Keys\.json$/, body: { ...fx('key-created'), sid: fresh } },
-      { method: 'DELETE', path: /\/Keys\/SK/, status: 204 }
+      { method: 'DELETE', path: /\/Keys\/SK/, status: 204 },
+      { method: 'POST', path: /\/Keys\/SK/, body: {} }
     ])
     const res = await twilioAdapter.apply(
       ctx,
       op(T_KEY, { externalId: SK, action: 'rotate' }),
       desired(T_KEY, { name: 'demo-key', [ROTATE_OUTPUTS_FIELD]: true }, SK)
     )
+    expect(res.ok).toBe(true)
     expect(res.externalId).toBe(fresh)
-    expect(res.outputs).toEqual({ sid: fresh, secret: NEW_KEY_SECRET })
+    expect(res.outputs).toEqual({ sid: fresh, account_sid: AC, secret: NEW_KEY_SECRET })
     expect(res.answer).toMatchObject({ rotated: true, replaced: SK })
-    expect(calls.map((c) => c.method)).toEqual(['GET', 'POST', 'DELETE'])
+    const writes = calls.filter((c) => c.method !== 'GET')
+    expect(writes.map((c) => c.method)).toEqual(['POST', 'DELETE', 'POST'])
+    expect(writes[0].form?.get('FriendlyName')).toBe('demo-key (rotating)')
+    expect(writes[2].form?.get('FriendlyName')).toBe('demo-key')
+  })
+
+  it('rotation: an old key that cannot be removed FAILS the step (retryable), takes the new key back and names the old one', async () => {
+    const fresh = `SK${'f'.repeat(30)}09`
+    const { ctx, calls } = harness([
+      { method: 'GET', path: /\/Keys\/SK/, body: fx('key') },
+      { method: 'GET', path: /\/Keys\.json$/, body: { keys: [] } },
+      { method: 'POST', path: /\/Keys\.json$/, body: { ...fx('key-created'), sid: fresh } },
+      { method: 'DELETE', path: new RegExp(`/Keys/${SK}`), status: 503, body: { message: 'down' } },
+      { method: 'DELETE', path: new RegExp(`/Keys/${fresh}`), status: 204 }
+    ])
+    const res = await twilioAdapter.apply(
+      ctx,
+      op(T_KEY, { externalId: SK, action: 'rotate' }),
+      desired(T_KEY, { name: 'demo-key', [ROTATE_OUTPUTS_FIELD]: true }, SK)
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatchObject({ code: 'OLD_KEY_NOT_REMOVED', retryable: true })
+    expect(res.error?.message).toContain(SK)
+    expect(res.answer).toMatchObject({ oldKeySid: SK, newKeyTakenBack: true })
+    expect(res.outputs).toBeUndefined()
+    expect(JSON.stringify(res)).not.toContain(NEW_KEY_SECRET)
+    // The new key was deleted again: the account is back to the one old key.
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual([
+      `/2010-04-01/Accounts/${AC}/Keys/${SK}.json`,
+      `/2010-04-01/Accounts/${AC}/Keys/${fresh}.json`
+    ])
+  })
+
+  it('rotation: a 404 on the old key is success; a non-provider error is not swallowed', async () => {
+    const fresh = `SK${'f'.repeat(30)}09`
+    const gone = harness([
+      { method: 'GET', path: /\/Keys\/SK/, body: fx('key') },
+      { method: 'GET', path: /\/Keys\.json$/, body: { keys: [] } },
+      { method: 'POST', path: /\/Keys\.json$/, body: { ...fx('key-created'), sid: fresh } },
+      { method: 'DELETE', path: /\/Keys\/SK/, status: 404, body: {} },
+      { method: 'POST', path: /\/Keys\/SK/, body: {} }
+    ])
+    const ok1 = await twilioAdapter.apply(
+      gone.ctx,
+      op(T_KEY, { externalId: SK, action: 'rotate' }),
+      desired(T_KEY, { name: 'demo-key' }, SK)
+    )
+    expect(ok1.ok).toBe(true)
+  })
+
+  it('rotation is idempotent: a marker key left by a stopped run is removed first, so the new key is never made twice', async () => {
+    const stale = `SK${'7'.repeat(30)}33`
+    const fresh = `SK${'f'.repeat(30)}09`
+    const { ctx, calls } = harness([
+      { method: 'GET', path: /\/Keys\/SK/, body: fx('key') },
+      {
+        method: 'GET',
+        path: /\/Keys\.json$/,
+        body: { keys: [{ sid: stale, friendly_name: 'demo-key (rotating)' }] }
+      },
+      { method: 'DELETE', path: new RegExp(`/Keys/${stale}`), status: 204 },
+      { method: 'POST', path: /\/Keys\.json$/, body: { ...fx('key-created'), sid: fresh } },
+      { method: 'DELETE', path: new RegExp(`/Keys/${SK}`), status: 204 },
+      { method: 'POST', path: /\/Keys\/SK/, body: {} }
+    ])
+    await twilioAdapter.apply(
+      ctx,
+      op(T_KEY, { externalId: SK, action: 'rotate' }),
+      desired(T_KEY, { name: 'demo-key' }, SK)
+    )
+    const order = calls
+      .filter((c) => c.method !== 'GET')
+      .map((c) => `${c.method} ${c.path.split('/').pop()}`)
+    expect(order[0]).toBe(`DELETE ${stale}.json`)
+    expect(calls.filter((c) => c.method === 'POST' && c.path.endsWith('/Keys.json'))).toHaveLength(
+      1
+    )
+  })
+
+  it('an app key with a subaccount is made inside that subaccount, and its id says so', async () => {
+    const { ctx, calls } = harness([
+      { method: 'GET', path: new RegExp(`/Accounts/${SUB}\\.json$`), body: fx('subaccount') },
+      { method: 'GET', path: /\/Keys\.json$/, body: { keys: [] } },
+      { method: 'POST', path: /\/Keys\.json$/, body: fx('key-created') }
+    ])
+    const res = await twilioAdapter.apply(
+      ctx,
+      op(T_KEY, { kind: 'create', externalId: null }),
+      desired(T_KEY, { name: 'demo-key', subaccount: { resourceId: 3 } }, null, { subaccount: SUB })
+    )
+    expect(calls.find((c) => c.method === 'POST')?.path).toBe(
+      `/2010-04-01/Accounts/${SUB}/Keys.json`
+    )
+    expect(res.externalId).toBe(`${SUB}/${SK}`)
+    expect(res.outputs).toMatchObject({ account_sid: SUB, sid: SK })
+    expect(res.observed?.fields.subaccount).toBe(SUB)
+  })
+
+  it('a subaccount that is not this connection’s own is refused (TWILIO_OUT_OF_ACCOUNT)', async () => {
+    const { ctx, calls } = harness([
+      {
+        method: 'GET',
+        path: new RegExp(`/Accounts/${SUB}\\.json$`),
+        body: { ...fx('subaccount'), owner_account_sid: OTHER_AC }
+      }
+    ])
+    await expect(
+      twilioAdapter.apply(
+        ctx,
+        op(T_KEY, { kind: 'create', externalId: null }),
+        desired(T_KEY, { name: 'demo-key', subaccount: { resourceId: 3 } }, null, {
+          subaccount: SUB
+        })
+      )
+    ).rejects.toMatchObject({ code: 'TWILIO_OUT_OF_ACCOUNT' })
+    expect(calls.filter((c) => c.method === 'POST')).toEqual([])
+  })
+
+  it('an app key with no subaccount is admin-only and the plan says why; with one it is not', () => {
+    const { ctx } = harness([])
+    const [bare] = twilioAdapter.plan(ctx, desired(T_KEY, { name: 'k' }), null)
+    expect(bare.data?.$adminOnly).toBe(true)
+    expect(bare.reason).toContain('main account')
+    expect(bare.reason).toContain('Hub administrator')
+    const [scoped] = twilioAdapter.plan(
+      ctx,
+      desired(T_KEY, { name: 'k', subaccount: { resourceId: 3 } }, null, { subaccount: null }),
+      null
+    )
+    expect(scoped.data?.$adminOnly).toBeUndefined()
+    const [del] = twilioAdapter.plan(ctx, null, {
+      type: T_KEY,
+      externalId: SK,
+      name: 'k',
+      fields: { name: 'k', subaccount: null },
+      tags: {}
+    })
+    expect(del.data?.$adminOnly).toBe(true)
   })
 
   it('the key the Hub signs in with is never rotated or deleted by the Hub', async () => {
@@ -910,6 +1051,7 @@ describe('twilio adapter: outputs', () => {
     ])
     expect(spec(T_KEY).outputs).toEqual([
       { key: 'sid', label: 'API key SID', secret: false },
+      { key: 'account_sid', label: 'Account SID (the key’s account)', secret: false },
       { key: 'secret', label: 'API key secret', secret: true, onceOnly: true }
     ])
     expect(spec(T_SERVICE).outputs?.map((o) => o.key)).toEqual(['messaging_service_sid'])
@@ -936,7 +1078,7 @@ describe('twilio adapter: outputs', () => {
       phone_number: '+15555550101',
       account_sid: AC
     })
-    expect(await twilioAdapter.readOutputs?.(ctx, T_KEY, SK)).toEqual({ sid: SK })
+    expect(await twilioAdapter.readOutputs?.(ctx, T_KEY, SK)).toEqual({ sid: SK, account_sid: AC })
     expect(await twilioAdapter.readOutputs?.(ctx, T_SERVICE, MG)).toEqual({
       messaging_service_sid: MG
     })
@@ -1135,5 +1277,204 @@ describe('twilio adapter: estimates and usage', () => {
     ])
     expect(calls[0].query.get('Category')).toBe('totalprice')
     expect(calls[0].query.get('StartDate')).toBe('2026-11-25')
+  })
+})
+
+describe('twilio adapter: toll-fraud guards on notify', () => {
+  const sender = (over: Partial<HubResourceRow> = {}): HubResourceRow =>
+    ({
+      id: 7,
+      connection_id: 1,
+      provider: 'twilio',
+      type: T_NUMBER,
+      external_id: PN,
+      name: 'demo-sms',
+      scope: 'app',
+      desired: { name: 'demo-sms', notify_numbers: ['+15555550142'] },
+      observed: observedNumber(),
+      ...over
+    }) as HubResourceRow
+  const crit = { kind: 'text' as const, title: 'T', body: 'B', severity: 'critical' as const }
+
+  it('the allowed list is a connection field, US and CA by default', () => {
+    const f = twilioAdapter.connection.fields.find((x) => x.key === 'sms_countries')
+    expect(f).toMatchObject({ default: 'US,CA' })
+    expect(
+      twilioAdapter.connection.validate?.({ accountSid: AC, sms_countries: 'US, de' }, {})
+    ).toEqual([])
+    expect(
+      twilioAdapter.connection.validate?.({ accountSid: AC, sms_countries: 'USA' }, {})
+    ).not.toEqual([])
+  })
+
+  it('plan refuses a number outside the allowed countries with COUNTRY_NOT_ALLOWED', () => {
+    const { ctx } = harness([])
+    const bad = (nums: string[]) =>
+      twilioAdapter.plan(
+        ctx,
+        desired(T_NUMBER, { name: 'n', phone_number: '+15555550101', notify_numbers: nums }),
+        null
+      )
+    expect(() => bad(['+447700900123'])).toThrow(/GB/)
+    try {
+      bad(['+447700900123'])
+    } catch (e) {
+      expect((e as ProviderError).code).toBe('COUNTRY_NOT_ALLOWED')
+    }
+    // A Caribbean +1 number is not the US: premium-rate fraud hides there.
+    expect(() => bad(['+18765550142'])).toThrow(/JM/)
+    // A number whose country the Hub cannot tell is refused too.
+    expect(() => bad(['+9995550142'])).toThrow(/cannot tell/)
+    expect(() => bad(['+16135550142'])).not.toThrow() // Canada
+    expect(() => bad(['+15555550142'])).not.toThrow()
+    expect(() => bad(['0155'])).toThrow(/written/)
+  })
+
+  it('the connection’s list widens it: GB is allowed once listed', () => {
+    const { ctx } = harness([], { sms_countries: 'US,CA,GB' })
+    expect(() =>
+      twilioAdapter.plan(
+        ctx,
+        desired(T_NUMBER, {
+          name: 'n',
+          phone_number: '+15555550101',
+          notify_numbers: ['+447700900123']
+        }),
+        null
+      )
+    ).not.toThrow()
+  })
+
+  it('notify refuses a stored number outside the list before any call', async () => {
+    const { ctx, calls } = harness([])
+    await expect(
+      twilioAdapter.notify?.(
+        ctx,
+        sender({ desired: { notify_numbers: ['+447700900123'] } as any }),
+        crit
+      )
+    ).rejects.toMatchObject({ code: 'COUNTRY_NOT_ALLOWED' })
+    expect(calls).toEqual([])
+  })
+
+  it('any change to notify_numbers (or critical_only) is an admin-only op; unchanged is not', () => {
+    const { ctx } = harness([])
+    const seen = observedNumber({ notify_numbers: ['+15555550142'], critical_only: true })
+    const same = twilioAdapter.plan(
+      ctx,
+      desired(T_NUMBER, { name: 'demo-sms', notify_numbers: ['+15555550142'] }, PN),
+      seen
+    )
+    expect(same).toEqual([])
+    const added = twilioAdapter.plan(
+      ctx,
+      desired(T_NUMBER, { name: 'demo-sms', notify_numbers: ['+15555550142', '+15555550143'] }, PN),
+      seen
+    )
+    expect(added).toHaveLength(1)
+    expect(added[0]).toMatchObject({ kind: 'update', data: { $adminOnly: true } })
+    expect(added[0].changes[0].field).toBe('notify_numbers')
+    expect(added[0].reason).toContain('Hub administrator')
+    const loud = twilioAdapter.plan(
+      ctx,
+      desired(
+        T_NUMBER,
+        { name: 'demo-sms', notify_numbers: ['+15555550142'], critical_only: false },
+        PN
+      ),
+      seen
+    )
+    expect(loud[0].data?.$adminOnly).toBe(true)
+    // Joined to a real change: still one op, now admin-only.
+    const both = twilioAdapter.plan(
+      ctx,
+      desired(T_NUMBER, { name: 'renamed', notify_numbers: ['+15555550199'] }, PN),
+      seen
+    )
+    expect(both).toHaveLength(1)
+    expect(both[0].changes.map((c) => c.field)).toEqual(['name', 'notify_numbers'])
+    expect(both[0].data?.$adminOnly).toBe(true)
+    // A rename alone is not.
+    const rename = twilioAdapter.plan(
+      ctx,
+      desired(T_NUMBER, { name: 'renamed', notify_numbers: ['+15555550142'] }, PN),
+      seen
+    )
+    expect(rename[0].data?.$adminOnly).toBeUndefined()
+    // Creating with recipients is admin-only too.
+    const [create] = twilioAdapter.plan(
+      ctx,
+      desired(T_NUMBER, {
+        name: 'n',
+        phone_number: '+15555550101',
+        notify_numbers: ['+15555550142']
+      }),
+      null
+    )
+    expect(create.data?.$adminOnly).toBe(true)
+  })
+
+  it('apply mirrors the notify settings into observed so the next plan sees them unchanged', async () => {
+    const { ctx } = harness([
+      { method: 'GET', path: /IncomingPhoneNumbers\/PN/, body: fx('number') }
+    ])
+    const res = await twilioAdapter.apply(
+      ctx,
+      op(T_NUMBER, {}),
+      desired(T_NUMBER, { name: 'demo-sms', notify_numbers: ['+15555550142'] }, PN)
+    )
+    expect(res.observed?.fields).toMatchObject({
+      notify_numbers: ['+15555550142'],
+      critical_only: true
+    })
+  })
+
+  it('at most 20 texts an hour per resource: the next is RATE_LIMITED, not retryable, nothing sent', async () => {
+    const { ctx, calls } = harness([
+      { method: 'POST', path: /Messages\.json$/, body: fx('message') }
+    ])
+    const two = sender({
+      id: 70,
+      desired: { notify_numbers: ['+15555550142', '+15555550143'] } as any
+    })
+    for (let i = 0; i < 10; i++) await twilioAdapter.notify?.(ctx, two, crit)
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(20)
+    const err = (await twilioAdapter.notify?.(ctx, two, crit).catch((e) => e)) as ProviderError
+    expect(err).toBeInstanceOf(ProviderError)
+    expect(err).toMatchObject({ code: 'RATE_LIMITED', retryable: false })
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(20)
+    // Another resource has its own allowance.
+    await twilioAdapter.notify?.(ctx, sender({ id: 8 }), crit)
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(21)
+  })
+
+  it('the hour rolls: sends older than an hour no longer count', async () => {
+    let now = new Date('2026-11-26T12:00:00Z')
+    const calls: number[] = []
+    const ctx = makeProviderContext({
+      adapter: twilioAdapter,
+      connectionId: 41,
+      config: { accountSid: AC },
+      secrets: { secret: SECRET },
+      now: () => now,
+      fetch: {
+        fetchImpl: (async () => {
+          calls.push(1)
+          return new Response(JSON.stringify(fx('message')), { status: 200 })
+        }) as any,
+        timeoutMs: 500
+      }
+    })
+    const ten = sender({
+      desired: { notify_numbers: Array.from({ length: 10 }, (_, i) => `+1555555010${i}`) } as any
+    })
+    await twilioAdapter.notify?.(ctx, ten, crit)
+    await twilioAdapter.notify?.(ctx, ten, crit)
+    await expect(twilioAdapter.notify?.(ctx, ten, crit)).rejects.toMatchObject({
+      code: 'RATE_LIMITED'
+    })
+    now = new Date('2026-11-26T13:01:00Z')
+    await twilioAdapter.notify?.(ctx, ten, crit)
+    expect(calls).toHaveLength(30)
   })
 })
