@@ -20,6 +20,11 @@ import { ConnectionPicker } from '../providers/ResourcePickers'
  * change engine — a Vercel project, an Auth0 application (its sign-in addresses default to the
  * environment's), a Route 53 record, an RDS instance. Each part is one type, one connection and
  * that type's fields, drawn from the provider's own FieldSpec like the Resources form.
+ *
+ * Task 33 adds an Entra app registration (it and its client secret become the stack's sign-in),
+ * a managed Redis (Upstash or Redis Cloud: the stack's REDIS_URL), a Sentry project and an
+ * Anthropic workspace. The stack-bound ones follow the API's rule (create/provider-parts.ts
+ * `partsProblem`): Docker only, one Entra and one Redis per environment, Redis set to external.
  */
 
 export const PART_TYPES = [
@@ -27,6 +32,11 @@ export const PART_TYPES = [
   'auth0.application',
   'aws.route53_record',
   'aws.rds_instance',
+  'entra.app_registration',
+  'upstash.redis_database',
+  'redis-cloud.database',
+  'sentry.project',
+  'anthropic.workspace',
   'livekit.api_key',
   'acme.certificate'
 ] as const
@@ -38,6 +48,11 @@ const PART_WORDS: Record<PartType, string> = {
   'auth0.application': 'Auth0 application',
   'aws.route53_record': 'Route 53 record',
   'aws.rds_instance': 'RDS instance',
+  'entra.app_registration': 'Entra app registration (sign-in)',
+  'upstash.redis_database': 'Upstash Redis',
+  'redis-cloud.database': 'Redis Cloud database',
+  'sentry.project': 'Sentry project',
+  'anthropic.workspace': 'Anthropic workspace',
   'livekit.api_key': 'LiveKit key',
   'acme.certificate': 'TLS certificate (ACME)'
 }
@@ -49,10 +64,72 @@ const PART_HINT: Record<PartType, string> = {
   'aws.route53_record': 'A DNS record in a hosted zone the Hub manages.',
   'aws.rds_instance':
     'The instance only. Once it is available, link it as a database server on the Databases tab.',
+  'entra.app_registration':
+    'The Hub makes the registration and a client secret and puts them in this environment’s stack (OIDC_CLIENT_ID, OIDC_CLIENT_SECRET). Sign-in and logout addresses default to this environment’s address.',
+  'upstash.redis_database':
+    'Its address, password included, becomes this environment’s REDIS_URL (a stack secret).',
+  'redis-cloud.database':
+    'Its address, password included, becomes this environment’s REDIS_URL (a stack secret).',
+  'sentry.project': 'Each promotion of this environment records a release on it.',
+  'anthropic.workspace': 'A workspace for this environment’s AI use.',
   'livekit.api_key':
     'Paste a key pair from LiveKit Cloud. The app’s huddle settings are filled from it once the app answers.',
   'acme.certificate':
     'Only on a Docker driver whose DNS names are made by hand. The names default to this environment’s address.'
+}
+
+export const ENTRA_PART: PartType = 'entra.app_registration'
+/** Parts whose outputs are written to the environment's Docker stack (API STACK_BOUND_TYPES). */
+export const STACK_BOUND: readonly PartType[] = [
+  'entra.app_registration',
+  'upstash.redis_database',
+  'redis-cloud.database'
+]
+export const REDIS_PARTS: readonly PartType[] = ['upstash.redis_database', 'redis-cloud.database']
+
+/**
+ * What the Hub would refuse about one environment's parts together (the API's `partsProblem`,
+ * same order, same words), or null. `kind` is the creation kind, `stackRedis` the stack's Redis.
+ */
+export function envPartsProblem(
+  parts: Array<Pick<PartDraft, 'type'>>,
+  o: { kind: string; stackRedis: string | null }
+): string | null {
+  const types = parts.map((p) => p.type).filter((t): t is PartType => !!t)
+  if (types.some((t) => STACK_BOUND.includes(t)) && o.kind !== 'docker')
+    return 'An Entra app registration or a managed Redis is bound to the environment’s stack: pick a Docker driver to use one.'
+  if (types.filter((t) => t === ENTRA_PART).length > 1)
+    return 'One Entra app registration per environment.'
+  const redis = types.filter((t) => REDIS_PARTS.includes(t))
+  if (redis.length > 1) return 'One managed Redis per environment.'
+  if (redis.length && o.stackRedis !== 'external')
+    return 'A managed Redis needs the stack’s Redis set to external (the Hub fills REDIS_URL).'
+  return null
+}
+
+/** Whether an environment's parts make its sign-in (an Entra part that would be sent). */
+export const makesSignin = (parts: PartDraft[]) =>
+  parts.some((p) => p.type === ENTRA_PART && !!p.connectionId)
+
+/**
+ * Create app's sign-in rule (the API's in create/plan.ts): sign-in may be left out on a shared
+ * deployment (the deployment's own registration), and on a Docker creation whose EVERY
+ * environment makes an Entra app registration (the Hub makes each one and puts it in the stack).
+ * Left out = all three fields empty; anything typed is sent and checked in full.
+ */
+export function signinRule(o: {
+  kind: string
+  envParts: PartDraft[][]
+  issuer: string
+  clientId: string
+  clientSecret: string
+}) {
+  const entraEnvs = o.kind === 'docker' ? o.envParts.filter(makesSignin).length : 0
+  const entraEverywhere =
+    o.kind === 'docker' && o.envParts.length > 0 && entraEnvs === o.envParts.length
+  const optional = o.kind === 'shared' || entraEverywhere
+  const empty = !o.issuer.trim() && !o.clientId.trim() && !o.clientSecret
+  return { entraEnvs, entraEverywhere, optional, omitSignin: optional && empty }
 }
 
 export interface PartDraft {
@@ -114,18 +191,27 @@ export function ProviderPartsEditor({
   envKey,
   parts,
   onChange,
-  tried
+  tried,
+  kind,
+  stackRedis
 }: {
   idPrefix: string
   envKey: string
   parts: PartDraft[]
   onChange: (next: PartDraft[]) => void
   tried: boolean
+  /** The creation kind: stack-bound parts are offered on a Docker creation only. */
+  kind: string
+  /** The Docker stack's Redis (bundled | external); null off Docker. */
+  stackRedis: string | null
 }) {
   const types = useQuery({ queryKey: providerKeys.types(), queryFn: fetchProviderTypes })
   const set = (uid: string, patch: Partial<PartDraft>) =>
     onChange(parts.map((p) => (p.uid === uid ? { ...p, ...patch } : p)))
-  const offered = PART_TYPES.filter((t) => partTypeInfo(types.data, t))
+  const offered = PART_TYPES.filter(
+    (t) => partTypeInfo(types.data, t) && (kind === 'docker' || !STACK_BOUND.includes(t))
+  )
+  const together = envPartsProblem(parts, { kind, stackRedis })
   return (
     <div className='space-y-2 sm:col-span-2'>
       <div>
@@ -165,7 +251,12 @@ export function ProviderPartsEditor({
                       values: ti ? valuesOf(ti.fields, null) : {}
                     })
                   }}
-                  options={offered.map((t) => ({ value: t, label: PART_WORDS[t] }))}
+                  options={[
+                    ...offered,
+                    // A pick the kind no longer offers (Entra, then a GitLab target) stays shown:
+                    // the line under the parts says why it cannot be sent.
+                    ...(p.type && !offered.includes(p.type) ? [p.type] : [])
+                  ].map((t) => ({ value: t, label: PART_WORDS[t] }))}
                   placeholder={types.isPending ? 'Loading…' : 'What to make'}
                   empty='No provider for these parts is registered on this Hub.'
                 />
@@ -224,6 +315,11 @@ export function ProviderPartsEditor({
           </div>
         )
       })}
+      {together && (
+        <p role='alert' className='m-0 text-[11px] text-red-600 dark:text-red-400'>
+          {together}
+        </p>
+      )}
       {parts.length < MAX_PARTS && (
         <button
           type='button'

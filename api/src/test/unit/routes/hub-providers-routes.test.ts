@@ -280,6 +280,8 @@ describe('provider types', () => {
       'tax_percent'
     ])
     expect(demo.types[0]).toMatchObject({ key: 'demo.thing', scope: 'app', reversible: true })
+    // Task 33b: who an email sender mails is shown on the notify routes screens.
+    expect(demo.types[0].audience).toBeNull()
     expect(JSON.stringify(data)).not.toContain(SECRET)
     expect(JSON.stringify(data)).not.toContain('zz-conn-org-7f3')
   })

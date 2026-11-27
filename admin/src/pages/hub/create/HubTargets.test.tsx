@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -27,6 +29,12 @@ const { HubTargets, githubTargetDraftErrors, hostnameErrors, targetDraftErrors }
   './HubTargets'
 )
 const { syncSummary, TEMPLATE_REF_RE } = await import('./create-api')
+// Task 33b: the DNS mode picker on Docker drivers and targets offers every mode the API accepts.
+const { DNS_MODES, dnsModeOf, dnsModeOptions, MANAGED_DNS, withDnsMode, zoneBody, zoneFieldWords } =
+  await import('../dns-modes')
+const { dockerConfigBody, dockerDraftErrors, dockerDraftOf, EMPTY_DOCKER_DRAFT } = await import(
+  '../docker/docker-api'
+)
 
 const target = {
   id: 3,
@@ -250,5 +258,74 @@ describe('target rules', () => {
 
   it('syncSummary is null when no app was made on the target', () => {
     expect(syncSummary({ sync: [] })).toBeNull()
+  })
+})
+
+const API = join(import.meta.dirname, '../../../../../api/src/services/hub/create/dns.ts')
+
+describe('DNS modes', () => {
+  it('match the API: every mode, and each managed one with its zone type', () => {
+    const src = readFileSync(API, 'utf8')
+    const line = src.slice(
+      src.indexOf('export const DNS_MODES'),
+      src.indexOf('\n', src.indexOf('export const DNS_MODES'))
+    )
+    const api = [...line.matchAll(/'([a-z0-9]+)'/g)].map((m) => m[1])
+    expect([...DNS_MODES].sort()).toEqual([...api].sort())
+    for (const [mode, info] of Object.entries(MANAGED_DNS))
+      expect(src).toMatch(new RegExp(`${mode}: \\{ zone: '${info.zoneType.replace('.', '\\.')}'`))
+  })
+
+  it('the picker lists every mode; a managed one is named by its provider', () => {
+    const opts = dnsModeOptions({ automatic: 'Automatic', manual: 'By hand' })
+    expect(opts.map((o) => o.value)).toEqual(['automatic', 'route53', 'cloudflare', 'manual'])
+    expect(opts.find((o) => o.value === 'cloudflare')?.label).toBe(
+      'Cloudflare (the Hub adds each name)'
+    )
+  })
+
+  it('a zone picked for one provider never carries to another', () => {
+    const d = { dns_mode: 'route53' as const, dns_zone_resource_id: 7 }
+    expect(withDnsMode(d, 'cloudflare')).toEqual({
+      dns_mode: 'cloudflare',
+      dns_zone_resource_id: null
+    })
+    expect(withDnsMode(d, 'route53')).toEqual({ dns_mode: 'route53' })
+    expect(zoneBody({ dns_mode: 'cloudflare', dns_zone_resource_id: 9 })).toEqual({
+      dns_zone_resource_id: 9
+    })
+    expect(zoneBody({ dns_mode: 'automatic', dns_zone_resource_id: 9 })).toEqual({})
+    expect(dnsModeOf('cloudflare')).toBe('cloudflare')
+    expect(dnsModeOf('bogus')).toBe('automatic')
+  })
+
+  it('a Docker driver in Cloudflare mode needs its zone and sends it', () => {
+    const d = {
+      ...EMPTY_DOCKER_DRAFT,
+      agent_url: 'https://swarm.example.com:8443',
+      dns_mode: 'cloudflare' as const,
+      wildcard_domain: 'apps.example.com',
+      edge_target: 'edge.example.com'
+    }
+    expect(dockerDraftErrors(d).dns_zone_resource_id).toBe(zoneFieldWords('cloudflare').missing)
+    const body = dockerConfigBody({ ...d, dns_zone_resource_id: 12 })
+    expect(body).toMatchObject({ dns_mode: 'cloudflare', dns_zone_resource_id: 12 })
+    expect(
+      dockerDraftOf({ dns_mode: 'cloudflare', dns_zone_resource_id: 12 } as never)
+    ).toMatchObject({ dns_mode: 'cloudflare', dns_zone_resource_id: 12 })
+  })
+
+  it('a target in Cloudflare mode needs a zone and the edge address', () => {
+    const e = hostnameErrors({
+      dns_mode: 'cloudflare',
+      dns_zone_resource_id: null,
+      wildcard_domain: 'apps.example.com',
+      edge_address: '',
+      scheme: 'https',
+      port: '',
+      cert_note: ''
+    })
+    expect(e.dns_zone_resource_id).toBe('Pick the Cloudflare zone the names go in')
+    expect(e.edge_address).toMatch(/^Cloudflare records point at the edge/)
   })
 })

@@ -39,6 +39,10 @@ const SOURCES = [
   'services/hub/create/provider-step.ts',
   'services/hub/create/github-steps.ts',
   'services/hub/create/github-target.ts',
+  // Task 33 (Wave 2 hooks)
+  'services/hub/create/provider-parts.ts',
+  'services/hub/create/dns.ts',
+  'services/hub/create/dns-route53.ts',
   'services/hub/secrets.ts',
   'services/hub/gitlab-write.ts',
   'services/hub/db/databases.ts',

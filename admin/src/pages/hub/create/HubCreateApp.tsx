@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { withoutSecrets } from '../costs/cost-api'
 import { CreateEstimateCard } from '../costs/StackEstimate'
 import { dbKeys, ENGINE_LABEL, STATUS_LABEL, useDatabases, useDbServers } from '../databases/db-api'
+import { isManagedDns, MANAGED_DNS } from '../dns-modes'
 import { fetchDrivers, HUB_MASK, hubKeys } from '../hub-api'
 import {
   CopyButton,
@@ -46,11 +47,13 @@ import {
   VERSION_RE
 } from './create-api'
 import {
+  envPartsProblem,
   type PartDraft,
   ProviderPartsEditor,
   partProblems,
   partsPayload,
-  partTypeInfo
+  partTypeInfo,
+  signinRule
 } from './ProviderParts'
 
 /** A control character (what the planner refuses in a secret). */
@@ -237,7 +240,13 @@ export function HubCreateApp({
     if (kind === 'github') return { kind, id: Number(targetId) || 0 }
     return { kind: 'gitlab', id: Number(targetId) || 0 }
   }, [kind, driverId, sharedId, targetId, size, redis, settingsMap, secrets, pinsMap, poolMax])
-  const sharedSignin = kind === 'shared' && !issuer.trim() && !clientId.trim() && !clientSecret
+  const { entraEnvs, entraEverywhere, omitSignin } = signinRule({
+    kind,
+    envParts: envs.map((e) => e.parts),
+    issuer,
+    clientId,
+    clientSecret
+  })
   // The estimate's body: where it runs and the provider parts — no sign-in secret, no stack
   // secrets, every provider secret reduced to "set" (an estimate never carries a secret).
   const estimateBody = useMemo(() => {
@@ -292,7 +301,7 @@ export function HubCreateApp({
       ...(kind !== 'shared' && Number(templateId) && keepAdmin.length
         ? { keep_admin_roles: keepAdmin }
         : {}),
-      ...(sharedSignin
+      ...(omitSignin
         ? {}
         : {
             signin: {
@@ -345,7 +354,7 @@ export function HubCreateApp({
       envs,
       manual,
       kind,
-      sharedSignin,
+      omitSignin,
       extensionsText,
       providerTypes.data,
       targetId
@@ -468,9 +477,10 @@ export function HubCreateApp({
     parts: envs.map(
       (e) =>
         kind !== 'shared' &&
-        e.parts.some(
+        (e.parts.some(
           (pt) => Object.keys(partProblems(pt, partTypeInfo(providerTypes.data, pt.type))).length
-        )
+        ) ||
+          !!envPartsProblem(e.parts, { kind, stackRedis: kind === 'docker' ? redis : null }))
     ),
     // The preview never sees the secret, so the form checks what the planner would.
     secret:
@@ -548,7 +558,7 @@ export function HubCreateApp({
     { value: '', label: 'Pick a target' },
     ...kindTargets.map((t) => ({
       value: String(t.id),
-      label: `${t.name} · ${isGithubTarget(t) ? t.config.template : t.config.namespace}${t.config.dns_mode === 'manual' ? ' · names by hand' : t.config.dns_mode === 'route53' ? ' · Route 53' : ''}`
+      label: `${t.name} · ${isGithubTarget(t) ? t.config.template : t.config.namespace}${t.config.dns_mode === 'manual' ? ' · names by hand' : isManagedDns(t.config.dns_mode) ? ` · ${MANAGED_DNS[t.config.dns_mode].label}` : ''}`
     }))
   ]
   const pickedTemplate = templates.data?.find((t) => String(t.id) === templateId) ?? null
@@ -685,8 +695,8 @@ export function HubCreateApp({
                     : target
                       ? target.config.dns_mode === 'manual'
                         ? 'Hostnames are requested by hand on this target.'
-                        : target.config.dns_mode === 'route53'
-                          ? `The Hub adds each name under ${target.config.wildcard_domain} to Route 53.`
+                        : isManagedDns(target.config.dns_mode)
+                          ? `The Hub adds each name under ${target.config.wildcard_domain} to ${MANAGED_DNS[target.config.dns_mode].label}.`
                           : `Hostnames are made under ${target.config.wildcard_domain}.`
                       : kind === 'github'
                         ? 'Where the repository is made and which workflow deploys it.'
@@ -1009,7 +1019,11 @@ export function HubCreateApp({
           description={
             kind === 'shared'
               ? 'Optional: an app on a shared deployment signs in with the deployment’s own app registration. Fill this in to keep the app’s own registration for a later move.'
-              : 'The Microsoft Entra app registration people sign in with.'
+              : entraEverywhere
+                ? 'Optional: every environment has an Entra app registration part, so the Hub makes each environment’s sign-in and puts it in its stack. Leave these empty, or fill them in to keep an existing registration on the app.'
+                : entraEnvs > 0
+                  ? `The Microsoft Entra app registration people sign in with. Needed while an environment has no Entra app registration part (${entraEnvs} of ${envs.length} have one).`
+                  : 'The Microsoft Entra app registration people sign in with.'
           }
         >
           <div className='grid grid-cols-1 gap-3 p-4 sm:grid-cols-2'>
@@ -1235,6 +1249,8 @@ export function HubCreateApp({
                         parts={e.parts}
                         onChange={(parts) => setEnv(i, { parts })}
                         tried={false}
+                        kind={kind}
+                        stackRedis={kind === 'docker' ? redis : null}
                       />
                     )}
                     {manual ? null : auto ? (

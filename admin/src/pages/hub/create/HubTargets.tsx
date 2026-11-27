@@ -10,6 +10,17 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+import {
+  type DnsMode,
+  dnsModeOf,
+  dnsModeOptions,
+  isManagedDns,
+  MANAGED_DNS,
+  managedDnsHint,
+  withDnsMode,
+  zoneBody,
+  zoneFieldWords
+} from '../dns-modes'
 import { HUB_MASK } from '../hub-api'
 import {
   dangerArmed,
@@ -153,6 +164,10 @@ const DNS_CHIP: Record<string, { label: string; tip: string }> = {
     label: 'Route 53',
     tip: 'The Hub adds each name to a Route 53 hosted zone it manages'
   },
+  cloudflare: {
+    label: 'Cloudflare',
+    tip: 'The Hub adds each name to a Cloudflare zone it manages'
+  },
   manual: { label: 'Names by hand', tip: 'Each hostname is requested by hand' }
 }
 
@@ -242,7 +257,7 @@ function draftOf(t: HubTarget | null): Draft {
     deploy_host: c.deploy_host ?? '',
     manager_known_hosts: c.manager_known_hosts ?? '',
     proxy_network: c.proxy_network ?? 'proxy',
-    dns_mode: c.dns_mode ?? 'automatic',
+    dns_mode: dnsModeOf(c.dns_mode),
     dns_zone_resource_id: c.dns_zone_resource_id ?? null,
     wildcard_domain: c.wildcard_domain ?? '',
     edge_address: c.edge_address ?? '',
@@ -271,8 +286,6 @@ export function targetDraftErrors(d: Draft): Partial<Record<keyof Draft, string>
   return e
 }
 
-type DnsMode = 'automatic' | 'manual' | 'route53'
-
 /** What both target kinds say about hostnames. */
 interface HostnameDraft {
   dns_mode: DnsMode
@@ -288,10 +301,10 @@ export function hostnameErrors(d: HostnameDraft): Partial<Record<keyof HostnameD
   const e: Partial<Record<keyof HostnameDraft, string>> = {}
   if (d.dns_mode !== 'manual' && !d.wildcard_domain.trim())
     e.wildcard_domain = 'Automatic names need a wildcard domain like apps.example.com'
-  if (d.dns_mode === 'route53' && !d.dns_zone_resource_id)
-    e.dns_zone_resource_id = 'Pick the Route 53 hosted zone the names go in'
-  if (d.dns_mode === 'route53' && !d.edge_address.trim())
-    e.edge_address = 'Route 53 records point at the edge: its address or name'
+  if (isManagedDns(d.dns_mode) && !d.dns_zone_resource_id)
+    e.dns_zone_resource_id = zoneFieldWords(d.dns_mode).missing
+  if (isManagedDns(d.dns_mode) && !d.edge_address.trim())
+    e.edge_address = `${MANAGED_DNS[d.dns_mode].label} records point at the edge: its address or name`
   const port = d.port.trim()
   if (port && !(/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535))
     e.port = 'A port from 1 to 65535, or leave empty'
@@ -303,7 +316,7 @@ const hostnameBody = (d: HostnameDraft) => {
   const opt = (v: string) => (v.trim() ? v.trim() : null)
   return {
     dns_mode: d.dns_mode,
-    ...(d.dns_mode === 'route53' ? { dns_zone_resource_id: d.dns_zone_resource_id } : {}),
+    ...zoneBody(d),
     wildcard_domain: opt(d.wildcard_domain),
     edge_address: opt(d.edge_address),
     scheme: d.scheme,
@@ -312,11 +325,10 @@ const hostnameBody = (d: HostnameDraft) => {
   }
 }
 
-const DNS_OPTIONS = [
-  { value: 'automatic', label: 'Automatic (wildcard domain)' },
-  { value: 'route53', label: 'Route 53 (the Hub adds each name)' },
-  { value: 'manual', label: 'By hand (a ticket per name)' }
-]
+const DNS_OPTIONS = dnsModeOptions({
+  automatic: 'Automatic (wildcard domain)',
+  manual: 'By hand (a ticket per name)'
+})
 const TRAEFIK_OPTIONS = [
   { value: '3', label: 'Traefik 3 (swarm provider)' },
   { value: '2', label: 'Traefik 2 (docker provider)' }
@@ -700,35 +712,32 @@ function HostnamesGroup<D extends HostnameDraft>({
       <Field
         id={id('dns')}
         label='How names are made'
-        hint={
-          d.dns_mode === 'route53'
-            ? 'Each new name gets a record in a Route 53 zone the Hub manages, pointing at the edge.'
-            : undefined
-        }
+        hint={isManagedDns(d.dns_mode) ? managedDnsHint(d.dns_mode) : undefined}
       >
         <SimpleSelect
           value={d.dns_mode}
-          onChange={(v) => set({ dns_mode: v as DnsMode } as Partial<D>)}
+          onChange={(v) => set(withDnsMode(d, v as DnsMode))}
           options={DNS_OPTIONS}
           ariaLabel='How names are made'
           className='h-8 text-left text-[13px]'
           triggerProps={{ id: id('dns') }}
         />
       </Field>
-      {d.dns_mode === 'route53' && (
+      {isManagedDns(d.dns_mode) && (
         <Field
           id={id('zone')}
-          label='Hosted zone'
-          hint='A shared Route 53 zone the Hub manages; it must cover the wildcard domain.'
+          label={zoneFieldWords(d.dns_mode).label}
+          hint={zoneFieldWords(d.dns_mode).hint}
           error={err('dns_zone_resource_id')}
         >
           <ManagedResourcePicker
+            key={d.dns_mode}
             id={id('zone')}
-            type='aws.route53_zone'
+            type={MANAGED_DNS[d.dns_mode].zoneType}
             filter={{ scope: 'shared' }}
             value={d.dns_zone_resource_id}
             onChange={(v) => set({ dns_zone_resource_id: v } as Partial<D>)}
-            placeholder='Pick a hosted zone'
+            placeholder={zoneFieldWords(d.dns_mode).placeholder}
           />
         </Field>
       )}
@@ -754,7 +763,7 @@ function HostnamesGroup<D extends HostnameDraft>({
         id={id('edge')}
         label='Edge address'
         hint={
-          d.dns_mode === 'route53'
+          isManagedDns(d.dns_mode)
             ? 'What each record points at: an address makes an A or AAAA record, a name a CNAME.'
             : 'Where the names point (shown in the DNS ticket).'
         }
@@ -860,7 +869,7 @@ function githubDraftOf(t: HubGithubTarget | null): GithubDraft {
     visibility: c.visibility ?? 'private',
     deploy_workflow: c.deploy_workflow ?? 'deploy.yml',
     source_branch: c.source_branch ?? 'main',
-    dns_mode: c.dns_mode ?? 'automatic',
+    dns_mode: dnsModeOf(c.dns_mode),
     dns_zone_resource_id: c.dns_zone_resource_id ?? null,
     wildcard_domain: c.wildcard_domain ?? '',
     edge_address: c.edge_address ?? '',

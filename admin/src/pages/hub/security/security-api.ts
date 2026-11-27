@@ -302,6 +302,8 @@ export const fetchVulns = () =>
     last_scan: LastScan | null
     images: PinnedImage[]
     findings: Finding[]
+    /** Task 33: managed Amazon ECR repositories (source `ecr`) — see source-findings.ts. */
+    repositories?: unknown[]
     /** Task 43: Snyk projects per connection (Hub administrators; empty for owners). */
     snyk?: SnykConnectionFindings[]
   }>(api.get('/hub/security/vulnerabilities'))

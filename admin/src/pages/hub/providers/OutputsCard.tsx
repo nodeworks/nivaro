@@ -41,7 +41,10 @@ export function OutputsCard({
 }: {
   resource: HubResource
   type: ResourceTypeInfo
-  /** The environments this resource may feed (its app's; every app's for a shared one). */
+  /**
+   * The environments this resource may feed (its app's; every app's for a shared one, keyed
+   * "<app> · <environment>" so the pickers and rows say which app).
+   */
   environments: Array<Pick<HubEnvironment, 'id' | 'key'>>
   canDeploy: boolean
   idPrefix: string
@@ -138,6 +141,7 @@ export function OutputsCard({
                   <BindingLine
                     key={b.id}
                     binding={b}
+                    envName={environments.find((e) => e.id === b.environment_id)?.key ?? null}
                     outputLabel={labelOf(b.output_key)}
                     canDeploy={canDeploy}
                     busy={save.isPending}
@@ -269,12 +273,15 @@ function OutputLine({
 
 function BindingLine({
   binding: b,
+  envName,
   outputLabel,
   canDeploy,
   busy,
   onRemove
 }: {
   binding: BindingView
+  /** The environment as the card names it ("Orders · staging" for a shared resource). */
+  envName: string | null
   outputLabel: string
   canDeploy: boolean
   busy: boolean
@@ -321,7 +328,7 @@ function BindingLine({
         <span className='font-medium text-slate-800 dark:text-foreground'>{outputLabel}</span>
         <ArrowRight className='h-3 w-3 shrink-0 text-slate-400' aria-hidden />
         <span className='text-slate-600 dark:text-slate-300'>
-          {b.environment_key ?? `#${b.environment_id}`}
+          {envName ?? b.environment_key ?? `#${b.environment_id}`}
         </span>
         <span className='text-slate-400'>·</span>
         <span className='text-slate-600 dark:text-slate-300'>{TARGET_LABEL[b.target]}</span>

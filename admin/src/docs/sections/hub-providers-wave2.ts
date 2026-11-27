@@ -81,7 +81,7 @@ export const hubProvidersOutputsDocs: DocSection = {
     { type: 'h2', id: 'hub-providers-outputs-bindings', text: 'Bindings: where an output goes' },
     {
       type: 'p',
-      text: 'On a resource row with outputs, the key button opens the outputs card. **Where they go** lists the bindings; **Bind** takes an output, an environment and a destination. A binding is written when the output is made or changes, and again when it is rotated. It never applies anything by itself.'
+      text: 'On a resource row with outputs, the key button opens the outputs card. **Where they go** lists the bindings; **Bind** takes an output, an environment and a destination. A binding is written when the output is made or changes, and again when it is rotated. It never applies anything by itself. Shared resources on the Shared infra tab have the same key button; their card offers every app’s environments, named “<app> · <environment>”.'
     },
     {
       type: 'table',
