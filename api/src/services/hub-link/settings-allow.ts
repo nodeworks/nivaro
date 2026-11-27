@@ -33,6 +33,28 @@ export function appSettingAllowed(key: string): boolean {
   return APP_SETTING_KEYS.includes(key) || APP_SETTING_PATTERNS.some((re) => re.test(key))
 }
 
+/**
+ * The allowed app settings that hold a credential: a secret output may land only in one of these
+ * (the app stores them masked). A secret output bound to any other allowed key is refused
+ * SECRET_TO_PLAIN, as a stack setting is.
+ */
+const APP_SECRET_SETTING_KEYS: readonly string[] = [
+  'smtp_pass',
+  'sms_auth_token',
+  'anthropic_api_key',
+  'huddle_livekit_key',
+  'huddle_livekit_secret',
+  'ai_gateway_client_secret'
+]
+
+/** Whether this allowed app setting holds a credential. Pure. */
+export function appSettingIsSecret(key: string): boolean {
+  return (
+    APP_SECRET_SETTING_KEYS.includes(key) ||
+    (/^ai_gateway_/.test(key) && /(secret|password|_key$|api_key)/.test(key))
+  )
+}
+
 /** The AI gateway columns a form offers by name (any other `ai_gateway_*` column binds too). */
 const AI_GATEWAY_KEYS = [
   'ai_gateway_base_url',

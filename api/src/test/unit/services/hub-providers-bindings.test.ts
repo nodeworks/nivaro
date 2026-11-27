@@ -499,6 +499,25 @@ describe('bindings', () => {
     ).rejects.toMatchObject({ code: 'SECRET_TO_PLAIN' })
   })
 
+  it('a secret output lands only in a credential app setting', async () => {
+    const { bindingShapeProblem } = await import(
+      '../../../services/hub/providers/engine/bindings.js'
+    )
+    const secret = { key: 'password', label: 'Password', secret: true }
+    const plain = { key: 'host', label: 'Host', secret: false }
+    const b = (target_key: string) => ({
+      output_key: 'password',
+      environment_id: devEnv,
+      target: 'app_setting' as const,
+      target_key
+    })
+    expect(bindingShapeProblem(secret, b('smtp_pass'))).toBeNull()
+    expect(bindingShapeProblem(secret, b('ai_gateway_client_secret'))).toBeNull()
+    expect(bindingShapeProblem(secret, b('smtp_host'))).toMatch(/^SECRET_TO_PLAIN/)
+    expect(bindingShapeProblem(secret, b('ai_gateway_base_url'))).toMatch(/^SECRET_TO_PLAIN/)
+    expect(bindingShapeProblem({ ...plain }, { ...b('smtp_host'), output_key: 'host' })).toBeNull()
+  })
+
   it('app_setting outside allow-list → SETTING_NOT_ALLOWED', async () => {
     const row = await created()
     await expect(

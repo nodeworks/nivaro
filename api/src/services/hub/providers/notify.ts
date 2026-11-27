@@ -301,9 +301,14 @@ export async function mayEditRoute(
 ): Promise<boolean> {
   if (actor.isAdmin) return true
   if (route.scope !== 'app' || route.app_id == null) return false
-  return !!(await db('nivaro_hub_app_owners')
+  const own = await db('nivaro_hub_app_owners')
     .where({ app_id: route.app_id, user_id: actor.id })
-    .first('id'))
+    .first('id')
+  if (!own) return false
+  // Same rule as making one: an owner's route sends through a resource of their own app only
+  // (an administrator may have pointed an app route at a shared sender — that stays theirs).
+  const res = await readResource(route.resource_id)
+  return !!res && res.scope === 'app' && res.app_id === route.app_id
 }
 
 export async function updateNotifyRoute(

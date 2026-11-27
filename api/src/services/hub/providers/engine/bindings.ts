@@ -1,7 +1,7 @@
 import { db } from '../../../../db/index.js'
 import { runInBackgroundPool } from '../../../../db/pool-context.js'
 import { logActivity } from '../../../activity.js'
-import { appSettingAllowed } from '../../../hub-link/settings-allow.js'
+import { appSettingAllowed, appSettingIsSecret } from '../../../hub-link/settings-allow.js'
 import { getApp } from '../../../io-holder.js'
 import { GENERATED_SECRET_KEYS } from '../../docker/stack-settings.js'
 import { envPolicy } from '../../owner-access.js'
@@ -284,6 +284,8 @@ export function bindingShapeProblem(spec: OutputSpec | undefined, b: BindingInpu
   if (b.target === 'app_setting') {
     if (!appSettingAllowed(b.target_key))
       return `SETTING_NOT_ALLOWED: the Hub may not set ${b.target_key} on an app.`
+    if (spec.secret && !appSettingIsSecret(b.target_key))
+      return `SECRET_TO_PLAIN: ${spec.label} is a secret; bind it to a credential setting (${b.target_key} is shown in plain).`
     return null
   }
   if (!ENV_KEY_RE.test(b.target_key))

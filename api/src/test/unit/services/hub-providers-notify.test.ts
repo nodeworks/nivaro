@@ -235,6 +235,22 @@ describe('notify', () => {
     expect(row?.last_error).not.toContain(SECRET)
   })
 
+  it('an owner may not test or delete an app route an admin pointed at a shared sender', async () => {
+    const shared = await channel('shared-sender', null)
+    const mine = await channel('owner-sender', app1)
+    const adminRoute = await notify.createNotifyRoute(
+      { scope: 'app', appId: app1, events: ['deploy.failed'], resourceId: shared },
+      ADMIN
+    )
+    const ownRoute = await notify.createNotifyRoute(
+      { scope: 'app', appId: app1, events: ['deploy.failed'], resourceId: mine },
+      OWNER
+    )
+    expect(await notify.mayEditRoute(adminRoute, OWNER)).toBe(false)
+    expect(await notify.mayEditRoute(adminRoute, ADMIN)).toBe(true)
+    expect(await notify.mayEditRoute(ownRoute, OWNER)).toBe(true)
+  })
+
   it('slow sender does not delay deploy finish', async () => {
     const r = await channel('slow', null)
     await notify.createNotifyRoute(
