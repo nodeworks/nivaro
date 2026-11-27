@@ -66,6 +66,7 @@ export * from './sections/hub-providers-entra.js'
 export * from './sections/hub-providers-gitlab.js'
 export * from './sections/hub-providers-redis.js'
 export * from './sections/hub-providers-teams.js'
+export * from './sections/hub-providers-twilio.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
 export * from './sections/hub-security.js'
@@ -391,6 +392,7 @@ import {
 import { hubProvidersSendgridDocs } from './sections/hub-providers-sendgrid.js'
 import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
+import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1267,6 +1269,7 @@ export const navSections: NavGroup[] = [
       hubProvidersNeonDocs,
       hubProvidersOpenaiDocs,
       hubProvidersEntraDocs,
+      hubProvidersTwilioDocs,
       hubProvidersSlackDocs,
       hubProvidersPagerdutyDocs,
       hubProvidersSendgridDocs,

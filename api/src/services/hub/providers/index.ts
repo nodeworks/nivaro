@@ -14,6 +14,7 @@ import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import { sendgridAdapter } from './sendgrid/index.js'
 import { sentryAdapter } from './sentry/index.js'
+import { twilioAdapter } from './twilio/index.js'
 import { slackAdapter } from './slack/index.js'
 import { teamsAdapter } from './teams/index.js'
 import type { ProviderAdapter } from './types.js'
@@ -39,6 +40,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   githubAdapter,
   sendgridAdapter,
   sentryAdapter,
+  twilioAdapter,
   slackAdapter,
   teamsAdapter,
   redisCloudAdapter,

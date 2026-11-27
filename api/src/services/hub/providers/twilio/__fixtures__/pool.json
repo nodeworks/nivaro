@@ -1,0 +1,12 @@
+{
+  "phone_numbers": [
+    {
+      "sid": "PNbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01",
+      "phone_number": "+15555550101"
+    }
+  ],
+  "meta": {
+    "next_page_url": null,
+    "key": "phone_numbers"
+  }
+}
