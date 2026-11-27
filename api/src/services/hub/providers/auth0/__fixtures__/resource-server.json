@@ -1,0 +1,15 @@
+{
+  "_doc": "GET /api/v2/resource-servers/{id or identifier}. signing_secret is never read.",
+  "id": "rs_test_01",
+  "name": "Storefront API",
+  "identifier": "https://api.example.com/",
+  "is_system": false,
+  "signing_alg": "RS256",
+  "signing_secret": "test-secret-signing",
+  "token_lifetime": 7200,
+  "allow_offline_access": false,
+  "scopes": [
+    { "value": "read:orders", "description": "Read orders" },
+    { "value": "write:orders", "description": "Write orders" }
+  ]
+}
