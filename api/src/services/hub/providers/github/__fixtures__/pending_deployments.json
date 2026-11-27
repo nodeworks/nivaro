@@ -1,0 +1,20 @@
+[
+  {
+    "environment": {
+      "id": 161088068,
+      "node_id": "MDExOkVudmlyb25tZW50MTYxMDg4MDY4",
+      "name": "staging",
+      "url": "https://api.github.com/repos/acme/web/environments/staging",
+      "html_url": "https://github.com/acme/web/deployments/activity_log?environments_filter=staging"
+    },
+    "wait_timer": 0,
+    "wait_timer_started_at": "2026-11-26T11:58:10Z",
+    "current_user_can_approve": true,
+    "reviewers": [
+      {
+        "type": "User",
+        "reviewer": { "login": "acme-deploy-bot", "id": 1, "type": "User" }
+      }
+    ]
+  }
+]

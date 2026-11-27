@@ -142,6 +142,28 @@ describe('nivaro.hub provider calls', () => {
   })
 })
 
+describe('nivaro.hub provider hooks (Task 11c)', () => {
+  it('reads targets, placement components and database servers', async () => {
+    const { fetch, calls } = server(['hub'], {
+      'GET /api/hub/targets': {
+        body: { data: [{ id: 1, kind: 'github', name: 'Repos', connection_id: 7 }] }
+      },
+      'GET /api/hub/placements/4/components': {
+        body: {
+          data: [{ id: 9, kind: 'github_actions', resource_id: 12, deploy_job: 'approve:prod' }]
+        }
+      },
+      'GET /api/hub/db-servers': { body: { data: [{ id: 2, name: 'rds', resource_id: 30 }] } }
+    })
+    const n = createNivaro('http://hub', { fetch })
+    assert.equal((await n.hub.listTargets())[0].connection_id, 7)
+    assert.equal((await n.hub.listComponents(4))[0].deploy_job, 'approve:prod')
+    assert.equal((await n.hub.listDatabaseServers())[0].resource_id, 30)
+    assert.ok(calls.find((c) => c.path === '/api/hub/placements/4/components'))
+    assert.equal(hubCommands.listComponents(4)._method, 'GET')
+  })
+})
+
 describe('nivaro.hub through a wrapped client', () => {
   it('a Proxy that replaces request also carries the Hub calls (read-only wrappers refuse them)', async () => {
     const { fetch, calls } = server(['hub'], { 'GET /api/hub/apps': { body: { data: [] } } })

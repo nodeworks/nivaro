@@ -357,7 +357,9 @@ describe('ChangeView', () => {
     ).toBe(0)
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Drop this change' })).toBeTruthy()
-    expect(screen.getByText(/A retry will not fix this/)).toBeTruthy()
+    expect(
+      screen.getByText(/Change this connection’s keys under Connections, then come back to resume/)
+    ).toBeTruthy()
   })
 
   it('a provider refusal that is not retryable drops the "try again" advice', async () => {

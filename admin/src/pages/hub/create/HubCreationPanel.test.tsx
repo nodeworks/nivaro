@@ -123,10 +123,11 @@ afterEach(() => {
 })
 
 describe('HubCreationPanel', () => {
-  it('shows all nine steps with their state (the ninth: Template, enhancement 24)', async () => {
+  it('shows all ten steps with their state (Template, enhancement 24; Provider parts, Task 11)', async () => {
     mount(view())
     const track = await screen.findByRole('list', { name: 'Steps' })
-    expect(within(track).getAllByRole('listitem')).toHaveLength(9)
+    expect(within(track).getAllByRole('listitem')).toHaveLength(10)
+    expect(screen.getByLabelText('Provider parts: not started')).toBeTruthy()
     expect(screen.getByLabelText('Template: not started')).toBeTruthy()
     expect(screen.getByLabelText('Database: done')).toBeTruthy()
     expect(screen.getByLabelText('Deploy repository: in progress')).toBeTruthy()

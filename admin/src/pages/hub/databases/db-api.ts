@@ -34,6 +34,8 @@ export interface DbServer {
   notes: string | null
   /** '••••••' when a provisioning login is stored, else null. */
   admin_secret: string | null
+  /** Task 11: the managed aws.rds_instance this server is, when linked (migration 583). */
+  resource_id?: number | null
 }
 
 export interface DbCheck {

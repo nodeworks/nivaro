@@ -759,6 +759,169 @@ export async function dispatchWorkflow(
   })
 }
 
+/** Run events a promotion may approve: a dispatch or a push to the repository itself. */
+export const APPROVABLE_EVENTS = ['workflow_dispatch', 'push'] as const
+
+const SHA_RE = /^[0-9a-f]{40}$/
+
+/** A waiting run a promotion would approve (read while the promotion is planned). */
+export interface WaitingRun {
+  runId: number
+  headSha: string
+  event: string
+  createdAt: string | null
+  url: string | null
+}
+
+function pendingPath(repo: string, runId: string): string {
+  const { owner, repo: r } = splitRepo(repo)
+  return `/repos/${seg(owner)}/${seg(r)}/actions/runs/${seg(checkNumericId(runId))}/pending_deployments`
+}
+
+/**
+ * Why a run is not one a promotion may approve, or null: it must be a run of this workflow file,
+ * from this repository (never a fork), on the branch, started by an allowed event.
+ */
+function runProblem(run: Json, repo: string, file: string, branch: string): string | null {
+  const path = text(run.path)
+  if (path && path.split('@')[0] !== `.github/workflows/${file}`)
+    return `run ${run.id} is not a run of ${file}`
+  if (text(run.head_repository?.full_name).toLowerCase() !== repo.toLowerCase())
+    return `run ${run.id} comes from ${text(run.head_repository?.full_name) || 'another repository'}, not ${repo}`
+  if (text(run.head_branch) !== branch)
+    return `run ${run.id} is on ${text(run.head_branch) || 'no branch'}, not ${branch}`
+  if (!(APPROVABLE_EVENTS as readonly string[]).includes(text(run.event)))
+    return `run ${run.id} was started by ${text(run.event) || 'an unknown event'}; only a dispatch or a push is approved`
+  return null
+}
+
+function hitFor(pending: unknown, envName: string): Json | null {
+  return (
+    (Array.isArray(pending) ? (pending as Json[]) : []).find(
+      (p) => text(p?.environment?.name).toLowerCase() === envName.toLowerCase()
+    ) ?? null
+  )
+}
+
+/**
+ * Task 11c: the newest run of the workflow on `branch` that waits for review on `environment`
+ * (read only; the promotion plan names it so the approval is bound to that run and commit).
+ * Runs from a fork, on another branch or started by another event are skipped. null = none.
+ */
+export async function findWaitingRun(
+  ctx: ProviderContext,
+  ext: string,
+  environment: string,
+  branch: string
+): Promise<WaitingRun | null> {
+  const { repo, rest: file } = splitChild(ext)
+  const envName = checkEnvName(environment)
+  if (!branch) bad('BAD_ID', 'Name the branch the workflow runs on.')
+  branchPath(branch)
+  const query = new URLSearchParams({ status: 'waiting', branch, per_page: '10' })
+  const runs = await gh<Json>(ctx, 'GET', `${workflowPath(repo, file)}/runs?${query}`, {
+    what: 'list the waiting workflow runs'
+  })
+  const list = Array.isArray(runs.json?.workflow_runs) ? (runs.json.workflow_runs as Json[]) : []
+  for (const run of list.slice(0, 5)) {
+    if (runProblem(run, repo, file, branch)) continue
+    const sha = text(run.head_sha).toLowerCase()
+    if (!SHA_RE.test(sha)) continue
+    const runId = checkNumericId(String(run.id ?? ''))
+    const pending = await gh<Json[]>(ctx, 'GET', pendingPath(repo, runId), {
+      what: 'list the run’s pending deployments'
+    })
+    if (!hitFor(pending.json, envName)) continue
+    return {
+      runId: Number(runId),
+      headSha: sha,
+      event: text(run.event),
+      createdAt: text(run.created_at) || null,
+      url: text(run.html_url) || null
+    }
+  }
+  return null
+}
+
+/**
+ * Task 11c: environment approval, bound to one run. Reads exactly `runId` and approves its
+ * pending deployment on `environment` only when the run is still waiting, is a run of this
+ * workflow from this repository (no fork) on `branch`, started by a dispatch or a push, and its
+ * head commit is `headSha` (TARGET_MISMATCH otherwise). FORBIDDEN when the connection's account
+ * may not approve; RUN_NOT_WAITING (not retryable — plan the promotion again) when the run no
+ * longer waits on that environment. Nothing is approved on any refusal.
+ */
+export async function approvePendingDeployment(
+  ctx: ProviderContext,
+  ext: string,
+  want: { environment: string; branch: string; runId: string; headSha: string }
+): Promise<{ runId: number; environmentId: number; environment: string; headSha: string }> {
+  const { repo, rest: file } = splitChild(ext)
+  const { owner, repo: r } = splitRepo(repo)
+  const envName = checkEnvName(want.environment)
+  if (!want.branch) bad('TARGET_MISMATCH', 'An approval names the branch its run is on.')
+  branchPath(want.branch)
+  const runId = checkNumericId(want.runId)
+  const sha = want.headSha.toLowerCase()
+  if (!SHA_RE.test(sha)) bad('TARGET_MISMATCH', 'An approval names the commit of its run.')
+  const got = await gh<Json>(
+    ctx,
+    'GET',
+    `/repos/${seg(owner)}/${seg(r)}/actions/runs/${seg(runId)}`,
+    { ok: [404], what: 'read the workflow run' }
+  )
+  const run = got.status === 404 ? null : got.json
+  if (!run)
+    throw new ProviderError('RUN_NOT_WAITING', `Run ${runId} is gone — plan the promotion again.`, {
+      retryable: false,
+      status: 409
+    })
+  const problem = runProblem(run, repo, file, want.branch)
+  if (problem) bad('TARGET_MISMATCH', `Not approved: ${problem}.`)
+  if (text(run.head_sha).toLowerCase() !== sha)
+    bad(
+      'TARGET_MISMATCH',
+      `Not approved: run ${runId} is at commit ${text(run.head_sha).slice(0, 12) || '?'}, not the planned ${sha.slice(0, 12)}.`
+    )
+  if (text(run.status) !== 'waiting')
+    throw new ProviderError(
+      'RUN_NOT_WAITING',
+      `Run ${runId} is ${text(run.status) || 'not waiting'} — plan the promotion again.`,
+      { retryable: false, status: 409 }
+    )
+  const path = pendingPath(repo, runId)
+  const pending = await gh<Json[]>(ctx, 'GET', path, { what: 'list the run’s pending deployments' })
+  const hit = hitFor(pending.json, envName)
+  if (!hit)
+    throw new ProviderError(
+      'RUN_NOT_WAITING',
+      `Run ${runId} does not wait for approval to ${envName} — plan the promotion again.`,
+      { retryable: false, status: 409 }
+    )
+  const envId = Number(hit.environment?.id)
+  if (!Number.isSafeInteger(envId) || envId < 1)
+    bad('PROVIDER_ERROR', 'GitHub answered a pending deployment without an environment id.')
+  if (hit.current_user_can_approve !== true)
+    bad(
+      'FORBIDDEN',
+      `The connection’s account may not approve deployments to ${envName} — add it as a required reviewer of that environment.`
+    )
+  await gh(ctx, 'POST', path, {
+    body: {
+      environment_ids: [envId],
+      state: 'approved',
+      comment: 'Approved by a Nivaro Hub promotion.'
+    },
+    what: 'approve the deployment'
+  })
+  return {
+    runId: Number(runId),
+    environmentId: envId,
+    environment: text(hit.environment.name),
+    headSha: sha
+  }
+}
+
 const workflow: Handler = {
   key: 'github.workflow',
   async existing() {

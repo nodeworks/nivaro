@@ -180,6 +180,12 @@ export interface ChangeStep {
    * sealed as StoredSecretField — never plain) — what an undo plans back to.
    */
   beforeDesired?: Record<string, unknown> | null
+  /**
+   * Task 11c: on a step that failed AUTH_FAILED, the connection's `secret_fingerprint` at the
+   * failure (null = it had no secret). Resume lets the change through once the keys changed
+   * (engine/resume-rule.ts). Absent on every other step.
+   */
+  connectionFingerprint?: string | null
 }
 
 // ── Errors ──
@@ -227,7 +233,10 @@ export const RESOURCE_CHANGE_CODES = {
   ORIGIN_INVALID: 409,
   NOT_IMPLEMENTED: 501,
   // Task 3b: the provider refused the connection's credentials (never retryable — fix the keys).
-  AUTH_FAILED: 502
+  AUTH_FAILED: 502,
+  // Task 11c: a named op whose target is not the one its change may act on (another workflow,
+  // GitHub environment, run or commit than planned) — nothing was sent.
+  TARGET_MISMATCH: 409
 } as const
 
 export type ResourceChangeCode = keyof typeof RESOURCE_CHANGE_CODES

@@ -160,7 +160,11 @@ export const FAKE_TYPES: Record<string, ResourceTypeSpec[]> = {
         f('workflow'),
         f('ref'),
         f('inputs'),
-        f('dispatch', { kind: 'boolean', trigger: true })
+        f('dispatch', { kind: 'boolean', trigger: true }),
+        f('approve_environment'),
+        f('approve_run_id'),
+        f('approve_sha'),
+        f('approve', { kind: 'boolean', trigger: true })
       ],
       [{ field: 'repository', type: 'github.repository' }],
       { capabilities: caps({ create: false, delete: false }) }
@@ -194,7 +198,7 @@ export function makeFakeWorld() {
   const plain = (d: DesiredResource): Record<string, unknown> => {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(d.fields)) {
-      if (REF_FIELDS.has(k) || k === 'dispatch' || k === 'mode') continue
+      if (REF_FIELDS.has(k) || k === 'dispatch' || k === 'approve' || k === 'mode') continue
       if (v && typeof v === 'object' && 'fingerprint' in (v as object)) continue
       out[k] = v
     }
@@ -237,6 +241,16 @@ export function makeFakeWorld() {
               reason: 'Run it.',
               changes: [{ field: 'dispatch', from: false, to: true }],
               data: { ref: desired.fields.ref, inputs: desired.fields.inputs }
+            })
+          ]
+        if (desired.type === 'github.workflow' && desired.fields.approve === true)
+          return [
+            base({
+              kind: 'update',
+              action: 'approve_deployment',
+              reason: 'Approve it.',
+              changes: [{ field: 'approve', from: false, to: true }],
+              data: { environment: desired.fields.approve_environment, ref: desired.fields.ref }
             })
           ]
         if (desired.type === 'vercel.deployment') {
@@ -299,7 +313,7 @@ export function makeFakeWorld() {
         const t = things.get(id)
         if (!t) throw new Error('gone')
         if (op.action === 'promote' || op.action === 'rollback') t.fields.production = true
-        else if (op.action !== 'dispatch')
+        else if (op.action !== 'dispatch' && op.action !== 'approve_deployment')
           t.fields = { ...t.fields, ...plain(desired as DesiredResource) }
         t.version++
         return { ok: true, externalId: id, observed: observedOf(id) }

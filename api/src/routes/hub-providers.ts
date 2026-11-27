@@ -21,6 +21,7 @@ import {
 } from '../services/hub/providers/engine/contract.js'
 import { createChangeIdOf, pendingCreateOf } from '../services/hub/providers/engine/discard.js'
 import { publicStoredPlan } from '../services/hub/providers/engine/plan.js'
+import { changeResumable } from '../services/hub/providers/engine/resume-rule.js'
 import {
   ensureCoreProviders,
   forgetConnectionTokens,
@@ -265,7 +266,8 @@ async function resourceOut(
         )
       change = (await cache.get(id)) ?? null
     }
-    pending = pendingCreateOf(row, change)
+    // Task 11c: a create that failed on the connection's keys resumes once they changed.
+    pending = pendingCreateOf(row, change, change ? await authFingerprintFor(change) : undefined)
   }
   return { ...row, desired: desiredOut(row.desired), pending_create: pending }
 }
@@ -340,7 +342,22 @@ async function changeOut(row: HubResourceChangeRow) {
         )
       : (st.beforeDesired ?? null)
   }))
-  return { ...row, steps, plan: { ...publicStoredPlan(plan), request: { ...plan.request, ops } } }
+  // Task 11c: whether resume would run it (AUTH_FAILED counts once the connection's keys moved).
+  const resumable = changeResumable(row, await authFingerprintFor(row))
+  return {
+    ...row,
+    steps,
+    resumable,
+    plan: { ...publicStoredPlan(plan), request: { ...plan.request, ops } }
+  }
+}
+
+/** The connection's fingerprint now, read only for a change whose last failure was AUTH_FAILED. */
+async function authFingerprintFor(row: HubResourceChangeRow): Promise<string | null | undefined> {
+  if (row.status !== 'failed') return undefined
+  const last = [...row.steps].reverse().find((s) => s.status === 'failed')
+  if (last?.error?.code !== 'AUTH_FAILED') return undefined
+  return (await readConnection(row.connection_id).catch(() => null))?.secret_fingerprint ?? null
 }
 
 // ── Who may see what ──

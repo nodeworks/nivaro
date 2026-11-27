@@ -345,7 +345,22 @@ export function planHash(input: PlanInput, steps: PromotionStep[]): string {
         s.stack?.agentOrigin ?? null,
         // Task 11a, provider steps only (other steps' hashes are unchanged): what is made live.
         ...(s.provider
-          ? [[s.provider.kind, s.provider.connectionId, s.provider.resourceId, s.provider.ref]]
+          ? [
+              [
+                s.provider.kind,
+                s.provider.connectionId,
+                s.provider.resourceId,
+                s.provider.ref,
+                // Task 11c: only an approval step adds its environment (dispatch hashes unchanged).
+                ...(s.provider.approveEnvironment
+                  ? [
+                      s.provider.approveEnvironment,
+                      s.provider.approveRunId ?? null,
+                      s.provider.approveSha ?? null
+                    ]
+                  : [])
+              ]
+            ]
           : [])
       ])
   }
@@ -710,11 +725,13 @@ function providerAwareLines(
     const name = cap(s.component)
     if (!p?.ref) continue
     lines.push(
-      p.kind === 'github_actions'
-        ? `${name}: run its GitHub Actions workflow on ${p.refLabel} with version ${input.version}`
-        : p.kind === 'vercel'
-          ? `${name}: ${input.kind === 'rollback' ? 'roll Vercel production back to' : 'make live on Vercel'} ${p.refLabel}`
-          : `${name}: point its EAS update channel at ${p.refLabel}`
+      p.kind === 'github_actions' && p.approveEnvironment
+        ? `${name}: approve ${p.refLabel} in GitHub Actions`
+        : p.kind === 'github_actions'
+          ? `${name}: run its GitHub Actions workflow on ${p.refLabel} with version ${input.version}`
+          : p.kind === 'vercel'
+            ? `${name}: ${input.kind === 'rollback' ? 'roll Vercel production back to' : 'make live on Vercel'} ${p.refLabel}`
+            : `${name}: point its EAS update channel at ${p.refLabel}`
     )
     if (!refused && s.verifyUrl)
       lines.push(`${name}: check that ${urlForLog(s.verifyUrl)} reports ${s.want} twice in a row`)

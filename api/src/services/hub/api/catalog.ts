@@ -219,7 +219,15 @@ export const HUB_ROUTES: HubRoute[] = [
     'Components of a placement'
   ),
   r('POST', '/placements/:id/components', 'Placements', 'admin', 'write', 'Add a component', {
-    body: { kind: s('api or frontend'), config: o() }
+    body: {
+      kind: s('api, frontend, stack, github_actions, vercel or eas_update'),
+      name: s(),
+      resource_id: n('Provider kinds: the github.workflow, vercel.project or expo.channel'),
+      deploy_job: s(
+        'github_actions: null = run the workflow, approve[:<GitHub environment>] = approve the waiting run'
+      ),
+      config: o()
+    }
   }),
   r('PATCH', '/components/:id', 'Placements', 'admin', 'write', 'Change a component', {
     body: { config: o() }
@@ -397,7 +405,14 @@ export const HUB_ROUTES: HubRoute[] = [
   ),
 
   // ─── Database servers, databases, targets ───────────────────────────────────
-  r('GET', '/db-servers', 'Databases', 'admin', 'read', 'Database servers (no credentials)'),
+  r(
+    'GET',
+    '/db-servers',
+    'Databases',
+    'admin',
+    'read',
+    'Database servers (no credentials; resource_id = a linked aws.rds_instance)'
+  ),
   r('POST', '/db-servers', 'Databases', 'admin', 'write', 'Add a database server', {
     body: {
       name: s(),
@@ -406,7 +421,8 @@ export const HUB_ROUTES: HubRoute[] = [
       port: n(),
       provision_mode: s('manual or admin', { enum: ['manual', 'admin'] }),
       admin_login: s(),
-      admin_secret: secret('Admin password (admin mode)')
+      admin_secret: secret('Admin password (admin mode)'),
+      resource_id: n('A managed aws.rds_instance: host and port come from it')
     }
   }),
   r('PATCH', '/db-servers/:id', 'Databases', 'admin', 'write', 'Change a database server', {
@@ -462,9 +478,26 @@ export const HUB_ROUTES: HubRoute[] = [
     'write',
     'Detach the database record'
   ),
-  r('GET', '/targets', 'Targets', 'admin', 'read', 'GitLab targets for new apps (tokens masked)'),
-  r('POST', '/targets', 'Targets', 'admin', 'write', 'Add a GitLab target', {
-    body: { name: s(), api: s('GitLab API url'), group: s(), token: secret('GitLab token') }
+  r(
+    'GET',
+    '/targets',
+    'Targets',
+    'admin',
+    'read',
+    'GitLab and GitHub targets for new apps (tokens masked)'
+  ),
+  r('POST', '/targets', 'Targets', 'admin', 'write', 'Add a GitLab or GitHub target', {
+    body: {
+      kind: s('gitlab (default) or github', { enum: ['gitlab', 'github'] }),
+      name: s(),
+      api: s('GitLab API url'),
+      group: s(),
+      token: secret('GitLab token'),
+      connection_id: n('github: the GitHub connection repositories are made through'),
+      config: o(
+        'github: { template, visibility, deploy_workflow, source_branch, dns_mode automatic|manual|route53, dns_zone_resource_id?, wildcard_domain, edge_address, scheme, port, cert_note }'
+      )
+    }
   }),
   r('PATCH', '/targets/:id', 'Targets', 'admin', 'write', 'Change a target', {
     body: { name: s(), token: secret('New token (re-syncs created apps)') },
@@ -493,9 +526,10 @@ export const HUB_ROUTES: HubRoute[] = [
         signin: o('{ issuer, client_id, client_secret } — client_secret is write-only', {
           secret: true
         }),
+        target: o('{ kind: gitlab | docker | shared | github, id }'),
         environments: list(
           'object',
-          '{ key, hostname?, database: { server_id … } | { database_id } }'
+          '{ key, hostname?, database: { server_id … } | { database_id }, providers?: [{ connection_id, type vercel.project | auth0.application | aws.route53_record | aws.rds_instance, fields? }] }'
         )
       },
       response: 'HubPlan'

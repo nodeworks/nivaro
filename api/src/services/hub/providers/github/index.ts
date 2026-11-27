@@ -23,6 +23,7 @@ import {
   seg
 } from './api.js'
 import {
+  approvePendingDeployment,
   archiveRepository,
   dispatchWorkflow,
   type Handler,
@@ -60,7 +61,8 @@ function createChanges(type: string, desired: DesiredResource): FieldChange[] {
   for (const [field, value] of Object.entries(desired.fields)) {
     if (value === undefined || value === null || value === '') continue
     const kind = kinds.get(field)
-    if (kind === 'ref' || field === 'destroy' || field === 'dispatch') continue
+    if (kind === 'ref' || field === 'destroy' || field === 'dispatch' || field === 'approve')
+      continue
     if (kind === 'secret') out.push({ field, secret: true })
     else out.push({ field, to: value })
   }
@@ -240,7 +242,45 @@ export function planGithub(
     })
   }
 
+  // Task 11c: environment approval — approve ONE waiting run (id + commit named by the
+  // promotion that planned it; bound in the plan hash through op.data).
+  if (type === 'github.workflow' && desired.fields.approve === true) {
+    const w = approvalWant(desired)
+    ops.push({
+      ...base,
+      kind: 'update',
+      externalId: observed.externalId,
+      action: 'approve_deployment',
+      reason: `Approve run ${w.runId || '?'} (commit ${w.headSha.slice(0, 12) || '?'}) of ${observed.externalId.split('#')[1]} on ${w.branch || '?'} for ${w.environment || '?'}.`,
+      changes: [{ field: 'approve', from: false, to: true }],
+      preconditions: { status: observed.status ?? null },
+      risk: [],
+      data: {
+        environment: w.environment,
+        ref: w.branch,
+        run_id: w.runId,
+        head_sha: w.headSha
+      }
+    })
+  }
+
   return ops.length ? ops : [noop(type, observed, 'Already as desired.')]
+}
+
+/** What an approval names, from the desired resource only (strings; empty when missing). */
+function approvalWant(desired: DesiredResource): {
+  environment: string
+  branch: string
+  runId: string
+  headSha: string
+} {
+  const t = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+  return {
+    environment: t(desired.fields.approve_environment),
+    branch: t(desired.fields.ref),
+    runId: t(desired.fields.approve_run_id),
+    headSha: t(desired.fields.approve_sha).toLowerCase()
+  }
 }
 
 // ── Apply ──
@@ -299,6 +339,48 @@ async function applyOp(
       externalId: ext,
       observed: await h.observe(ctx, ext),
       answer: { dispatched: true, ref: data.ref || 'default branch' }
+    }
+  }
+
+  if (op.action === 'approve_deployment') {
+    if (!ext) throw new ProviderError('BAD_ID', 'The workflow whose run to approve is not known.')
+    const target =
+      desired &&
+      `${(Array.isArray(desired.refs.repository) ? desired.refs.repository[0] : desired.refs.repository) ?? ''}#${String(desired.fields.workflow ?? '')}`
+    if (!desired || target !== ext)
+      throw new ProviderError(
+        'TARGET_MISMATCH',
+        'The workflow this approval targets is not the one the resource points at.'
+      )
+    // What is sent comes from the desired resource only; the planned data is compared, never sent.
+    const w = approvalWant(desired)
+    const data = (op.data ?? {}) as Record<string, unknown>
+    if (
+      !w.environment ||
+      !w.branch ||
+      !w.runId ||
+      !w.headSha ||
+      data.environment !== w.environment ||
+      data.ref !== w.branch ||
+      data.run_id !== w.runId ||
+      data.head_sha !== w.headSha
+    )
+      throw new ProviderError(
+        'TARGET_MISMATCH',
+        'The environment, branch, run or commit to approve is not the one the plan named — plan again.'
+      )
+    const done = await approvePendingDeployment(ctx, ext, w)
+    return {
+      ok: true,
+      externalId: ext,
+      observed: await h.observe(ctx, ext),
+      answer: {
+        approved: true,
+        run_id: done.runId,
+        head_sha: done.headSha,
+        environment: done.environment,
+        ref: w.branch
+      }
     }
   }
 

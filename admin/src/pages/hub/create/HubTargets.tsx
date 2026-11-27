@@ -11,15 +11,27 @@ import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
-import { dangerArmed, dangerGhost, Field, ghostButton, SecretInput } from '../hub-parts'
 import {
+  dangerArmed,
+  dangerGhost,
+  Field,
+  ghostButton,
+  SecretInput,
+  segmentButton,
+  segmentGroup
+} from '../hub-parts'
+import { ConnectionPicker, ManagedResourcePicker } from '../providers/ResourcePickers'
+import {
+  type AnyHubTarget,
   createError,
   createKeys,
   createToast,
   deleteTarget,
   fetchTargets,
+  type HubGithubTarget,
   type HubTarget,
   type HubTargetConfig,
+  isGithubTarget,
   saveTarget,
   syncSummary,
   type TargetCheck,
@@ -57,8 +69,9 @@ export function HubTargets() {
       <HubToolbar
         description={
           <>
-            A target is the GitLab group a new app's deploy repository is made in, the template it
-            is copied from, the server it deploys to and how its hostnames are made.
+            A target is where a new app's repository is made — a GitLab group or, through a GitHub
+            connection, a GitHub account — the template it is copied from, how it deploys and how
+            its hostnames are made.
             {targets.data && (
               <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
                 {' '}
@@ -112,9 +125,11 @@ export function HubTargets() {
           )}
 
           {picked === 'new' ? (
-            <TargetForm
-              key='new'
-              target={null}
+            <NewTarget key='new' onClose={() => setPicked(null)} onSaved={setPicked} />
+          ) : current && isGithubTarget(current) ? (
+            <GithubTargetForm
+              key={current.id}
+              target={current}
               onClose={() => setPicked(null)}
               onSaved={setPicked}
             />
@@ -132,16 +147,26 @@ export function HubTargets() {
   )
 }
 
+const DNS_CHIP: Record<string, { label: string; tip: string }> = {
+  automatic: { label: 'Automatic names', tip: 'Hostnames are made under the wildcard domain' },
+  route53: {
+    label: 'Route 53',
+    tip: 'The Hub adds each name to a Route 53 hosted zone it manages'
+  },
+  manual: { label: 'Names by hand', tip: 'Each hostname is requested by hand' }
+}
+
 function TargetCard({
   target,
   active,
   onSelect
 }: {
-  target: HubTarget
+  target: AnyHubTarget
   active: boolean
   onSelect: () => void
 }) {
   const c = target.config
+  const dns = DNS_CHIP[c.dns_mode] ?? DNS_CHIP.manual
   return (
     <button
       type='button'
@@ -158,19 +183,20 @@ function TargetCard({
         <span className='min-w-0 flex-1 truncate text-[13px] font-medium text-slate-900 dark:text-foreground'>
           {target.name}
         </span>
+        <span className='shrink-0 rounded-full border border-slate-200 px-1.5 py-px text-[10px] font-medium text-slate-600 dark:border-border dark:text-slate-300'>
+          {isGithubTarget(target) ? 'GitHub' : 'GitLab'}
+        </span>
         <span
-          data-tip={
-            c.dns_mode === 'automatic'
-              ? 'Hostnames are made under the wildcard domain'
-              : 'Each hostname is requested by hand'
-          }
+          data-tip={dns.tip}
           className='shrink-0 rounded-full border border-slate-200 px-1.5 py-px text-[10px] font-medium text-slate-600 dark:border-border dark:text-slate-300'
         >
-          {c.dns_mode === 'automatic' ? 'Automatic names' : 'Names by hand'}
+          {dns.label}
         </span>
       </span>
       <span className='mt-0.5 block truncate font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
-        {c.namespace} · {c.template_project}@{c.template_ref}
+        {isGithubTarget(target)
+          ? `${target.config.template} · ${target.config.deploy_workflow}`
+          : `${target.config.namespace} · ${target.config.template_project}@${target.config.template_ref}`}
       </span>
       {c.wildcard_domain && (
         <span className='mt-0.5 flex items-center gap-1 truncate font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
@@ -193,7 +219,8 @@ interface Draft {
   deploy_host: string
   manager_known_hosts: string
   proxy_network: string
-  dns_mode: 'automatic' | 'manual'
+  dns_mode: DnsMode
+  dns_zone_resource_id: number | null
   wildcard_domain: string
   edge_address: string
   scheme: 'https' | 'http'
@@ -216,6 +243,7 @@ function draftOf(t: HubTarget | null): Draft {
     manager_known_hosts: c.manager_known_hosts ?? '',
     proxy_network: c.proxy_network ?? 'proxy',
     dns_mode: c.dns_mode ?? 'automatic',
+    dns_zone_resource_id: c.dns_zone_resource_id ?? null,
     wildcard_domain: c.wildcard_domain ?? '',
     edge_address: c.edge_address ?? '',
     scheme: c.scheme ?? 'https',
@@ -239,16 +267,54 @@ export function targetDraftErrors(d: Draft): Partial<Record<keyof Draft, string>
   if (!d.deploy_host.trim()) e.deploy_host = 'host, user@host or host:port'
   if (!d.manager_known_hosts.trim())
     e.manager_known_hosts = "The manager's known_hosts lines (ssh-keyscan <host>)"
-  if (d.dns_mode === 'automatic' && !d.wildcard_domain.trim())
+  Object.assign(e, hostnameErrors(d))
+  return e
+}
+
+type DnsMode = 'automatic' | 'manual' | 'route53'
+
+/** What both target kinds say about hostnames. */
+interface HostnameDraft {
+  dns_mode: DnsMode
+  dns_zone_resource_id: number | null
+  wildcard_domain: string
+  edge_address: string
+  scheme: 'https' | 'http'
+  port: string
+  cert_note: string
+}
+
+export function hostnameErrors(d: HostnameDraft): Partial<Record<keyof HostnameDraft, string>> {
+  const e: Partial<Record<keyof HostnameDraft, string>> = {}
+  if (d.dns_mode !== 'manual' && !d.wildcard_domain.trim())
     e.wildcard_domain = 'Automatic names need a wildcard domain like apps.example.com'
+  if (d.dns_mode === 'route53' && !d.dns_zone_resource_id)
+    e.dns_zone_resource_id = 'Pick the Route 53 hosted zone the names go in'
+  if (d.dns_mode === 'route53' && !d.edge_address.trim())
+    e.edge_address = 'Route 53 records point at the edge: its address or name'
   const port = d.port.trim()
   if (port && !(/^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535))
     e.port = 'A port from 1 to 65535, or leave empty'
   return e
 }
 
+/** The hostname part of a target's config body. */
+const hostnameBody = (d: HostnameDraft) => {
+  const opt = (v: string) => (v.trim() ? v.trim() : null)
+  return {
+    dns_mode: d.dns_mode,
+    ...(d.dns_mode === 'route53' ? { dns_zone_resource_id: d.dns_zone_resource_id } : {}),
+    wildcard_domain: opt(d.wildcard_domain),
+    edge_address: opt(d.edge_address),
+    scheme: d.scheme,
+    port: d.port.trim() ? Number(d.port.trim()) : null,
+    cert_note: opt(d.cert_note)
+  }
+}
+
 const DNS_OPTIONS = [
   { value: 'automatic', label: 'Automatic (wildcard domain)' },
+  { value: 'route53', label: 'Route 53 (the Hub adds each name)' },
   { value: 'manual', label: 'By hand (a ticket per name)' }
 ]
 const TRAEFIK_OPTIONS = [
@@ -288,7 +354,6 @@ function TargetForm({
 
   const save = useMutation({
     mutationFn: () => {
-      const opt = (v: string) => (v.trim() ? v.trim() : null)
       const body = {
         name: d.name.trim(),
         config: {
@@ -301,12 +366,7 @@ function TargetForm({
           deploy_host: d.deploy_host.trim(),
           manager_known_hosts: d.manager_known_hosts.trim(),
           proxy_network: d.proxy_network.trim(),
-          dns_mode: d.dns_mode,
-          wildcard_domain: opt(d.wildcard_domain),
-          edge_address: opt(d.edge_address),
-          scheme: d.scheme,
-          port: d.port.trim() ? Number(d.port.trim()) : null,
-          cert_note: opt(d.cert_note),
+          ...hostnameBody(d),
           traefik_version: d.traefik_version === '2' ? 2 : 3
         },
         // Unchanged = not sent (the stored token stays); cleared = removed.
@@ -316,7 +376,7 @@ function TargetForm({
     },
     onSuccess: (answer) => {
       setFailure(null)
-      const nextToken = answer.data?.secret ? HUB_MASK : ''
+      const nextToken = answer.data && 'secret' in answer.data && answer.data.secret ? HUB_MASK : ''
       setToken(nextToken)
       setSavedToken(nextToken)
       setSavedDraft(JSON.stringify(d))
@@ -514,86 +574,7 @@ function TargetForm({
         </Field>
       </FormGroup>
 
-      <FormGroup title='Hostnames'>
-        <Field id={id('dns')} label='How names are made'>
-          <SimpleSelect
-            value={d.dns_mode}
-            onChange={(v) => set({ dns_mode: v as Draft['dns_mode'] })}
-            options={DNS_OPTIONS}
-            ariaLabel='How names are made'
-            className='h-8 text-left text-[13px]'
-            triggerProps={{ id: id('dns') }}
-          />
-        </Field>
-        <Field
-          id={id('wild')}
-          label={d.dns_mode === 'automatic' ? 'Wildcard domain' : 'Wildcard domain (optional)'}
-          hint={
-            d.dns_mode === 'automatic'
-              ? 'Production gets <app>.<domain>, the others <app>--<env>.<domain>.'
-              : 'When set, every requested name must end in it.'
-          }
-          error={err('wildcard_domain')}
-        >
-          <Input
-            id={id('wild')}
-            value={d.wildcard_domain}
-            onChange={(e) => set({ wildcard_domain: e.target.value })}
-            placeholder='apps.example.com'
-            className={mono}
-          />
-        </Field>
-        <Field
-          id={id('edge')}
-          label='Edge address'
-          hint='Where the names point (shown in the DNS ticket).'
-        >
-          <Input
-            id={id('edge')}
-            value={d.edge_address}
-            onChange={(e) => set({ edge_address: e.target.value })}
-            placeholder='edge.example.com or 203.0.113.10'
-            className={mono}
-          />
-        </Field>
-        <div className='grid grid-cols-[1fr_96px] gap-3'>
-          <Field id={id('scheme')} label='Scheme'>
-            <SimpleSelect
-              value={d.scheme}
-              onChange={(v) => set({ scheme: v as Draft['scheme'] })}
-              options={SCHEME_OPTIONS}
-              ariaLabel='Scheme'
-              className='h-8 text-left text-[13px]'
-              triggerProps={{ id: id('scheme') }}
-            />
-          </Field>
-          <Field id={id('port')} label='Port' error={err('port')}>
-            <Input
-              id={id('port')}
-              value={d.port}
-              onChange={(e) => set({ port: e.target.value })}
-              placeholder='443'
-              inputMode='numeric'
-              className={mono}
-            />
-          </Field>
-        </div>
-        <div className='sm:col-span-2'>
-          <Field
-            id={id('cert')}
-            label='Certificate note'
-            hint='How the certificate is made, for the DNS ticket (e.g. "covered by *.apps.example.com").'
-          >
-            <Textarea
-              id={id('cert')}
-              value={d.cert_note}
-              onChange={(e) => set({ cert_note: e.target.value })}
-              rows={2}
-              className='text-[13px]'
-            />
-          </Field>
-        </div>
-      </FormGroup>
+      <HostnamesGroup d={d} set={set} err={err} id={id} />
 
       {failure != null && (
         <ErrorNotice description={createError(failure, 'Could not save the target')} />
@@ -662,6 +643,7 @@ function FormGroup({ title, children }: { title: string; children: React.ReactNo
 }
 
 const CHECK_LABEL: Record<TargetCheck['id'], string> = {
+  connection: 'Connection',
   token: 'Token',
   namespace: 'Namespace',
   template: 'Template'
@@ -696,6 +678,410 @@ function TargetChecks({ result }: { result: { ok: boolean; checks: TargetCheck[]
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+/** How a target's hostnames are made (GitLab and GitHub targets alike). */
+function HostnamesGroup<D extends HostnameDraft>({
+  d,
+  set,
+  err,
+  id
+}: {
+  d: D
+  set: (patch: Partial<D>) => void
+  err: (k: keyof HostnameDraft) => string | null
+  id: (f: string) => string
+}) {
+  const mono = 'h-8 font-mono text-[13px]'
+  return (
+    <FormGroup title='Hostnames'>
+      <Field
+        id={id('dns')}
+        label='How names are made'
+        hint={
+          d.dns_mode === 'route53'
+            ? 'Each new name gets a record in a Route 53 zone the Hub manages, pointing at the edge.'
+            : undefined
+        }
+      >
+        <SimpleSelect
+          value={d.dns_mode}
+          onChange={(v) => set({ dns_mode: v as DnsMode } as Partial<D>)}
+          options={DNS_OPTIONS}
+          ariaLabel='How names are made'
+          className='h-8 text-left text-[13px]'
+          triggerProps={{ id: id('dns') }}
+        />
+      </Field>
+      {d.dns_mode === 'route53' && (
+        <Field
+          id={id('zone')}
+          label='Hosted zone'
+          hint='A shared Route 53 zone the Hub manages; it must cover the wildcard domain.'
+          error={err('dns_zone_resource_id')}
+        >
+          <ManagedResourcePicker
+            id={id('zone')}
+            type='aws.route53_zone'
+            filter={{ scope: 'shared' }}
+            value={d.dns_zone_resource_id}
+            onChange={(v) => set({ dns_zone_resource_id: v } as Partial<D>)}
+            placeholder='Pick a hosted zone'
+          />
+        </Field>
+      )}
+      <Field
+        id={id('wild')}
+        label={d.dns_mode !== 'manual' ? 'Wildcard domain' : 'Wildcard domain (optional)'}
+        hint={
+          d.dns_mode !== 'manual'
+            ? 'Production gets <app>.<domain>, the others <app>--<env>.<domain>.'
+            : 'When set, every requested name must end in it.'
+        }
+        error={err('wildcard_domain')}
+      >
+        <Input
+          id={id('wild')}
+          value={d.wildcard_domain}
+          onChange={(e) => set({ wildcard_domain: e.target.value } as Partial<D>)}
+          placeholder='apps.example.com'
+          className={mono}
+        />
+      </Field>
+      <Field
+        id={id('edge')}
+        label='Edge address'
+        hint={
+          d.dns_mode === 'route53'
+            ? 'What each record points at: an address makes an A or AAAA record, a name a CNAME.'
+            : 'Where the names point (shown in the DNS ticket).'
+        }
+        error={err('edge_address')}
+      >
+        <Input
+          id={id('edge')}
+          value={d.edge_address}
+          onChange={(e) => set({ edge_address: e.target.value } as Partial<D>)}
+          placeholder='edge.example.com or 203.0.113.10'
+          className={mono}
+        />
+      </Field>
+      <div className='grid grid-cols-[1fr_96px] gap-3'>
+        <Field id={id('scheme')} label='Scheme'>
+          <SimpleSelect
+            value={d.scheme}
+            onChange={(v) => set({ scheme: v as HostnameDraft['scheme'] } as Partial<D>)}
+            options={SCHEME_OPTIONS}
+            ariaLabel='Scheme'
+            className='h-8 text-left text-[13px]'
+            triggerProps={{ id: id('scheme') }}
+          />
+        </Field>
+        <Field id={id('port')} label='Port' error={err('port')}>
+          <Input
+            id={id('port')}
+            value={d.port}
+            onChange={(e) => set({ port: e.target.value } as Partial<D>)}
+            placeholder='443'
+            inputMode='numeric'
+            className={mono}
+          />
+        </Field>
+      </div>
+      <div className='sm:col-span-2'>
+        <Field
+          id={id('cert')}
+          label='Certificate note'
+          hint='How the certificate is made, for the DNS ticket (e.g. "covered by *.apps.example.com").'
+        >
+          <Textarea
+            id={id('cert')}
+            value={d.cert_note}
+            onChange={(e) => set({ cert_note: e.target.value } as Partial<D>)}
+            rows={2}
+            className='text-[13px]'
+          />
+        </Field>
+      </div>
+    </FormGroup>
+  )
+}
+
+/** A new target: pick GitLab or GitHub first, then that kind's form. */
+function NewTarget({ onClose, onSaved }: { onClose: () => void; onSaved: (id: number) => void }) {
+  const [kind, setKind] = useState<'gitlab' | 'github'>('gitlab')
+  return (
+    <div className='space-y-2'>
+      <fieldset className={segmentGroup}>
+        <legend className='sr-only'>Where new repositories are made</legend>
+        {(
+          [
+            ['gitlab', 'GitLab group'],
+            ['github', 'GitHub (through a connection)']
+          ] as const
+        ).map(([k, label]) => (
+          <button
+            key={k}
+            type='button'
+            aria-pressed={kind === k}
+            className={segmentButton(kind === k)}
+            onClick={() => setKind(k)}
+          >
+            {label}
+          </button>
+        ))}
+      </fieldset>
+      {kind === 'github' ? (
+        <GithubTargetForm key='new-github' target={null} onClose={onClose} onSaved={onSaved} />
+      ) : (
+        <TargetForm key='new-gitlab' target={null} onClose={onClose} onSaved={onSaved} />
+      )}
+    </div>
+  )
+}
+
+interface GithubDraft extends HostnameDraft {
+  name: string
+  connection_id: number | null
+  template: string
+  visibility: 'private' | 'internal'
+  deploy_workflow: string
+  source_branch: string
+}
+
+function githubDraftOf(t: HubGithubTarget | null): GithubDraft {
+  const c: Partial<HubGithubTarget['config']> = t?.config ?? {}
+  return {
+    name: t?.name ?? '',
+    connection_id: t?.connection_id ?? null,
+    template: c.template ?? '',
+    visibility: c.visibility ?? 'private',
+    deploy_workflow: c.deploy_workflow ?? 'deploy.yml',
+    source_branch: c.source_branch ?? 'main',
+    dns_mode: c.dns_mode ?? 'automatic',
+    dns_zone_resource_id: c.dns_zone_resource_id ?? null,
+    wildcard_domain: c.wildcard_domain ?? '',
+    edge_address: c.edge_address ?? '',
+    scheme: c.scheme ?? 'https',
+    port: c.port != null ? String(c.port) : '',
+    cert_note: c.cert_note ?? ''
+  }
+}
+
+/** What the GitHub form refuses before the API is asked (the API checks everything again). */
+export function githubTargetDraftErrors(
+  d: GithubDraft
+): Partial<Record<keyof GithubDraft, string>> {
+  const e: Partial<Record<keyof GithubDraft, string>> = {}
+  if (!d.name.trim()) e.name = 'Give the target a name'
+  if (!d.connection_id) e.connection_id = 'Pick the GitHub connection repositories are made through'
+  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(d.template.trim()))
+    e.template = 'owner/repo of a template repository'
+  if (!/^[A-Za-z0-9._-]+\.ya?ml$/.test(d.deploy_workflow.trim()))
+    e.deploy_workflow = 'A workflow file name like deploy.yml'
+  if (!d.source_branch.trim()) e.source_branch = 'The branch environments deploy from'
+  Object.assign(e, hostnameErrors(d))
+  return e
+}
+
+const VISIBILITY_OPTIONS = [
+  { value: 'private', label: 'Private' },
+  { value: 'internal', label: 'Internal (organisation members)' }
+]
+
+function GithubTargetForm({
+  target,
+  onClose,
+  onSaved
+}: {
+  target: HubGithubTarget | null
+  onClose: () => void
+  onSaved: (id: number) => void
+}) {
+  const qc = useQueryClient()
+  const [d, setD] = useState<GithubDraft>(() => githubDraftOf(target))
+  const [tried, setTried] = useState(false)
+  const [failure, setFailure] = useState<unknown>(null)
+  const [checks, setChecks] = useState<{ ok: boolean; checks: TargetCheck[] } | null>(null)
+  const [savedDraft, setSavedDraft] = useState(() => JSON.stringify(githubDraftOf(target)))
+  const set = (patch: Partial<GithubDraft>) => setD((x) => ({ ...x, ...patch }))
+  const errors = githubTargetDraftErrors(d)
+  const invalid = Object.values(errors).some(Boolean)
+  const err = (k: keyof GithubDraft) => (tried ? (errors[k] ?? null) : null)
+  const dirty = JSON.stringify(d) !== savedDraft
+
+  const save = useMutation({
+    mutationFn: () =>
+      saveTarget(target?.id ?? null, {
+        kind: 'github',
+        name: d.name.trim(),
+        connection_id: d.connection_id,
+        config: {
+          template: d.template.trim(),
+          visibility: d.visibility,
+          deploy_workflow: d.deploy_workflow.trim(),
+          source_branch: d.source_branch.trim(),
+          ...hostnameBody(d)
+        }
+      }),
+    onSuccess: (answer) => {
+      setFailure(null)
+      setSavedDraft(JSON.stringify(d))
+      void qc.invalidateQueries({ queryKey: createKeys.targets() })
+      if (answer.data?.id) onSaved(answer.data.id)
+    },
+    onError: (e) => setFailure(e)
+  })
+  const test = useMutation({
+    mutationFn: () => testTarget(target?.id ?? 0),
+    onSuccess: setChecks,
+    onError: (e) => createToast(e, 'Could not test the target')
+  })
+  const remove = useMutation({
+    mutationFn: () => deleteTarget(target?.id ?? 0),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: createKeys.targets() })
+      onClose()
+    },
+    onError: (e) => createToast(e, 'Could not delete the target')
+  })
+
+  const id = (f: string) => `hub-ghtarget-${target?.id ?? 'new'}-${f}`
+  const mono = 'h-8 font-mono text-[13px]'
+  return (
+    <div className='space-y-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+      <div className='flex flex-wrap items-start gap-3'>
+        <h3 className='m-0 min-w-0 flex-1 truncate text-[15px] font-semibold text-slate-900 dark:text-foreground'>
+          {target ? target.name : 'New GitHub target'}
+        </h3>
+        {target && (
+          <ConfirmButton
+            title='Delete target'
+            confirmLabel='Delete this target?'
+            className={dangerGhost}
+            armedClassName={dangerArmed}
+            disabled={remove.isPending}
+            onConfirm={() => remove.mutate()}
+          >
+            <Trash2 className='h-3.5 w-3.5' aria-hidden /> Delete
+          </ConfirmButton>
+        )}
+      </div>
+
+      <FormGroup title='GitHub'>
+        <Field id={id('name')} label='Name' error={err('name')}>
+          <Input
+            id={id('name')}
+            value={d.name}
+            onChange={(e) => set({ name: e.target.value })}
+            placeholder='Apps on GitHub'
+            className='h-8 text-[13px]'
+          />
+        </Field>
+        <Field
+          id={id('conn')}
+          label='Connection'
+          hint='The GitHub connection new repositories are made through. Its keys stay with the connection.'
+          error={err('connection_id')}
+        >
+          <ConnectionPicker
+            id={id('conn')}
+            provider='github'
+            value={d.connection_id}
+            onChange={(c) => set({ connection_id: c })}
+          />
+        </Field>
+        <Field
+          id={id('template')}
+          label='Template repository'
+          hint='Each new repository is made from it (owner/repo, marked as a template on GitHub).'
+          error={err('template')}
+        >
+          <Input
+            id={id('template')}
+            value={d.template}
+            onChange={(e) => set({ template: e.target.value })}
+            placeholder='acme/nivaro-app-template'
+            className={mono}
+          />
+        </Field>
+        <Field id={id('visibility')} label='Visibility'>
+          <SimpleSelect
+            value={d.visibility}
+            onChange={(v) => set({ visibility: v === 'internal' ? 'internal' : 'private' })}
+            options={VISIBILITY_OPTIONS}
+            ariaLabel='Visibility'
+            className='h-8 text-left text-[13px]'
+            triggerProps={{ id: id('visibility') }}
+          />
+        </Field>
+        <Field
+          id={id('workflow')}
+          label='Deploy workflow'
+          hint='The file under .github/workflows that deploys an environment (inputs version and environment).'
+          error={err('deploy_workflow')}
+        >
+          <Input
+            id={id('workflow')}
+            value={d.deploy_workflow}
+            onChange={(e) => set({ deploy_workflow: e.target.value })}
+            placeholder='deploy.yml'
+            className={mono}
+          />
+        </Field>
+        <Field
+          id={id('branch')}
+          label='Branch'
+          hint='The branch environments deploy from.'
+          error={err('source_branch')}
+        >
+          <Input
+            id={id('branch')}
+            value={d.source_branch}
+            onChange={(e) => set({ source_branch: e.target.value })}
+            placeholder='main'
+            className={mono}
+          />
+        </Field>
+      </FormGroup>
+
+      <HostnamesGroup d={d} set={set} err={err} id={id} />
+
+      {failure != null && (
+        <ErrorNotice description={createError(failure, 'Could not save the target')} />
+      )}
+      {checks && <TargetChecks result={checks} />}
+
+      <div className='flex flex-wrap items-center gap-2'>
+        <Button
+          size='sm'
+          className='h-8 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+          disabled={save.isPending}
+          onClick={() => {
+            setTried(true)
+            if (!invalid) save.mutate()
+          }}
+        >
+          {save.isPending ? 'Saving…' : target ? 'Save' : 'Add target'}
+        </Button>
+        {target && (
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8'
+            disabled={test.isPending || dirty}
+            data-tip={dirty ? 'Save first: Test checks the saved settings' : undefined}
+            onClick={() => test.mutate()}
+          >
+            {test.isPending ? 'Testing…' : 'Test'}
+          </Button>
+        )}
+        <Button size='sm' variant='ghost' className='h-8' onClick={onClose}>
+          {target ? 'Close' : 'Cancel'}
+        </Button>
+      </div>
     </div>
   )
 }

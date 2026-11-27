@@ -165,6 +165,51 @@ export interface HubResourceChangeFilter {
   before?: number
 }
 
+/**
+ * A target new apps are created on: GitLab (token masked) or, with Hub providers, GitHub —
+ * `kind: 'github'` with the `connection_id` repositories are made through (no token of its own).
+ * `config.dns_mode` may be `route53` with `dns_zone_resource_id` = a managed aws.route53_zone.
+ */
+export interface HubTarget {
+  id: number
+  kind?: 'gitlab' | 'github'
+  name: string
+  connection_id?: number | null
+  config?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+/**
+ * A placement component. Provider kinds deploy through a managed resource (`resource_id`):
+ * github_actions → github.workflow, vercel → vercel.project, eas_update → expo.channel. For
+ * github_actions `deploy_job` is the mode: null = run the workflow (input `version`),
+ * `approve` / `approve:<GitHub environment>` = approve the run waiting for review there.
+ */
+export interface HubComponent {
+  id: number | null
+  placement_id: number
+  position: number
+  name: string
+  kind: 'api' | 'frontend' | 'stack' | 'github_actions' | 'vercel' | 'eas_update'
+  driver_id: number
+  resource_id?: number | null
+  source_branch: string
+  target_branch: string | null
+  deploy_job: string | null
+  [key: string]: unknown
+}
+
+/** A database server (no credentials). `resource_id` = the aws.rds_instance it is, when linked. */
+export interface HubDatabaseServer {
+  id: number
+  name: string
+  engine: string
+  host: string | null
+  port: number | null
+  resource_id?: number | null
+  [key: string]: unknown
+}
+
 type Data<T> = { data: T }
 const p = (v: number | string) => encodeURIComponent(String(v))
 
@@ -274,8 +319,7 @@ export const hubCommands = {
     cmd('GET', `/hub/databases/${p(id)}`),
   checkDatabase: (id: number): Command<Data<Record<string, unknown>>> =>
     cmd('POST', `/hub/databases/${p(id)}/check`),
-  listDatabaseServers: (): Command<Data<Array<Record<string, unknown>>>> =>
-    cmd('GET', '/hub/db-servers'),
+  listDatabaseServers: (): Command<Data<HubDatabaseServer[]>> => cmd('GET', '/hub/db-servers'),
   // Drivers and targets
   listDrivers: (): Command<Data<HubDriver[]>> => cmd('GET', '/hub/drivers'),
   createDriver: (body: Record<string, unknown>): Command<Data<HubDriver>> =>
@@ -284,7 +328,10 @@ export const hubCommands = {
     cmd('PATCH', `/hub/drivers/${p(id)}`, undefined, body),
   deleteDriver: (id: number): Command<Data<unknown>> => cmd('DELETE', `/hub/drivers/${p(id)}`),
   driverAgent: (id: number): Command<Data<unknown>> => cmd('GET', `/hub/drivers/${p(id)}/agent`),
-  listTargets: (): Command<Data<Array<Record<string, unknown>>>> => cmd('GET', '/hub/targets'),
+  listTargets: (): Command<Data<HubTarget[]>> => cmd('GET', '/hub/targets'),
+  // Placement components (provider kinds included; writes are REST only)
+  listComponents: (placementId: number): Command<Data<HubComponent[]>> =>
+    cmd('GET', `/hub/placements/${p(placementId)}/components`),
   // Creating apps
   planAppCreation: (input: Record<string, unknown>): Command<Data<HubPlan>> =>
     cmd('POST', '/hub/apps/create/plan', undefined, input),

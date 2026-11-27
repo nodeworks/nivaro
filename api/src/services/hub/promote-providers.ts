@@ -8,6 +8,9 @@
 //                   component's branch (target_branch, else source_branch) with the input
 //                   `version` = the version promoted (the workflow declares a `version` input).
 //                   A rollback dispatches it with the older version. Recorded: the branch.
+//                   Task 11c, environment approval (deploy_job `approve[:<env>]`): the step
+//                   approves the run of that workflow that waits for review on the GitHub
+//                   environment instead (no rollback: a waiting run cannot be sent back).
 //   vercel          the component's `vercel.project`; the deployment made live is a managed
 //                   `vercel.deployment` of THIS environment for that project: on promote the
 //                   newest one not live yet (adopt the build to make live on the environment's
@@ -42,6 +45,40 @@ export const PROVIDER_COMPONENT_TYPE: Record<ProviderComponentKind, string> = {
   eas_update: 'expo.channel'
 }
 
+/**
+ * Task 11c: how a github_actions component makes a version live, stored in its `deploy_job` (no
+ * migration): null = run the workflow (workflow_dispatch, input `version`); `approve` = approve the
+ * run that waits for review on the GitHub environment named like the Hub environment (its key);
+ * `approve:<name>` = on the GitHub environment <name>.
+ */
+export type GithubActionsMode =
+  | { mode: 'dispatch' }
+  | { mode: 'approve'; environment: string | null }
+
+const GITHUB_ENV_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]{0,90}$/
+
+export function githubActionsMode(deployJob: string | null | undefined): GithubActionsMode {
+  const v = (deployJob ?? '').trim()
+  if (v === 'approve') return { mode: 'approve', environment: null }
+  if (v.startsWith('approve:')) {
+    const name = v.slice('approve:'.length).trim()
+    return { mode: 'approve', environment: name || null }
+  }
+  return { mode: 'dispatch' }
+}
+
+/** The stored `deploy_job` for a github_actions mode, or undefined when the value is not one. */
+export function githubActionsModeText(v: unknown): string | null | undefined {
+  if (v === null || v === undefined || v === '' || v === 'dispatch') return null
+  if (typeof v !== 'string') return undefined
+  const t = v.trim()
+  if (t === 'approve') return 'approve'
+  if (!t.startsWith('approve:')) return undefined
+  const name = t.slice('approve:'.length).trim()
+  if (!name) return 'approve'
+  return GITHUB_ENV_NAME.test(name) ? `approve:${name}` : undefined
+}
+
 /** What the planner learned for one provider component (gathered; the planner stays pure). */
 export interface ProviderFact {
   connectionId: number | null
@@ -53,6 +90,11 @@ export interface ProviderFact {
   refLabel: string | null
   /** Why the step cannot run now (a blocker), or null. */
   problem: string | null
+  /** Task 11c, github_actions in approval mode: the GitHub environment the step approves. */
+  approveEnvironment?: string
+  /** …and the one waiting run (id + head commit) read while planning — the only one approved. */
+  approveRunId?: string
+  approveSha?: string
 }
 
 type ResourceLite = {
@@ -167,6 +209,8 @@ export async function gatherProviderFacts(o: {
   components: HubComponent[]
   previousComponents: HubComponent[]
   recorded: (c: HubComponent) => string | null
+  /** Task 11c: reads the GitHub run an approval step would approve (tests pass a fake). */
+  readWaitingRun?: import('./providers/hooks/approval-read.js').WaitingRunReader
 }): Promise<Record<number, ProviderFact>> {
   const out: Record<number, ProviderFact> = {}
   for (const c of o.components) {
@@ -190,6 +234,42 @@ export async function gatherProviderFacts(o: {
       fact.ref = branch
       fact.refLabel = `branch ${branch}`
       if (!branch) fact.problem = `${c.name}: name the branch the workflow runs on.`
+      // Task 11c: environment approval names the GitHub environment it approves (bound in the plan).
+      const mode = githubActionsMode(c.deploy_job)
+      if (mode.mode === 'approve') {
+        const env = mode.environment ?? o.target.key
+        fact.approveEnvironment = env
+        fact.refLabel = `the waiting run on ${branch}, environment ${env}`
+        if (o.kind === 'rollback') {
+          fact.problem = `${c.name}: approves a waiting GitHub deployment, which cannot roll back — start the older run in GitHub, then promote to approve it.`
+          continue
+        }
+        if (!branch) continue
+        if (!own.external_id) {
+          fact.problem = `${c.name}: its workflow has no GitHub id yet.`
+          continue
+        }
+        // The one run the step will approve: read now, named in the plan, bound in its hash.
+        const read =
+          o.readWaitingRun ?? (await import('./providers/hooks/approval-read.js')).readWaitingRun
+        try {
+          const run = await read({
+            connectionId: own.connection_id,
+            workflow: own.external_id,
+            environment: env,
+            branch
+          })
+          if (!run) {
+            fact.problem = `${c.name}: no run of ${own.external_id.split('#')[1] ?? 'the workflow'} on ${branch} waits for approval to ${env} — start it in GitHub, then plan the promotion again.`
+            continue
+          }
+          fact.approveRunId = String(run.runId)
+          fact.approveSha = run.headSha
+          fact.refLabel = `run ${run.runId} (commit ${run.headSha.slice(0, 12)}) on ${branch}, environment ${env}`
+        } catch (e) {
+          fact.problem = `${c.name}: could not read the waiting runs from GitHub (${e instanceof Error ? e.message.slice(0, 200) : 'no answer'}).`
+        }
+      }
       continue
     }
     if (o.kind === 'rollback') {
@@ -274,7 +354,10 @@ export function providerStepFor(
       connectionId: f.connectionId ?? 0,
       resourceId: f.resourceId ?? 0,
       ref: f.ref ?? '',
-      refLabel: f.refLabel ?? ''
+      refLabel: f.refLabel ?? '',
+      ...(f.approveEnvironment ? { approveEnvironment: f.approveEnvironment } : {}),
+      ...(f.approveRunId ? { approveRunId: f.approveRunId } : {}),
+      ...(f.approveSha ? { approveSha: f.approveSha } : {})
     }
   }
 }
@@ -303,6 +386,23 @@ export function providerChangeRequest(
     appId: o.appId,
     ...(o.envId != null ? { environmentId: o.envId } : {})
   }
+  if (p.kind === 'github_actions' && p.approveEnvironment)
+    return {
+      ...base,
+      ops: [
+        {
+          action: 'update',
+          resourceId: p.resourceId,
+          fields: {
+            ref: p.ref,
+            approve_environment: p.approveEnvironment,
+            approve_run_id: p.approveRunId ?? '',
+            approve_sha: p.approveSha ?? '',
+            approve: true
+          }
+        }
+      ]
+    }
   if (p.kind === 'github_actions')
     return {
       ...base,

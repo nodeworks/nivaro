@@ -8,7 +8,7 @@ import type { HubDockerDriverConfig } from '../hub-api'
  * the driver form uses. Nothing here ever holds a stored token: the API only shows a mask.
  */
 
-export type DnsMode = 'automatic' | 'manual'
+export type DnsMode = 'automatic' | 'manual' | 'route53'
 
 /** `GET /api/hub/drivers/:id/agent` — what the Hub agent reports about itself. */
 export interface HubAgentHealth {
@@ -80,6 +80,8 @@ export function useAgentCheck(driverId: number | null) {
 export interface DockerDraft {
   agent_url: string
   dns_mode: DnsMode
+  /** route53: the managed aws.route53_zone names are made in (null = not picked). */
+  dns_zone_resource_id?: number | null
   wildcard_domain: string
   edge_target: string
   /** '' = automatic (https; http for localhost / .test names). */
@@ -91,6 +93,7 @@ export interface DockerDraft {
 export const EMPTY_DOCKER_DRAFT: DockerDraft = {
   agent_url: '',
   dns_mode: 'automatic',
+  dns_zone_resource_id: null,
   wildcard_domain: '',
   edge_target: '',
   edge_scheme: '',
@@ -99,7 +102,8 @@ export const EMPTY_DOCKER_DRAFT: DockerDraft = {
 
 export const dockerDraftOf = (c: Partial<HubDockerDriverConfig> | undefined): DockerDraft => ({
   agent_url: c?.agent_url ?? '',
-  dns_mode: c?.dns_mode === 'manual' ? 'manual' : 'automatic',
+  dns_mode: c?.dns_mode === 'manual' || c?.dns_mode === 'route53' ? c.dns_mode : 'automatic',
+  dns_zone_resource_id: c?.dns_zone_resource_id ?? null,
   wildcard_domain: c?.wildcard_domain ?? '',
   edge_target: c?.edge_target ?? '',
   edge_scheme: c?.edge_scheme === 'https' || c?.edge_scheme === 'http' ? c.edge_scheme : '',
@@ -110,8 +114,9 @@ export const dockerDraftOf = (c: Partial<HubDockerDriverConfig> | undefined): Do
 export const dockerConfigBody = (d: DockerDraft) => ({
   agent_url: d.agent_url.trim().replace(/\/+$/, ''),
   dns_mode: d.dns_mode,
-  wildcard_domain: d.dns_mode === 'automatic' ? d.wildcard_domain.trim() : null,
-  edge_target: d.dns_mode === 'manual' ? d.edge_target.trim() : null,
+  wildcard_domain: d.dns_mode !== 'manual' ? d.wildcard_domain.trim() : null,
+  edge_target: d.dns_mode !== 'automatic' ? d.edge_target.trim() : null,
+  ...(d.dns_mode === 'route53' ? { dns_zone_resource_id: d.dns_zone_resource_id } : {}),
   edge_scheme: d.edge_scheme || null,
   edge_port: d.edge_port.trim() ? Number(d.edge_port.trim()) : null
 })
@@ -122,11 +127,15 @@ export function dockerDraftErrors(d: DockerDraft) {
       ? ''
       : "The Hub agent's address, e.g. https://swarm.example.com:8443",
     wildcard_domain:
-      d.dns_mode === 'automatic' && !d.wildcard_domain.trim()
+      d.dns_mode !== 'manual' && !d.wildcard_domain.trim()
         ? 'The domain every stack name ends with, e.g. apps.example.com'
         : '',
+    dns_zone_resource_id:
+      d.dns_mode === 'route53' && !d.dns_zone_resource_id
+        ? 'Pick the Route 53 hosted zone the names go in'
+        : '',
     edge_target:
-      d.dns_mode === 'manual' && !d.edge_target.trim()
+      d.dns_mode !== 'automatic' && !d.edge_target.trim()
         ? 'What each new name must point at, e.g. edge.example.com or an address'
         : '',
     edge_port:

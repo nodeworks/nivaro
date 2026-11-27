@@ -8,6 +8,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { cn } from '@/lib/utils'
 import { hubError } from '../hub-api'
 import { Field, ghostButton, NO_RECORD_ATTRS, NO_RECORD_CLASS, SecretInput } from '../hub-parts'
+import { ManagedResourcePicker } from '../providers/ResourcePickers'
 import {
   type DnsMode,
   type DockerDraft,
@@ -20,7 +21,7 @@ import {
 
 /** The address a new app on this host will get, from the draft (shown under the port). */
 function edgeAddressHint(d: DockerDraft): string {
-  const base = d.dns_mode === 'automatic' ? d.wildcard_domain.trim().replace(/^\*\./, '') : ''
+  const base = d.dns_mode !== 'manual' ? d.wildcard_domain.trim().replace(/^\*\./, '') : ''
   const host = base ? `myapp.${base}` : 'myapp.example.com'
   const local = /(^|\.)(localhost|test)$/i.test(base)
   const scheme = d.edge_scheme || (local ? 'http' : 'https')
@@ -106,7 +107,9 @@ export function DockerDriverFields({
         hint={
           draft.dns_mode === 'automatic'
             ? 'A wildcard DNS name already points at the edge, so new names work at once.'
-            : 'Someone adds a DNS record for each new name; the Hub tells you which.'
+            : draft.dns_mode === 'route53'
+              ? 'The Hub adds each new name to a Route 53 hosted zone it manages, pointing at the edge.'
+              : 'Someone adds a DNS record for each new name; the Hub tells you which.'
         }
       >
         <SimpleSelect
@@ -114,6 +117,7 @@ export function DockerDriverFields({
           onChange={(v) => onChange({ dns_mode: v as DnsMode })}
           options={[
             { value: 'automatic', label: 'Automatic (wildcard DNS)' },
+            { value: 'route53', label: 'Route 53 (the Hub adds each name)' },
             { value: 'manual', label: 'Manual (add each name)' }
           ]}
           ariaLabel='DNS mode'
@@ -121,7 +125,24 @@ export function DockerDriverFields({
           triggerProps={{ id: `${idPrefix}-dns` }}
         />
       </Field>
-      {draft.dns_mode === 'automatic' ? (
+      {draft.dns_mode === 'route53' && (
+        <Field
+          id={`${idPrefix}-zone`}
+          label='Hosted zone'
+          error={shown('dns_zone_resource_id')}
+          hint='A shared Route 53 zone the Hub manages; it must cover the wildcard domain.'
+        >
+          <ManagedResourcePicker
+            id={`${idPrefix}-zone`}
+            type='aws.route53_zone'
+            filter={{ scope: 'shared' }}
+            value={draft.dns_zone_resource_id ?? null}
+            onChange={(v) => onChange({ dns_zone_resource_id: v })}
+            placeholder='Pick a hosted zone'
+          />
+        </Field>
+      )}
+      {draft.dns_mode !== 'manual' && (
         <Field
           id={`${idPrefix}-wildcard`}
           label='Wildcard domain'
@@ -136,12 +157,17 @@ export function DockerDriverFields({
             className='h-8 font-mono text-[13px]'
           />
         </Field>
-      ) : (
+      )}
+      {draft.dns_mode !== 'automatic' && (
         <Field
           id={`${idPrefix}-edge`}
           label='Edge target'
           error={shown('edge_target')}
-          hint='What each new name must point at.'
+          hint={
+            draft.dns_mode === 'route53'
+              ? 'An address makes an A or AAAA record, a name a CNAME.'
+              : 'What each new name must point at.'
+          }
         >
           <Input
             id={`${idPrefix}-edge`}

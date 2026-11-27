@@ -411,13 +411,29 @@ function build() {
       },
       databaseServers: {
         type: GraphQLJSON,
-        description: 'Database servers (no credentials)',
+        description:
+          'Database servers (no credentials); resource_id = the aws.rds_instance a server is (Task 11)',
         resolve: (_r, _a, ctx) => hubRest(ctx, 'GET', '/db-servers')
       },
       targets: {
         type: GraphQLJSON,
-        description: 'GitLab targets for new apps (tokens masked)',
-        resolve: (_r, _a, ctx) => hubRest(ctx, 'GET', '/targets')
+        description:
+          'Targets for new apps: GitLab (token masked) and GitHub (kind github, connection_id; no token of its own)',
+        args: { kind: { type: GraphQLString, description: 'gitlab or github; omitted = both' } },
+        resolve: async (_r, a: { kind?: string }, ctx) => {
+          const rows = asList(await hubRest(ctx, 'GET', '/targets'))
+          return a.kind
+            ? rows.filter((t) => ((t as { kind?: string }).kind ?? 'gitlab') === a.kind)
+            : rows
+        }
+      },
+      components: {
+        type: GraphQLJSON,
+        description:
+          'Components of a placement; provider kinds (github_actions, vercel, eas_update) carry resource_id, and github_actions its mode in deploy_job (null = run the workflow, approve[:<GitHub environment>] = approve the waiting run)',
+        args: { placementId: { type: nn(GraphQLInt) } },
+        resolve: (_r, a: { placementId: number }, ctx) =>
+          hubRest(ctx, 'GET', `/placements/${id(a.placementId)}/components`)
       },
       promotion: {
         type: HubRun,

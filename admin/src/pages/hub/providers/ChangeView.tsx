@@ -128,7 +128,7 @@ export function ChangeView({
     return t?.reversible !== false
   })
   const steps = model.steps
-  const resumable = isResumable(status, steps)
+  const resumable = isResumable(status, steps, model.resumable)
   const failedStep = [...steps].reverse().find((s) => s.status === 'failed') ?? null
   // One failure message: the notice below says it (with what to do); a step repeats it only when
   // it says something else.
@@ -438,7 +438,9 @@ export function ChangeView({
           <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             {resumable
               ? 'Resume runs only the steps that did not finish.'
-              : 'A retry will not fix this. Fix the cause, then plan the change again.'}
+              : failedStep?.error?.code === 'AUTH_FAILED'
+                ? 'Change this connection’s keys under Connections, then come back to resume.'
+                : 'A retry will not fix this. Fix the cause, then plan the change again.'}
           </span>
         </div>
       )}

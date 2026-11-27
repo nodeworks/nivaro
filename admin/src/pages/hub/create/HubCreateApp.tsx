@@ -19,6 +19,7 @@ import {
   segmentButton,
   segmentGroup
 } from '../hub-parts'
+import { fetchProviderTypes, providerKeys } from '../providers/providers-api'
 import { fetchSharedList, sharedKeys } from '../shared/shared-api'
 import { countsLine, fetchTemplates, templateError, templateKeys } from '../templates/templates-api'
 import {
@@ -36,11 +37,19 @@ import {
   defaultDbNames,
   fetchTargets,
   isCreatableKey,
+  isGithubTarget,
   KIND_WORDS,
   previewPlan,
   startCreate,
   VERSION_RE
 } from './create-api'
+import {
+  type PartDraft,
+  ProviderPartsEditor,
+  partProblems,
+  partsPayload,
+  partTypeInfo
+} from './ProviderParts'
 
 /** A control character (what the planner refuses in a secret). */
 const hasControlChar = (v: string) =>
@@ -60,6 +69,8 @@ interface EnvDraft {
   hostname: string
   /** Docker, published-port edge: this environment's port. */
   publishPort: string
+  /** Task 11: provider parts made for this environment. */
+  parts: PartDraft[]
 }
 
 const emptyEnv = (key: string): EnvDraft => ({
@@ -70,7 +81,8 @@ const emptyEnv = (key: string): EnvDraft => ({
   loginName: '',
   databaseId: '',
   hostname: '',
-  publishPort: ''
+  publishPort: '',
+  parts: []
 })
 
 interface SecretDraft {
@@ -93,7 +105,7 @@ export function linesToMap(raw: string): Record<string, string> | null {
   return out
 }
 
-const KIND_OPTIONS: CreationKind[] = ['gitlab', 'docker', 'shared']
+const KIND_OPTIONS: CreationKind[] = ['gitlab', 'github', 'docker', 'shared']
 const SIZE_OPTIONS = [
   { value: 'small', label: 'Small (one process)' },
   { value: 'medium', label: 'Medium (web + worker)' },
@@ -134,6 +146,7 @@ export function HubCreateApp({
 }) {
   const qc = useQueryClient()
   const targets = useQuery({ queryKey: createKeys.targets(), queryFn: fetchTargets })
+  const providerTypes = useQuery({ queryKey: providerKeys.types(), queryFn: fetchProviderTypes })
   const drivers = useQuery({ queryKey: hubKeys.drivers(), queryFn: fetchDrivers })
   const sharedList = useQuery({ queryKey: sharedKeys.list(), queryFn: fetchSharedList })
   // The Databases tab's reads and keys: a save on either screen refreshes both.
@@ -172,7 +185,12 @@ export function HubCreateApp({
   const [adminLast, setAdminLast] = useState('')
   const [touched, setTouched] = useState(false)
 
-  const target = targets.data?.find((t) => String(t.id) === targetId) ?? null
+  // GitLab and GitHub targets share one list; each kind offers its own (Task 11).
+  const kindTargets = (targets.data ?? []).filter((t) =>
+    kind === 'github' ? isGithubTarget(t) : !isGithubTarget(t)
+  )
+  const target = kindTargets.find((t) => String(t.id) === targetId) ?? null
+  const onTarget = kind === 'gitlab' || kind === 'github'
   const dockerDrivers = (drivers.data ?? []).filter((d) => d.kind === 'docker')
   const driver = dockerDrivers.find((d) => String(d.id) === driverId) ?? null
   const deployments = (sharedList.data ?? []).filter((s) => s.status !== 'retired')
@@ -180,19 +198,17 @@ export function HubCreateApp({
   const sharedBase = shared?.host_pattern?.startsWith('*.') ? shared.host_pattern.slice(2) : null
   // Where names are typed by hand: a GitLab target or Docker driver with manual DNS, or a shared
   // deployment without a host pattern.
-  const manual =
-    kind === 'gitlab'
-      ? target?.config.dns_mode === 'manual'
-      : kind === 'docker'
-        ? driver?.config.dns_mode === 'manual'
-        : !!shared && !sharedBase
-  const wildcard =
-    kind === 'gitlab'
-      ? (target?.config.wildcard_domain ?? null)
-      : kind === 'docker'
-        ? (driver?.config.wildcard_domain ?? null)
-        : sharedBase
-  const picked = kind === 'gitlab' ? !!target : kind === 'docker' ? !!driver : !!shared
+  const manual = onTarget
+    ? target?.config.dns_mode === 'manual'
+    : kind === 'docker'
+      ? driver?.config.dns_mode === 'manual'
+      : !!shared && !sharedBase
+  const wildcard = onTarget
+    ? (target?.config.wildcard_domain ?? null)
+    : kind === 'docker'
+      ? (driver?.config.wildcard_domain ?? null)
+      : sharedBase
+  const picked = onTarget ? !!target : kind === 'docker' ? !!driver : !!shared
   const settingsMap = useMemo(() => linesToMap(settingsText), [settingsText])
   const pinsMap = useMemo(() => linesToMap(pinsText), [pinsText])
   const targetInput: CreateTargetInput = useMemo(() => {
@@ -216,7 +232,8 @@ export function HubCreateApp({
         shared_id: Number(sharedId) || 0,
         ...(poolMax.trim() ? { pool_max: Number(poolMax) } : {})
       }
-    return { kind, id: Number(targetId) || 0 }
+    if (kind === 'github') return { kind, id: Number(targetId) || 0 }
+    return { kind: 'gitlab', id: Number(targetId) || 0 }
   }, [kind, driverId, sharedId, targetId, size, redis, settingsMap, secrets, pinsMap, poolMax])
   const sharedSignin = kind === 'shared' && !issuer.trim() && !clientId.trim() && !clientSecret
 
@@ -256,6 +273,9 @@ export function HubCreateApp({
         : {}),
       environments: envs.map((e) => ({
         key: e.key.trim(),
+        ...(e.parts.length && kind !== 'shared'
+          ? { providers: partsPayload(e.parts, providerTypes.data) }
+          : {}),
         ...(manual && e.hostname.trim() ? { hostname: e.hostname.trim() } : {}),
         ...(kind === 'docker' && e.publishPort.trim()
           ? { publish_port: Number(e.publishPort) }
@@ -288,7 +308,9 @@ export function HubCreateApp({
       manual,
       kind,
       sharedSignin,
-      extensionsText
+      extensionsText,
+      providerTypes.data,
+      targetId
     ]
   )
   // What a preview sends: the form with every secret replaced by the mask. The planner only
@@ -317,9 +339,18 @@ export function HubCreateApp({
               }
             }
           }
-        : {})
+        : {}),
+      // Provider part secrets (an RDS password) go out once, with Create.
+      environments: input.environments.map((env, i) =>
+        env.providers
+          ? {
+              ...env,
+              providers: partsPayload(envs[i]?.parts ?? [], providerTypes.data, { mask: true })
+            }
+          : env
+      )
     }
-  }, [input])
+  }, [input, envs, providerTypes.data])
   // The form's identity: a preview counts only for exactly this form. Held in memory only.
   const sig = useMemo(() => JSON.stringify(previewInput), [previewInput])
 
@@ -396,6 +427,13 @@ export function HubCreateApp({
     hostnames: envs.map((e) =>
       manual && !e.hostname.trim() ? 'Enter the hostname you will request' : ''
     ),
+    parts: envs.map(
+      (e) =>
+        kind !== 'shared' &&
+        e.parts.some(
+          (pt) => Object.keys(partProblems(pt, partTypeInfo(providerTypes.data, pt.type))).length
+        )
+    ),
     // The preview never sees the secret, so the form checks what the planner would.
     secret:
       clientSecret && !clientSecret.trim()
@@ -411,6 +449,7 @@ export function HubCreateApp({
     !!local.settings ||
     local.ports.some(Boolean) ||
     local.hostnames.some(Boolean) ||
+    local.parts.some(Boolean) ||
     !picked
 
   const fresh = plan?.sig === sig ? plan.plan : null
@@ -469,9 +508,9 @@ export function HubCreateApp({
   ]
   const targetOptions = [
     { value: '', label: 'Pick a target' },
-    ...(targets.data ?? []).map((t) => ({
+    ...kindTargets.map((t) => ({
       value: String(t.id),
-      label: `${t.name} · ${t.config.namespace}${t.config.dns_mode === 'manual' ? ' · names by hand' : ''}`
+      label: `${t.name} · ${isGithubTarget(t) ? t.config.template : t.config.namespace}${t.config.dns_mode === 'manual' ? ' · names by hand' : t.config.dns_mode === 'route53' ? ' · Route 53' : ''}`
     }))
   ]
   const pickedTemplate = templates.data?.find((t) => String(t.id) === templateId) ?? null
@@ -598,18 +637,22 @@ export function HubCreateApp({
             </p>
           </div>
           <div className='grid grid-cols-1 gap-3 p-4 sm:grid-cols-2'>
-            {kind === 'gitlab' && (
+            {onTarget && (
               <Field
                 id='hub-create-target'
-                label='Target'
+                label={kind === 'github' ? 'GitHub target' : 'Target'}
                 hint={
-                  targets.data?.length === 0
-                    ? 'No targets yet: add one on the Targets tab.'
+                  targets.data && kindTargets.length === 0
+                    ? `No ${kind === 'github' ? 'GitHub' : 'GitLab'} targets yet: add one on the Targets tab.`
                     : target
                       ? target.config.dns_mode === 'manual'
                         ? 'Hostnames are requested by hand on this target.'
-                        : `Hostnames are made under ${target.config.wildcard_domain}.`
-                      : 'Where the deploy repository is made and deployed from.'
+                        : target.config.dns_mode === 'route53'
+                          ? `The Hub adds each name under ${target.config.wildcard_domain} to Route 53.`
+                          : `Hostnames are made under ${target.config.wildcard_domain}.`
+                      : kind === 'github'
+                        ? 'Where the repository is made and which workflow deploys it.'
+                        : 'Where the deploy repository is made and deployed from.'
                 }
               >
                 <SimpleSelect
@@ -897,7 +940,7 @@ export function HubCreateApp({
               )}
             </div>
           )}
-          {kind === 'gitlab' && targets.isError && (
+          {onTarget && targets.isError && (
             <div className='px-4 pb-3'>
               <ErrorNotice
                 description={createError(targets.error, 'Could not load the targets')}
@@ -1147,6 +1190,15 @@ export function HubCreateApp({
                         />
                       </Field>
                     )}
+                    {kind !== 'shared' && (
+                      <ProviderPartsEditor
+                        idPrefix={id('providers')}
+                        envKey={e.key.trim()}
+                        parts={e.parts}
+                        onChange={(parts) => setEnv(i, { parts })}
+                        tried={false}
+                      />
+                    )}
                     {manual ? null : auto ? (
                       <p className='m-0 text-[12px] text-slate-600 sm:col-span-2 dark:text-slate-300'>
                         Hostname: <code className='font-mono text-[12px]'>{auto}</code>{' '}
@@ -1228,9 +1280,11 @@ export function HubCreateApp({
             <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
               {planning
                 ? 'Checking…'
-                : blockers.length && fresh
-                  ? 'Fix what the preview lists first.'
-                  : 'Create is offered once the preview of this form has nothing to fix.'}
+                : local.parts.some(Boolean)
+                  ? 'Finish or remove the provider parts first.'
+                  : blockers.length && fresh
+                    ? 'Fix what the preview lists first.'
+                    : 'Create is offered once the preview of this form has nothing to fix.'}
             </span>
           )}
         </div>

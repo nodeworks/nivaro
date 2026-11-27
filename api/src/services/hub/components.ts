@@ -3,6 +3,7 @@ import { db } from '../../db/index.js'
 import { isUniqueViolation } from '../../lib/unique-violation.js'
 import { getPlacement } from './drivers.js'
 import {
+  githubActionsModeText,
   isProviderKind,
   type ProviderComponentKind,
   providerComponentProblem
@@ -305,6 +306,14 @@ async function providerComponentInput(
     return fail('BAD_BRANCH', 'target_branch must be a branch name or null.')
   const verify = checkVerify(pick('verify_url'), pick('verify_field'))
   if (!verify.ok) return verify
+  // Task 11c: a github_actions component's deploy_job is its mode (null = run the workflow,
+  // `approve[:<GitHub environment>]` = approve the waiting run); other provider kinds have none.
+  const mode = kind === 'github_actions' ? githubActionsModeText(pick('deploy_job')) : null
+  if (mode === undefined)
+    return fail(
+      'BAD_JOB',
+      'deploy_job of a github_actions component is null (run the workflow), "approve" or "approve:<GitHub environment>".'
+    )
   return {
     ok: true,
     row: {
@@ -315,7 +324,7 @@ async function providerComponentInput(
       source_branch: source,
       target_branch: target,
       before_job: null,
-      deploy_job: null,
+      deploy_job: mode,
       verify_url: verify.verifyUrl,
       verify_field: verify.field,
       resource_id: resourceId as number
