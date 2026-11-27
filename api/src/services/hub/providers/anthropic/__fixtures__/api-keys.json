@@ -1,0 +1,46 @@
+{
+  "data": [
+    {
+      "id": "apikey_test0001",
+      "type": "api_key",
+      "name": "demo-app key",
+      "status": "active",
+      "scope": {
+        "type": "workspace",
+        "workspace_id": "wrkspc_test0001"
+      },
+      "partial_key_hint": "sk-ant-api03-TEST...WXYZ",
+      "created_at": "2026-11-02T00:00:00Z",
+      "expires_at": null,
+      "principal": null
+    },
+    {
+      "id": "apikey_test0002",
+      "type": "api_key",
+      "name": "org key",
+      "status": "inactive",
+      "scope": {
+        "type": "organization"
+      },
+      "partial_key_hint": "sk-ant-api03-ORGK...ABCD",
+      "created_at": "2026-11-02T00:00:00Z",
+      "expires_at": null,
+      "principal": null
+    },
+    {
+      "id": "apikey_test0003",
+      "type": "api_key",
+      "name": "old",
+      "status": "archived",
+      "scope": {
+        "type": "workspace",
+        "workspace_id": "wrkspc_test0001"
+      },
+      "partial_key_hint": "sk-ant-api03-OLDK...OLDK",
+      "created_at": "2026-11-02T00:00:00Z",
+      "expires_at": null,
+      "principal": null
+    }
+  ],
+  "has_more": false
+}

@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "type": "workspace",
+      "id": "wrkspc_test0001",
+      "name": "demo-app",
+      "display_color": "#6C5BB9",
+      "created_at": "2026-11-01T00:00:00Z",
+      "archived_at": null
+    },
+    {
+      "type": "workspace",
+      "id": "wrkspc_test0002",
+      "name": "other-app",
+      "display_color": "#111111",
+      "created_at": "2026-11-02T00:00:00Z",
+      "archived_at": null
+    }
+  ],
+  "has_more": false,
+  "first_id": "wrkspc_test0001",
+  "last_id": "wrkspc_test0002"
+}

@@ -376,6 +376,7 @@ import {
   hubProvidersSentryDocs,
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
+import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
@@ -1261,6 +1262,7 @@ export const navSections: NavGroup[] = [
       hubProvidersNeonDocs,
       hubProvidersEntraDocs,
       hubProvidersSlackDocs,
+      hubProvidersAnthropicDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]
