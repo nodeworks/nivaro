@@ -1,0 +1,20 @@
+{
+  "value": [
+    {
+      "@odata.type": "#microsoft.graph.aadUserConversationMember",
+      "id": "member-owner-fake",
+      "roles": ["owner"],
+      "displayName": "Owner Fake",
+      "email": "owner@example.test",
+      "userId": "bbbbbbbb-0000-4000-8000-0000000000b1"
+    },
+    {
+      "@odata.type": "#microsoft.graph.aadUserConversationMember",
+      "id": "member-one-fake",
+      "roles": [],
+      "displayName": "One Fake",
+      "email": "One@Example.test",
+      "userId": "bbbbbbbb-0000-4000-8000-0000000000b2"
+    }
+  ]
+}

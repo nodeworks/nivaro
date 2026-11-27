@@ -1,0 +1,8 @@
+{
+  "id": "aaaaaaaa-0000-4000-8000-00000000aaaa",
+  "displayName": "Test Platform Team",
+  "description": "Fake team for tests",
+  "visibility": "private",
+  "isArchived": false,
+  "webUrl": "https://teams.microsoft.com/l/team/fake"
+}

@@ -63,6 +63,7 @@ export * from './sections/hub-placement.js'
 export * from './sections/hub-providers.js'
 export * from './sections/hub-providers-entra.js'
 export * from './sections/hub-providers-redis.js'
+export * from './sections/hub-providers-teams.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
 export * from './sections/hub-security.js'
@@ -376,6 +377,7 @@ import {
 } from './sections/hub-providers.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
+import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
 import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
@@ -1253,6 +1255,7 @@ export const navSections: NavGroup[] = [
       hubProvidersDockerhubDocs,
       hubProvidersNeonDocs,
       hubProvidersEntraDocs,
+      hubProvidersTeamsDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]

@@ -1,0 +1,25 @@
+{
+  "value": [
+    {
+      "id": "19:generalfake000000000000000000000@thread.tacv2",
+      "displayName": "General",
+      "description": null,
+      "membershipType": "standard",
+      "webUrl": "https://teams.microsoft.com/l/channel/general"
+    },
+    {
+      "id": "19:fakechan0000000000000000000000@thread.tacv2",
+      "displayName": "app-alerts",
+      "description": "Alerts for the app",
+      "membershipType": "standard",
+      "webUrl": "https://teams.microsoft.com/l/channel/alerts"
+    },
+    {
+      "id": "19:privatefake00000000000000000000@thread.tacv2",
+      "displayName": "app-private",
+      "description": null,
+      "membershipType": "private",
+      "webUrl": "https://teams.microsoft.com/l/channel/private"
+    }
+  ]
+}
