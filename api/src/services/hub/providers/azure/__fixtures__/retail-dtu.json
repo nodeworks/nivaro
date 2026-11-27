@@ -1,0 +1,13 @@
+{
+  "Items": [
+    {
+      "currencyCode": "USD",
+      "retailPrice": 0.4912,
+      "unitOfMeasure": "1/Day",
+      "skuName": "S0",
+      "productName": "SQL Database Single Standard",
+      "effectiveStartDate": "2026-10-01T00:00:00Z",
+      "meterName": "S0 DTUs"
+    }
+  ]
+}

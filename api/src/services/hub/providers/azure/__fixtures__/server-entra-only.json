@@ -1,0 +1,17 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Sql/servers/sql-test-hub",
+  "name": "sql-test-hub",
+  "location": "eastus",
+  "properties": {
+    "state": "Ready",
+    "minimalTlsVersion": "1.2",
+    "publicNetworkAccess": "Disabled",
+    "fullyQualifiedDomainName": "sql-test-hub.database.windows.net",
+    "administrators": {
+      "administratorType": "ActiveDirectory",
+      "login": "dba-test-group",
+      "sid": "00000000-0000-4000-8000-0000000000cc",
+      "azureADOnlyAuthentication": true
+    }
+  }
+}

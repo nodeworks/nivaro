@@ -1,0 +1,40 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/providers/Microsoft.Consumption/budgets/budget-test-app7",
+  "name": "budget-test-app7",
+  "properties": {
+    "category": "Cost",
+    "amount": 200,
+    "timeGrain": "Monthly",
+    "timePeriod": {
+      "startDate": "2026-11-01T00:00:00Z",
+      "endDate": "2031-12-31T00:00:00Z"
+    },
+    "currentSpend": {
+      "amount": 170,
+      "unit": "USD"
+    },
+    "filter": {
+      "tags": {
+        "name": "nivaro-hub-app",
+        "operator": "In",
+        "values": ["7"]
+      }
+    },
+    "notifications": {
+      "Actual_GreaterThan_80_Percent": {
+        "enabled": true,
+        "operator": "GreaterThan",
+        "threshold": 80,
+        "thresholdType": "Actual",
+        "contactEmails": ["ops@example.test"]
+      },
+      "Actual_GreaterThan_100_Percent": {
+        "enabled": true,
+        "operator": "GreaterThan",
+        "threshold": 100,
+        "thresholdType": "Actual",
+        "contactEmails": ["ops@example.test"]
+      }
+    }
+  }
+}
