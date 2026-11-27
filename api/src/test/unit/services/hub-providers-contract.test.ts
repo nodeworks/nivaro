@@ -540,3 +540,34 @@ describe('engine contract', () => {
     expect(err.status).toBe(409)
   })
 })
+
+describe('providerFetch refuses dot segments (path traversal by id)', () => {
+  it('flags plain, encoded and decoded-to-dot segments', async () => {
+    const { hasDotSegment } = await import('../../../services/hub/providers/provider-fetch.js')
+    expect(hasDotSegment('https://api.github.com/repos/a/b/environments/..')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/environments/%2e%2e')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/environments/%2E')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/x/..%2f..')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/x/%zz')).toBe(true)
+    expect(hasDotSegment('https://gitlab.example.com/api/v4/projects/group%2Fproject')).toBe(false)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/environments/prod?x=..')).toBe(false)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/contents/.github/CODEOWNERS')).toBe(
+      false
+    )
+  })
+
+  it('refuses the call before anything is sent', async () => {
+    const { makeProviderFetch } = await import('../../../services/hub/providers/provider-fetch.js')
+    let sent = 0
+    const f = makeProviderFetch(['api.github.com'], {
+      fetchImpl: async () => {
+        sent++
+        return new Response('{}')
+      }
+    })
+    await expect(
+      f('https://api.github.com/repos/a/b/environments/%2e%2e', { method: 'DELETE' })
+    ).rejects.toMatchObject({ code: 'HOST_NOT_ALLOWED' })
+    expect(sent).toBe(0)
+  })
+})

@@ -68,8 +68,34 @@ export function hostAllowed(host: string, patterns: readonly string[]): boolean 
   return false
 }
 
+/**
+ * True when the raw (unparsed) path holds a dot segment, plain or percent-encoded, or a segment
+ * that decodes to one (`..%2f..`). `new URL()` silently resolves `/repos/a/b/environments/%2e%2e`
+ * to `/repos/a/b/` — a DELETE meant for an environment would hit the repository. Checked on the
+ * raw string, before any parsing, so no adapter can be talked into another path by an id.
+ */
+export function hasDotSegment(raw: string): boolean {
+  const afterScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, '')
+  const path = afterScheme.split(/[?#]/, 1)[0] ?? ''
+  for (const seg of path.split('/')) {
+    let decoded = seg
+    try {
+      decoded = decodeURIComponent(seg)
+    } catch {
+      return true
+    }
+    for (const part of decoded.split(/[\\/]/)) if (part === '.' || part === '..') return true
+  }
+  return false
+}
+
 function checkTarget(raw: string, patterns: readonly string[]): URL {
   let url: URL
+  if (hasDotSegment(raw))
+    throw new ProviderFetchError(
+      'HOST_NOT_ALLOWED',
+      'Provider addresses may not hold . or .. path parts.'
+    )
   try {
     url = new URL(raw)
   } catch {
