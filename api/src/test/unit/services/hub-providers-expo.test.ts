@@ -591,6 +591,43 @@ describe('expo adapter: apply', () => {
     expect(err.message).not.toContain(plain)
   })
 
+  it('build mutation variables come from desired, a tampered op.data.gitRef is refused', async () => {
+    const d = desired({
+      type: 'expo.build',
+      fields: {
+        project: { resourceId: 2 },
+        platform: 'ios',
+        profile: 'production',
+        gitRef: 'main'
+      },
+      refs: { project: 'app-1' }
+    })
+    const [op] = expoAdapter.plan(setup().ctx, d, null)
+    const bad = setup()
+    await expect(
+      expoAdapter.apply(bad.ctx, { ...op, data: { ...op.data, gitRef: 'evil-branch' } }, d)
+    ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
+    expect(bad.sent.some((x) => x.op === 'HubTriggerBuild')).toBe(false)
+    const ok = setup((o) =>
+      o === 'HubTriggerBuild'
+        ? {
+            data: {
+              build: {
+                triggerBuildFromGit: {
+                  id: 'bld-3',
+                  status: 'NEW',
+                  platform: 'IOS',
+                  buildProfile: 'production'
+                }
+              }
+            }
+          }
+        : undefined
+    )
+    await expoAdapter.apply(ok.ctx, op, d)
+    expect(ok.sent.find((x) => x.op === 'HubTriggerBuild')!.vars.gitRef).toBe('main')
+  })
+
   it('triggers a build once: a known external id is read, not re-triggered', async () => {
     const d = desired({
       type: 'expo.build',

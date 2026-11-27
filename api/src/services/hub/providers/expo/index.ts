@@ -549,15 +549,16 @@ async function triggerBuild(
   await requireApp(ctx, appId)
   const data = (op.data ?? {}) as Record<string, unknown>
   if (
-    (data.platform !== undefined && data.platform !== d.fields.platform) ||
-    (data.profile !== undefined && data.profile !== d.fields.profile)
+    (data.platform ?? null) !== (d.fields.platform ?? null) ||
+    (data.profile ?? null) !== (d.fields.profile ?? null) ||
+    (data.gitRef ?? null) !== (d.fields.gitRef ?? null)
   )
     throw new ProviderError('TARGET_MISMATCH', 'The build request does not match the planned one.')
   const out = await gql(ctx, Q.M_TRIGGER_BUILD, {
     appId,
-    platform: String(data.platform ?? d.fields.platform ?? '').toUpperCase(),
-    profile: String(data.profile ?? d.fields.profile ?? ''),
-    gitRef: (data.gitRef as string | null) ?? null
+    platform: String(d.fields.platform ?? '').toUpperCase(),
+    profile: String(d.fields.profile ?? ''),
+    gitRef: str(d.fields.gitRef)
   })
   const row = out.build?.triggerBuildFromGit
   if (!row?.id) throw new ProviderError('EXPO_BAD_ANSWER', 'Expo did not return the build.')
