@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "Invalid Input Provided",
+    "code": 2001,
+    "errors": ["Name has already been taken"]
+  }
+}

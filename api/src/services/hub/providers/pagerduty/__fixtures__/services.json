@@ -1,0 +1,32 @@
+{
+  "services": [
+    {
+      "id": "PSVC001",
+      "type": "service",
+      "name": "checkout-api",
+      "description": "Checkout",
+      "status": "active",
+      "html_url": "https://testco.pagerduty.com/service-directory/PSVC001",
+      "escalation_policy": {
+        "id": "PPOL001",
+        "type": "escalation_policy_reference"
+      },
+      "incident_urgency_rule": {
+        "type": "constant",
+        "urgency": "high"
+      },
+      "auto_resolve_timeout": 14400,
+      "acknowledgement_timeout": 1800,
+      "alert_creation": "create_alerts_and_incidents",
+      "integrations": [
+        {
+          "id": "PINT001",
+          "type": "events_api_v2_inbound_integration_reference"
+        }
+      ]
+    }
+  ],
+  "limit": 50,
+  "offset": 0,
+  "more": false
+}
