@@ -1,0 +1,7 @@
+{
+  "sid": "ACeeeeeeeeeeeeeeeeeeeeeeeeeeeeee22",
+  "owner_account_sid": "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+  "friendly_name": "demo-sub",
+  "status": "active",
+  "auth_token": "test-secret-twilio-sub-token"
+}

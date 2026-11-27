@@ -1,0 +1,15 @@
+{
+  "usage_records": [
+    {
+      "start_date": "2026-11-25",
+      "price": "1.25",
+      "price_unit": "usd"
+    },
+    {
+      "start_date": "2026-11-26",
+      "price": "0.5",
+      "price_unit": "usd"
+    }
+  ],
+  "next_page_uri": null
+}
