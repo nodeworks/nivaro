@@ -1,0 +1,6 @@
+{
+  "name": "projects/demo-app-12345/serviceAccounts/fcm-send@demo-app-12345.iam.gserviceaccount.com/keys/bbbbbbbbbbbbbbbbbbbbbbbb22222222",
+  "validAfterTime": "2026-11-26T00:00:00Z",
+  "validBeforeTime": "9999-12-31T23:59:59Z",
+  "privateKeyData": "eyJ0eXBlIjoic2VydmljZV9hY2NvdW50IiwicHJpdmF0ZV9rZXkiOiItLS0tLUJFR0lOIFBSSVZBVEUgS0VZLS0tLS1cblRFU1RGQUtFS0VZREFUQTAwMDAwMDAwMDBcbi0tLS0tRU5EIFBSSVZBVEUgS0VZLS0tLS1cbiJ9"
+}

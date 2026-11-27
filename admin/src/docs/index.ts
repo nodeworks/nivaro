@@ -383,7 +383,9 @@ import {
 import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
+import { hubProvidersFirebaseDocs } from './sections/hub-providers-firebase.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
+import { hubProvidersMailgunDocs } from './sections/hub-providers-mailgun.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
@@ -1278,6 +1280,8 @@ export const navSections: NavGroup[] = [
       hubProvidersSlackDocs,
       hubProvidersPagerdutyDocs,
       hubProvidersSendgridDocs,
+      hubProvidersMailgunDocs,
+      hubProvidersFirebaseDocs,
       hubProvidersTeamsDocs,
       hubProvidersAnthropicDocs,
       hubProvidersHooksDocs,
