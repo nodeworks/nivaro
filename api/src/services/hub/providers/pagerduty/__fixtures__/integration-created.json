@@ -1,0 +1,12 @@
+{
+  "integration": {
+    "id": "PINT002",
+    "type": "events_api_v2_inbound_integration",
+    "name": "Nivaro Hub",
+    "integration_key": "test-secret-routing-key-0002",
+    "service": {
+      "id": "PSVC001",
+      "type": "service_reference"
+    }
+  }
+}

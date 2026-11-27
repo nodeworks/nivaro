@@ -1,0 +1,5 @@
+{
+  "status": "invalid event",
+  "message": "Event object is invalid",
+  "errors": ["Length of 'routing_key' is incorrect test-secret-routing-key-0001"]
+}

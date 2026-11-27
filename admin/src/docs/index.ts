@@ -374,6 +374,7 @@ import {
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
+import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
 import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
@@ -1250,6 +1251,7 @@ export const navSections: NavGroup[] = [
       hubProvidersRedisCloudDocs,
       hubProvidersDockerhubDocs,
       hubProvidersNeonDocs,
+      hubProvidersPagerdutyDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]
