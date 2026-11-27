@@ -1,10 +1,51 @@
 {
-  "generated_at": "2026-11-27T18:12:04.192Z",
+  "generated_at": "2026-11-27T19:07:36.917Z",
   "releases": [
+    {
+      "version": "0.3.220",
+      "tag": "v0.3.220",
+      "date": "2026-11-27T14:07:17-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the System menu offers an app owner only pages an owner can use",
+              "hash": "624a22384"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync docs for the Hub owner System menu",
+              "hash": "c1fb9f678"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "Incidents, On-call and Costs opened on one app",
+              "hash": "adf34a2a1"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.3.219",
       "tag": "v0.3.219",
-      "date": "2026-11-27T13:11:44-05:00",
+      "date": "2026-11-27T13:12:04-05:00",
       "sections": [
         {
           "label": "Added",
