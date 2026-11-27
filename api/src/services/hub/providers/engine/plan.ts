@@ -52,6 +52,7 @@ import { engineDeps } from './deps.js'
 import {
   type AccessAnswer,
   assertCarriedGrantOps,
+  assertRenewalOps,
   hubRecordBlockers,
   judgeAccess,
   judgeChangeGates,
@@ -831,7 +832,8 @@ export async function computePlan(
       scope,
       appId: access.app?.id ?? null,
       environmentId: access.env?.id ?? null,
-      actions: req.ops.map((o) => o.action)
+      actions: req.ops.map((o) => o.action),
+      resourceIds: req.ops.map((o) => o.resourceId ?? null)
     })
 
   // Managed rows of this connection, for provider id → row lookups (refs, adopt).
@@ -1267,6 +1269,8 @@ export async function computePlan(
     resourceIds,
     new Set(opRows.filter((r): r is HubResourceRow => !!r).map((r) => r.id))
   )
+  // Task 43: a renewal carries only the adapter's renew op.
+  assertRenewalOps(origin, ops)
 
   // Task 33: approving a GitHub deployment is refused at plan time too (Task 11c refused it only
   // at start): no promotion origin → ORIGIN_INVALID, another GitHub environment → TARGET_MISMATCH.

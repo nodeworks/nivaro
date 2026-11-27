@@ -38,7 +38,14 @@ export const CLOUDFLARE_BUNDLED: BundledPriceTable = {
     'workers:paid': { unit: 'month', unitCents: 500, label: 'Workers Paid plan, per account' },
     'r2:storage': { unit: 'GB-month', unitCents: 1.5, label: 'R2 Standard storage' },
     'r2:class_a': { unit: 'million ops', unitCents: 450, label: 'R2 Class A operations' },
-    'r2:class_b': { unit: 'million ops', unitCents: 36, label: 'R2 Class B operations' }
+    'r2:class_b': { unit: 'million ops', unitCents: 36, label: 'R2 Class B operations' },
+    // Task 43: Cloudflare Registrar sells at cost (registry + ICANN fee); copied 2026-11-27.
+    'domain:renew:com': { unit: 'year', unitCents: 1046, label: '.com renewal (at cost)' },
+    'domain:renew:net': { unit: 'year', unitCents: 1250, label: '.net renewal (at cost)' },
+    'domain:renew:org': { unit: 'year', unitCents: 1050, label: '.org renewal (at cost)' },
+    'domain:renew:dev': { unit: 'year', unitCents: 1250, label: '.dev renewal (at cost)' },
+    'domain:renew:app': { unit: 'year', unitCents: 1450, label: '.app renewal (at cost)' },
+    'domain:renew:io': { unit: 'year', unitCents: 5000, label: '.io renewal (at cost)' }
   }
 }
 

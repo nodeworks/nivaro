@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+  <Errors />
+  <Warnings />
+  <RequestedCommand>namecheap.domains.create</RequestedCommand>
+  <CommandResponse Type="namecheap.domains.create">
+    <DomainCreateResult Domain="hub-test-new.com" Registered="true" ChargedAmount="11.18" DomainID="2001" OrderID="3001" TransactionID="4001" WhoisguardEnable="true" FreePositiveSSL="false" NonRealTimeDomain="false" />
+  </CommandResponse>
+  <Server>SANDBOX-TEST</Server>
+  <GMTTimeDifference>--5:00</GMTTimeDifference>
+  <ExecutionTime>0.05</ExecutionTime>
+</ApiResponse>

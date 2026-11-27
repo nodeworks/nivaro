@@ -2,6 +2,7 @@ import { fieldWords, typedName } from '../plan-words.js'
 import type {
   DesiredResource,
   FieldChange,
+  HealthAnswer,
   ListPage,
   Observed,
   OpResult,
@@ -38,6 +39,8 @@ export interface TypeImpl {
   apply(ctx: ProviderContext, op: PlannedOp, desired: DesiredResource | null): Promise<OpResult>
   findExisting?(ctx: ProviderContext, desired: DesiredResource): Promise<Observed | null>
   readOutputs?(ctx: ProviderContext, externalId: string): Promise<Record<string, string>>
+  /** Task 43: a type that answers health (the registrar domain, for the domain watch). */
+  health?(ctx: ProviderContext, externalId: string): Promise<HealthAnswer>
   permissions: PermissionProbe[]
 }
 

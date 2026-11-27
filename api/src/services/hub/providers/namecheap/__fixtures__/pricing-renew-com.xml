@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+  <Errors />
+  <Warnings />
+  <RequestedCommand>namecheap.users.getPricing</RequestedCommand>
+  <CommandResponse Type="namecheap.users.getPricing">
+    <UserGetPricingResult>
+      <ProductType Name="domains">
+        <ProductCategory Name="renew">
+          <Product Name="com">
+            <Price Duration="1" DurationType="YEAR" Price="16.98" PricingType="MULTIPLE" AdditionalCost="0.20" RegularPrice="16.98" YourPrice="16.98" YourPriceType="MULTIPLE" YourAdditonalCost="0.20" PromotionPrice="0.0" Currency="USD" />
+            <Price Duration="2" DurationType="YEAR" Price="16.98" PricingType="MULTIPLE" AdditionalCost="0.20" YourPrice="16.98" Currency="USD" />
+          </Product>
+        </ProductCategory>
+      </ProductType>
+    </UserGetPricingResult>
+  </CommandResponse>
+  <Server>SANDBOX-TEST</Server>
+  <GMTTimeDifference>--5:00</GMTTimeDifference>
+  <ExecutionTime>0.05</ExecutionTime>
+</ApiResponse>

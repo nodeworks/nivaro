@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="ERROR" xmlns="http://api.namecheap.com/xml.response">
+  <Errors>
+    <Error Number="500000">Too many requests</Error>
+  </Errors>
+  <Warnings />
+  <RequestedCommand />
+  <Server>SANDBOX-TEST</Server>
+  <ExecutionTime>0</ExecutionTime>
+</ApiResponse>

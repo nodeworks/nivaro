@@ -26,7 +26,9 @@ export const PART_TYPES = [
   'vercel.project',
   'auth0.application',
   'aws.route53_record',
-  'aws.rds_instance'
+  'aws.rds_instance',
+  'livekit.api_key',
+  'acme.certificate'
 ] as const
 export type PartType = (typeof PART_TYPES)[number]
 export const MAX_PARTS = 6
@@ -35,7 +37,9 @@ const PART_WORDS: Record<PartType, string> = {
   'vercel.project': 'Vercel project',
   'auth0.application': 'Auth0 application',
   'aws.route53_record': 'Route 53 record',
-  'aws.rds_instance': 'RDS instance'
+  'aws.rds_instance': 'RDS instance',
+  'livekit.api_key': 'LiveKit key',
+  'acme.certificate': 'TLS certificate (ACME)'
 }
 
 const PART_HINT: Record<PartType, string> = {
@@ -44,7 +48,11 @@ const PART_HINT: Record<PartType, string> = {
     'Sign-in, logout and origin addresses default to this environment’s address when left empty.',
   'aws.route53_record': 'A DNS record in a hosted zone the Hub manages.',
   'aws.rds_instance':
-    'The instance only. Once it is available, link it as a database server on the Databases tab.'
+    'The instance only. Once it is available, link it as a database server on the Databases tab.',
+  'livekit.api_key':
+    'Paste a key pair from LiveKit Cloud. The app’s huddle settings are filled from it once the app answers.',
+  'acme.certificate':
+    'Only on a Docker driver whose DNS names are made by hand. The names default to this environment’s address.'
 }
 
 export interface PartDraft {

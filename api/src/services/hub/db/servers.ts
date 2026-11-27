@@ -53,7 +53,8 @@ export interface HubDbServerRow {
   /**
    * Task 11a (Hub providers): the managed `aws.rds_instance` this server is (nivaro_hub_resources
    * id), or null. Its endpoint fills an empty host and port; deleting the instance is refused while
-   * another app's databases are on it (providers/engine/gates.ts hubRecordBlockers).
+   * another app's databases are on it (providers/engine/gates.ts hubRecordBlockers). Task 43: or
+   * an `azure.sql_server` / `azure.sql_database` (engine mssql; host = the server's address).
    */
   resource_id?: number | null
 }
@@ -272,6 +273,63 @@ export function validateServerInput(
   }
 }
 
+/** Task 43: the managed resource types a database server record may be (resource_id). */
+export const LINKABLE_SERVER_TYPES: readonly string[] = Object.freeze([
+  'aws.rds_instance',
+  'neon.branch',
+  'azure.sql_server',
+  'azure.sql_database'
+])
+
+/**
+ * Task 43: an Azure SQL link. Azure SQL is SQL Server: the server's engine must be mssql
+ * (ENGINE_MISMATCH). An empty host comes from the server's observed address (`fqdn`); for a
+ * database it is its server's — the managed `azure.sql_server` row when the Hub has one, else the
+ * public-cloud name `<server>.database.windows.net` from the database's ARM id. Port 1433.
+ */
+async function resolveAzureServer(
+  f: ServerFields,
+  type: string,
+  fields: Record<string, unknown>
+): Promise<ServerFields> {
+  if (f.engine !== 'mssql')
+    throw new HubDbError(
+      'ENGINE_MISMATCH',
+      'Azure SQL runs SQL Server: this server’s engine must be SQL Server.',
+      400
+    )
+  let fqdn: string | null = typeof fields.fqdn === 'string' ? cleanHost(fields.fqdn) : null
+  if (type === 'azure.sql_database' && !fqdn) {
+    const serverId = typeof fields.server === 'string' ? fields.server : ''
+    if (serverId) {
+      const srv = (await db('nivaro_hub_resources')
+        .where({ type: 'azure.sql_server', external_id: serverId })
+        .whereNull('deleted_at')
+        .first('observed')) as { observed?: unknown } | undefined
+      let o: { fields?: Record<string, unknown> } | null = null
+      try {
+        o = typeof srv?.observed === 'string' ? JSON.parse(srv.observed) : (srv?.observed as never)
+      } catch {
+        o = null
+      }
+      const own = o?.fields?.fqdn
+      if (typeof own === 'string' && own) fqdn = cleanHost(own)
+      else {
+        const m = /\/servers\/([a-z0-9][a-z0-9-]{0,61}[a-z0-9]?)$/i.exec(serverId)
+        if (m) fqdn = cleanHost(`${m[1].toLowerCase()}.database.windows.net`)
+      }
+    }
+  }
+  if (f.host) return { ...f, port: f.port ?? 1433 }
+  if (!fqdn)
+    throw new HubDbError(
+      'BAD_RESOURCE',
+      'That Azure SQL resource has no address yet (it may still be starting): try again when it is available, or enter the host.',
+      400
+    )
+  return { ...f, host: fqdn, port: f.port ?? 1433 }
+}
+
 /** RDS engines → the Hub's database engines. */
 function engineOfRds(engine: unknown): HubDbEngine | null {
   const e = String(engine ?? '').toLowerCase()
@@ -300,10 +358,11 @@ export async function resolveServerResource(f: ServerFields): Promise<ServerFiel
     .first('id', 'type', 'observed')) as Record<string, unknown> | undefined
   // Task 33: a Neon branch (Postgres; its pooled host is the branch's `host` output).
   if (r && String(r.type) === NEON_BRANCH) return resolveNeonBranch(f, Number(r.id))
-  if (!r || String(r.type) !== 'aws.rds_instance')
+  const type = String(r?.type ?? '')
+  if (!r || !LINKABLE_SERVER_TYPES.includes(type))
     throw new HubDbError(
       'BAD_RESOURCE',
-      'That is not an RDS instance or Neon branch the Hub manages.',
+      'That is not an RDS instance, Neon branch or Azure SQL server or database the Hub manages.',
       400
     )
   let observed: { fields?: Record<string, unknown> } | null = null
@@ -312,6 +371,7 @@ export async function resolveServerResource(f: ServerFields): Promise<ServerFiel
   } catch {
     observed = null
   }
+  if (type !== 'aws.rds_instance') return resolveAzureServer(f, type, observed?.fields ?? {})
   const fields = observed?.fields ?? {}
   const engine = engineOfRds(fields.engine)
   if (engine && engine !== f.engine)
