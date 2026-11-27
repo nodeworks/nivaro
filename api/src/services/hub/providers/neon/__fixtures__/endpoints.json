@@ -1,0 +1,15 @@
+{
+  "endpoints": [
+    {
+      "id": "ep-test-stage-0001",
+      "branch_id": "br-test-stage-0002",
+      "type": "read_write",
+      "autoscaling_limit_min_cu": 0.25,
+      "autoscaling_limit_max_cu": 1,
+      "suspend_timeout_seconds": 300,
+      "pooler_enabled": true,
+      "host": "ep-test-stage-0001.us-east-2.example",
+      "current_state": "idle"
+    }
+  ]
+}

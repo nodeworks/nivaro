@@ -3,6 +3,7 @@ import { awsProvider } from './aws/adapter.js'
 import { dockerhubAdapter } from './dockerhub/index.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
+import { neonAdapter } from './neon/index.js'
 import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import { sentryAdapter } from './sentry/index.js'
@@ -27,6 +28,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   sentryAdapter,
   redisCloudAdapter,
   upstashAdapter,
+  neonAdapter,
   vercelAdapter
 ]
 

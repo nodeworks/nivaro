@@ -1,0 +1,20 @@
+{
+  "projects": [
+    {
+      "id": "prj-test-cool-0001",
+      "name": "acme-api",
+      "region_id": "aws-us-east-2",
+      "pg_version": 17,
+      "org_id": "org-test-acme-0001",
+      "owner": { "subscription_type": "launch" }
+    },
+    {
+      "id": "prj-test-other-0009",
+      "name": "leaked-from-another-org",
+      "region_id": "aws-us-east-2",
+      "pg_version": 16,
+      "org_id": "org-test-other-0002"
+    }
+  ],
+  "pagination": { "cursor": "cursor-test-2" }
+}
