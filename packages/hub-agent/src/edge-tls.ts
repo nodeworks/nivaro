@@ -89,28 +89,30 @@ export const normName = (n: string): string => n.toLowerCase().replace(/\.$/, ''
 const SAN_DNS_RE = /^[A-Za-z0-9*_-]+(?:\.[A-Za-z0-9*_-]+)*\.?$/
 
 /**
- * The names a leaf answers for: its DNS SANs, or its CN when it has no SAN at all (what a TLS
+ * The names a leaf answers for: its DNS SANs and its CN (Traefik indexes both; a TLS
  * client falls back to). null = a SAN entry that is not a plain DNS name (an IP address, a URI, an
  * email, a quoted value Node escaped): such a leaf is never served from the shared store.
  */
 export function leafNames(leaf: X509Certificate): string[] | null {
+  // Traefik's store indexes a leaf under its CN AND its DNS SANs, so both count, always
+  // (security review 2026-11-27: a CN beside own SANs must not slip a foreign name in).
+  const out: string[] = []
   const san = leaf.subjectAltName
   if (san !== undefined && san !== '') {
-    const out: string[] = []
     for (const part of san.split(', ')) {
       if (!part.startsWith('DNS:')) return null
       const name = part.slice(4)
       if (!SAN_DNS_RE.test(name)) return null
       out.push(normName(name))
     }
-    return out
   }
   const cns = (leaf.subject ?? '')
     .split('\n')
     .filter((l) => l.startsWith('CN='))
     .map((l) => l.slice(3))
   if (cns.some((n) => !SAN_DNS_RE.test(n))) return null
-  return cns.map(normName)
+  for (const cn of cns) out.push(normName(cn))
+  return [...new Set(out)]
 }
 
 function underSuffix(h: string, suffixes: readonly string[]): boolean {

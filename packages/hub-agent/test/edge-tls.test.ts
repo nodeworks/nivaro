@@ -114,6 +114,11 @@ describe('checkEdgeTls', () => {
       expect(checkEdgeTls(CN_OWN, ['acme-staging.apps.corp']).ok).toBe(true)
     })
 
+    it('a foreign CN beside own SANs is refused (Traefik indexes the CN too)', () => {
+      const MIXED = { cert: read('san-own-cn-foreign.crt'), key: read('san-own-cn-foreign.key') }
+      expect(checkEdgeTls(MIXED, NAMES)).toEqual({ ok: false, fields: [OUT] })
+    })
+
     it('an IP SAN is refused', () => {
       expect(checkEdgeTls(IP, NAMES)).toEqual({ ok: false, fields: [OUT] })
     })
