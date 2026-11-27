@@ -1,0 +1,151 @@
+{
+  "team": {
+    "id": 4001,
+    "name": "Platform",
+    "slug": "platform",
+    "description": "Platform engineers",
+    "privacy": "closed",
+    "parent": null,
+    "html_url": "https://github.com/orgs/acme/teams/platform"
+  },
+  "team_list": [
+    { "id": 4001, "name": "Platform", "slug": "platform", "description": "Platform engineers", "privacy": "closed", "parent": null },
+    { "id": 4002, "name": "Docs", "slug": "docs", "description": "", "privacy": "secret", "parent": { "slug": "platform" } }
+  ],
+  "repo_teams": [
+    { "id": 4001, "name": "Platform", "slug": "platform", "permission": "push" },
+    { "id": 4002, "name": "Docs", "slug": "docs", "permission": "pull" }
+  ],
+  "ruleset": {
+    "id": 9001,
+    "name": "protect-main",
+    "target": "branch",
+    "enforcement": "active",
+    "source_type": "Repository",
+    "updated_at": "2026-11-20T10:00:00Z",
+    "bypass_actors": [{ "actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always" }],
+    "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+    "rules": [
+      { "type": "deletion" },
+      { "type": "non_fast_forward" },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 2,
+          "dismiss_stale_reviews_on_push": true,
+          "require_code_owner_review": false,
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": true
+        }
+      },
+      { "type": "update", "parameters": { "update_allows_fetch_and_merge": false } }
+    ]
+  },
+  "ruleset_list": [
+    { "id": 9001, "name": "protect-main", "target": "branch", "enforcement": "active", "source_type": "Repository" },
+    { "id": 9002, "name": "from-org", "target": "branch", "enforcement": "active", "source_type": "Organization" }
+  ],
+  "org_ruleset": {
+    "id": 9100,
+    "name": "org-baseline",
+    "target": "branch",
+    "enforcement": "evaluate",
+    "updated_at": "2026-11-21T10:00:00Z",
+    "bypass_actors": [],
+    "conditions": {
+      "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] },
+      "repository_name": { "include": ["~ALL"], "exclude": [] }
+    },
+    "rules": [{ "type": "required_linear_history" }]
+  },
+  "env_protected": {
+    "id": 161088068,
+    "name": "production",
+    "html_url": "https://github.com/acme/web/deployments/activity_log?environments_filter=production",
+    "updated_at": "2026-11-20T10:00:00Z",
+    "protection_rules": [
+      { "id": 3736, "type": "wait_timer", "wait_timer": 30 },
+      {
+        "id": 3755,
+        "type": "required_reviewers",
+        "prevent_self_review": true,
+        "reviewers": [
+          { "type": "User", "reviewer": { "login": "octo-reviewer", "id": 701 } },
+          { "type": "Team", "reviewer": { "slug": "platform", "id": 4001 } }
+        ]
+      }
+    ],
+    "deployment_branch_policy": { "protected_branches": false, "custom_branch_policies": true }
+  },
+  "env_unprotected": {
+    "id": 161088069,
+    "name": "staging",
+    "updated_at": "2026-11-20T10:00:00Z",
+    "protection_rules": [],
+    "deployment_branch_policy": null
+  },
+  "branch_policies": {
+    "total_count": 2,
+    "branch_policies": [
+      { "id": 11, "name": "release/*", "type": "branch" },
+      { "id": 12, "name": "main", "type": "branch" }
+    ]
+  },
+  "org_secret": {
+    "name": "NPM_TOKEN",
+    "created_at": "2026-11-01T10:00:00Z",
+    "updated_at": "2026-11-10T10:00:00Z",
+    "visibility": "selected",
+    "selected_repositories_url": "https://api.github.com/orgs/acme/actions/secrets/NPM_TOKEN/repositories"
+  },
+  "org_secret_repos": { "total_count": 1, "repositories": [{ "id": 101, "name": "web" }] },
+  "org_variable": {
+    "name": "REGION",
+    "value": "us-east-1",
+    "visibility": "all",
+    "created_at": "2026-11-01T10:00:00Z",
+    "updated_at": "2026-11-10T10:00:00Z"
+  },
+  "dependabot_secret": {
+    "name": "NPM_AUTH",
+    "created_at": "2026-11-01T10:00:00Z",
+    "updated_at": "2026-11-10T10:00:00Z"
+  },
+  "runner_group": {
+    "id": 7,
+    "name": "builders",
+    "visibility": "selected",
+    "default": false,
+    "allows_public_repositories": false
+  },
+  "runner_group_list": {
+    "total_count": 2,
+    "runner_groups": [
+      { "id": 1, "name": "Default", "visibility": "all", "default": true, "allows_public_repositories": false },
+      { "id": 7, "name": "builders", "visibility": "selected", "default": false, "allows_public_repositories": false }
+    ]
+  },
+  "runner_group_repos": { "total_count": 1, "repositories": [{ "id": 101, "name": "web" }] },
+  "registration_token": { "token": "test-secret-runner-token-0001", "expires_at": "2026-11-26T13:00:00Z" },
+  "pages": {
+    "url": "https://api.github.com/repos/acme/web/pages",
+    "status": "built",
+    "cname": "docs.example.com",
+    "html_url": "https://docs.example.com/",
+    "build_type": "legacy",
+    "source": { "branch": "main", "path": "/docs" },
+    "https_enforced": true
+  },
+  "file": {
+    "type": "file",
+    "name": "CODEOWNERS",
+    "path": "CODEOWNERS",
+    "sha": "3d21ec53a331a6f037a91c368710b99387d012c1",
+    "size": 18,
+    "encoding": "base64",
+    "content": "KiBAYWNtZS9wbGF0Zm9ybQo=\n",
+    "html_url": "https://github.com/acme/web/blob/main/CODEOWNERS"
+  },
+  "directory": [{ "type": "file", "name": "a.md", "path": "docs/a.md", "sha": "abc" }],
+  "user_octo": { "login": "octo-reviewer", "id": 701 }
+}

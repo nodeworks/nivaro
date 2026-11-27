@@ -136,7 +136,19 @@ describe('github adapter: registration', () => {
       'github.actions_variable',
       'github.workflow',
       'github.deploy_key',
-      'github.webhook'
+      'github.webhook',
+      'github.team',
+      'github.team_repo_access',
+      'github.ruleset',
+      'github.environment_secret',
+      'github.environment_variable',
+      'github.environment_protection',
+      'github.org_secret',
+      'github.org_variable',
+      'github.dependabot_secret',
+      'github.runner_group',
+      'github.pages',
+      'github.repo_file'
     ])
   })
 
@@ -223,7 +235,7 @@ describe('github adapter: testConnection lists missing permissions', () => {
     expect(r.ok).toBe(false)
     expect(r.identity).toContain('user rob')
     expect(r.missing).toContain('repo')
-    expect(r.missing).toEqual(['repo'])
+    expect(r.missing).toEqual(['repo', 'admin:org'])
   })
 
   it('pat: a fine-grained token cannot list scopes, says so, and passes', async () => {
@@ -1056,7 +1068,11 @@ describe('github adapter: environment approval (Task 11c)', () => {
         code: 'TARGET_MISMATCH'
       })
     await expect(
-      githubAdapter.apply(ctxFor(f.impl), { ...op, data: { ...op.data, environment: 'production' } }, d())
+      githubAdapter.apply(
+        ctxFor(f.impl),
+        { ...op, data: { ...op.data, environment: 'production' } },
+        d()
+      )
     ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
     expect(f.calls).toEqual([])
   })

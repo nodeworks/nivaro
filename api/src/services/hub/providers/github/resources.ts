@@ -57,7 +57,7 @@ export interface Handler {
 
 // ── Small helpers ──
 
-function bad(code: string, message: string): never {
+export function bad(code: string, message: string): never {
   throw new ProviderError(code, message)
 }
 
@@ -82,14 +82,14 @@ export function splitScoped(ext: string): { repo: string; env: string | null; na
   return { repo: left.slice(0, at), env: left.slice(at + 1), name: rest }
 }
 
-const text = (v: unknown): string => (typeof v === 'string' ? v : '')
-const bool = (v: unknown, dflt = false): boolean => (typeof v === 'boolean' ? v : dflt)
-const num = (v: unknown, dflt = 0): number =>
+export const text = (v: unknown): string => (typeof v === 'string' ? v : '')
+export const bool = (v: unknown, dflt = false): boolean => (typeof v === 'boolean' ? v : dflt)
+export const num = (v: unknown, dflt = 0): number =>
   typeof v === 'number' && Number.isFinite(v) ? v : dflt
-const list = (v: unknown): string[] =>
+export const list = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
 
-function parentRepo(desired: DesiredResource): string {
+export function parentRepo(desired: DesiredResource): string {
   const r = desired.refs.repository
   const id = Array.isArray(r) ? r[0] : r
   if (!id)
@@ -97,7 +97,7 @@ function parentRepo(desired: DesiredResource): string {
   return id
 }
 
-function secretPlain(desired: DesiredResource, key: string): string | null {
+export function secretPlain(desired: DesiredResource, key: string): string | null {
   const v = desired.fields[key] as { plain?: string } | undefined
   return typeof v?.plain === 'string' && v.plain !== '' ? v.plain : null
 }
@@ -105,7 +105,11 @@ function secretPlain(desired: DesiredResource, key: string): string | null {
 const sameKey = (a: string, b: string): boolean =>
   a.trim().split(/\s+/).slice(0, 2).join(' ') === b.trim().split(/\s+/).slice(0, 2).join(' ')
 
-async function inChunks<T, R>(items: T[], size: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+export async function inChunks<T, R>(
+  items: T[],
+  size: number,
+  fn: (x: T) => Promise<R>
+): Promise<R[]> {
   const out: R[] = []
   for (let i = 0; i < items.length; i += size)
     out.push(...(await Promise.all(items.slice(i, i + size).map(fn))))
@@ -140,7 +144,7 @@ function observedRepo(j: Json): Observed {
   }
 }
 
-async function ownerRepos(ctx: ProviderContext, page: number): Promise<GhResponse> {
+export async function ownerRepos(ctx: ProviderContext, page: number): Promise<GhResponse> {
   const owner = seg(checkOwner(ownerOf(ctx)))
   const q = `per_page=20&page=${page}`
   const r = await gh(ctx, 'GET', `/orgs/${owner}/repos?${q}`, { ok: [404] })
@@ -516,8 +520,17 @@ const environment: Handler = {
   },
   async update(ctx, ext, desired) {
     const { repo, rest: name } = splitChild(ext)
+    // PUT replaces the environment: keep the required reviewers it has (github.environment_protection
+    // owns them), or this resource would clear them.
+    const current = await gh<Json>(ctx, 'GET', envPath(repo, name), { ok: [404] })
+    const rules: Json[] = Array.isArray(current.json?.protection_rules)
+      ? current.json.protection_rules
+      : []
+    const reviewers = (rules.find((r) => r.type === 'required_reviewers')?.reviewers ?? [])
+      .map((x: Json) => ({ type: x?.type, id: x?.reviewer?.id }))
+      .filter((x: Json) => (x.type === 'User' || x.type === 'Team') && Number.isSafeInteger(x.id))
     await gh(ctx, 'PUT', envPath(repo, name), {
-      body: envBody(desired),
+      body: { ...envBody(desired), ...(reviewers.length ? { reviewers } : {}) },
       what: 'update the environment'
     })
     return ext
@@ -1148,7 +1161,7 @@ const webhook: Handler = {
 
 // ── Listing children: walk the account's repositories a page at a time ──
 
-async function listPerRepo(
+export async function listPerRepo(
   ctx: ProviderContext,
   cursor: string | null,
   each: (repo: string, archived: boolean) => Promise<Observed[]>
