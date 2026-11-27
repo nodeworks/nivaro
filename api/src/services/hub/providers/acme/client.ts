@@ -1,4 +1,5 @@
 import { createPrivateKey, generateKeyPairSync } from 'node:crypto'
+import { domainToASCII } from 'node:url'
 import { crypto as acmeCrypto, Client } from 'acme-client'
 import { scrubValues } from '../context.js'
 import {
@@ -138,7 +139,10 @@ export function dnsConnectionId(config: Record<string, unknown>): number | null 
 export function allowedDomains(config: Record<string, unknown>): string[] {
   const v = config.allowed_domains
   return (Array.isArray(v) ? v : [])
-    .map((x) => String(x).trim().toLowerCase().replace(/^\*\./, '').replace(/\.$/, ''))
+    .map((x) => {
+      const t = String(x).trim().toLowerCase().replace(/^\*\./, '').replace(/\.$/, '')
+      return t && !/[\s/\\@:?#%]/.test(t) ? domainToASCII(t) : ''
+    })
     .filter(Boolean)
 }
 

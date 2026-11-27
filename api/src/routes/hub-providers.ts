@@ -4,6 +4,7 @@ import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
 import { idParam, isAppOwner, listApps, readApp } from '../services/hub/apps.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { generateAccountKeyPem } from '../services/hub/providers/acme/client.js'
 import { estimateProvider } from '../services/hub/providers/costs-live.js'
 import {
   approveResourceChange,
@@ -824,6 +825,43 @@ export async function hubProviderRoutes(app: FastifyInstance) {
       )
       return { data: result }
     })
+  )
+
+  app.post(
+    '/connections/:id/acme/generate-account-key',
+    { preHandler: requireAdmin },
+    async (req, reply) =>
+      guarded(reply, async () => {
+        const id = idParam((req.params as { id: string }).id)
+        const row = id === null ? null : await readConnection(id)
+        if (!row || row.provider !== 'acme') return notFound(reply, 'connection')
+        // A new key is a new ACME account: replacing a stored key strands the old account.
+        if (row.secret_keys.includes('account_key') && body(req).replace !== true)
+          return fail(
+            reply,
+            409,
+            'ACCOUNT_KEY_EXISTS',
+            'This connection already has an account key. Replacing it makes a new ACME account; send replace: true to do that.'
+          )
+        const updated = await updateConnection(row.id, {
+          secrets: { account_key: generateAccountKeyPem() },
+          status: 'untested',
+          lastTest: null,
+          lastTestAt: null,
+          updatedBy: userId(req)
+        })
+        if (!updated) return notFound(reply, 'connection')
+        forgetConnectionTokens(row.id)
+        await activityLog(
+          req,
+          'hub-connection-update',
+          CONNECTIONS,
+          row.id,
+          'secrets.account_key (generated)'
+        )
+        // The key is sealed and never answered: the connection reads back as a mask.
+        return { data: connectionOut(updated) }
+      })
   )
 
   app.get('/connections/:id/unmanaged', { preHandler: requireAdmin }, async (req, reply) =>

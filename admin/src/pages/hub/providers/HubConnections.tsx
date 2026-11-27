@@ -36,6 +36,7 @@ import {
   fetchConnections,
   fetchProviderTypes,
   fetchUnmanaged,
+  generateAcmeAccountKey,
   type HubConnection,
   isFullConnection,
   type Observed,
@@ -435,6 +436,15 @@ export function ConnectionForm({
     },
     onError: (e) => providerToast(e, 'Could not test the connection')
   })
+  const hasAccountKey = storedKeys.includes('account_key')
+  const makeKey = useMutation({
+    mutationFn: () => generateAcmeAccountKey(connection?.id ?? 0, hasAccountKey),
+    onSuccess: () => {
+      setResult(null)
+      void qc.invalidateQueries({ queryKey: providerKeys.connections() })
+    },
+    onError: (e) => providerToast(e, 'Could not make the account key')
+  })
   const remove = useMutation({
     mutationFn: () => deleteConnection(connection?.id ?? 0),
     onSuccess: () => {
@@ -578,6 +588,31 @@ export function ConnectionForm({
             {test.isPending ? 'Testing…' : 'Test'}
           </Button>
         )}
+        {connection?.provider === 'acme' &&
+          (hasAccountKey ? (
+            <ConfirmButton
+              title='Make a new account key'
+              confirmLabel='New key = new ACME account. Replace?'
+              className={ghostButton}
+              armedClassName={dangerArmed}
+              disabled={makeKey.isPending || dirty}
+              onConfirm={() => makeKey.mutate()}
+            >
+              <KeyRound className='h-3.5 w-3.5' aria-hidden /> New account key
+            </ConfirmButton>
+          ) : (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8'
+              disabled={makeKey.isPending || dirty}
+              data-tip='Makes the key on the server and seals it; it is never shown'
+              onClick={() => makeKey.mutate()}
+            >
+              <KeyRound className='mr-1 h-3.5 w-3.5' aria-hidden />
+              {makeKey.isPending ? 'Making…' : 'Generate account key'}
+            </Button>
+          ))}
         {connection && dirty && (
           <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
             Save first: Test checks the saved settings.

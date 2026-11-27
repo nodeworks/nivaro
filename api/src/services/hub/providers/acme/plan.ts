@@ -8,8 +8,8 @@ import {
   ProviderError,
   ROTATE_OUTPUTS_FIELD
 } from '../types.js'
-import { directoryChoice, isProduction } from './client.js'
-import { parseNames, sameNames, sortedNames } from './names.js'
+import { allowedDomains, directoryChoice, isProduction } from './client.js'
+import { checkAllowedDomains, parseNames, sameNames, sortedNames } from './names.js'
 import { ACCOUNT_TYPE, CERT_TYPE, daysLeft, keyTypeOf, RENEW_BEFORE_DAYS } from './order.js'
 import { CERT_FIELDS } from './specs.js'
 
@@ -108,7 +108,32 @@ function zoneOf(desired: DesiredResource): string {
   return z
 }
 
+/**
+ * Without allowed domains an owner could order a certificate for any name in the zone, so every
+ * order (create, reissue, rotate, renew) is then a Hub administrator's to start. Says why.
+ */
+function withOwnerGate(ctx: ProviderContext, ops: PlannedOp[]): PlannedOp[] {
+  if (allowedDomains(ctx.config).length) return ops
+  return ops.map((o) =>
+    o.kind === 'delete'
+      ? o
+      : {
+          ...o,
+          reason: `${o.reason} A Hub administrator starts this: the connection has no allowed domains, so an app owner may not order certificates on it.`,
+          data: { ...(o.data ?? {}), $adminOnly: true }
+        }
+  )
+}
+
 export function planCertificate(
+  ctx: ProviderContext,
+  desired: DesiredResource | null,
+  observed: Observed | null
+): PlannedOp[] {
+  return withOwnerGate(ctx, planCertificateOps(ctx, desired, observed))
+}
+
+function planCertificateOps(
   ctx: ProviderContext,
   desired: DesiredResource | null,
   observed: Observed | null
@@ -129,6 +154,7 @@ export function planCertificate(
     ]
   }
   const names = parseNames(desired.fields.names)
+  checkAllowedDomains(names, ctx.config)
   const zone = zoneOf(desired)
   const keyType = keyTypeOf(desired.fields.key_type)
   const wantNames = names.map((n) => n.name)

@@ -88,6 +88,21 @@ export const PROVIDER_ROUTES: HubRoute[] = [
     'Test the credentials: identity and the permissions they have',
     { notes: 'Calls the provider. Stores the result and the connection status.' }
   ),
+  r(
+    'POST',
+    '/connections/:id/acme/generate-account-key',
+    'admin',
+    'write',
+    'Generate and seal the ACME account key of an acme connection',
+    {
+      sensitive: true,
+      body: {
+        replace: { type: 'boolean', description: 'Replace a stored key (makes a new ACME account)' }
+      },
+      notes:
+        'Only for acme connections. The key is made on the server and sealed into the connection; it is never answered. 409 ACCOUNT_KEY_EXISTS when a key is stored and replace is not true.'
+    }
+  ),
   r('GET', '/connections/:id/unmanaged', 'admin', 'read', 'Resources the Hub does not manage yet', {
     query: {
       type: s('Resource type key (aws.vpc …)', { required: true }),
