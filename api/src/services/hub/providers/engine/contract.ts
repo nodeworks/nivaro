@@ -183,7 +183,9 @@ export const RESOURCE_CHANGE_CODES = {
   LOCK_UNAVAILABLE: 503,
   CONNECTION_DISABLED: 409,
   ALREADY_EXISTS: 409,
-  NOT_IMPLEMENTED: 501
+  NOT_IMPLEMENTED: 501,
+  // Task 3b: the provider refused the connection's credentials (never retryable — fix the keys).
+  AUTH_FAILED: 502
 } as const
 
 export type ResourceChangeCode = keyof typeof RESOURCE_CHANGE_CODES
@@ -268,4 +270,16 @@ export async function declineResourceChange(
 export async function healResourceChanges(changeId?: number): Promise<number> {
   const run = await import('./run.js')
   return run.healResourceChanges(changeId)
+}
+
+/**
+ * Task 3b: drops a resource row whose create never reached the provider (no provider call; the
+ * failed change is closed as cancelled; one audit row). engine/discard.ts.
+ */
+export async function discardResourceCreate(
+  resourceId: number,
+  actor: HubActor
+): Promise<{ resourceId: number; changeId: number | null }> {
+  const { discardFailedCreate } = await import('./discard.js')
+  return discardFailedCreate(resourceId, actor)
 }

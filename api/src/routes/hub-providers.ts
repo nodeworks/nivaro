@@ -7,6 +7,7 @@ import {
   approveResourceChange,
   cancelResourceChange,
   declineResourceChange,
+  discardResourceCreate,
   type HubActor,
   type PlanRequest,
   type PlanRequestOp,
@@ -16,6 +17,7 @@ import {
   startResourceChange,
   undoResourceChange
 } from '../services/hub/providers/engine/contract.js'
+import { createChangeIdOf, pendingCreateOf } from '../services/hub/providers/engine/discard.js'
 import { publicStoredPlan } from '../services/hub/providers/engine/plan.js'
 import {
   ensureCoreProviders,
@@ -72,6 +74,7 @@ import { HUB_MASK } from '../services/hub/secrets.js'
  *   GET|PUT /apps/:id/connections           owner | admin the app's allowed connections
  *   GET    /resources, /resources/:id       owners: only their apps' resources
  *   POST   /resources/plan                  signed in     the engine judges who may plan what
+ *   POST   /resources/:id/discard           signed in     drop a create that never reached the provider
  *   GET    /resource-changes[/:id]          owners: only their apps' changes
  *   POST   /resource-changes/:id/{start,cancel,resume,undo}   signed in (the engine judges)
  *   POST   /resource-changes/:id/{approve,decline}            admin
@@ -156,6 +159,33 @@ function describeConnection(row: HubConnectionRow): string | null {
   }
 }
 
+/**
+ * The connection's values that resource fields choose from (FieldSpec.optionsFrom: AWS `region`
+ * → the connection's `regions`). Only non-secret list fields a type names; never anything else.
+ */
+function fieldOptionsOf(row: HubConnectionRow): Record<string, string[]> {
+  const adapter = adapterOf(row.provider)
+  if (!adapter) return {}
+  const named = new Set<string>()
+  const walk = (fields: ResourceTypeSpec['fields']) => {
+    for (const f of fields) {
+      if (f.optionsFrom) named.add(f.optionsFrom)
+      if (f.items) walk([f.items])
+      if (f.fields) walk(f.fields)
+    }
+  }
+  for (const t of adapter.types) walk(t.fields)
+  const out: Record<string, string[]> = {}
+  for (const key of named) {
+    const spec = adapter.connection.fields.find((f) => f.key === key)
+    if (!spec || spec.secret || spec.kind !== 'list') continue
+    const v = row.config[key]
+    const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[\s,]+/) : []
+    out[key] = list.filter((x): x is string => typeof x === 'string' && x !== '').slice(0, 100)
+  }
+  return out
+}
+
 /** The full connection for an administrator. */
 function connectionOut(row: HubConnectionRow) {
   return {
@@ -164,6 +194,7 @@ function connectionOut(row: HubConnectionRow) {
     provider_label: adapterOf(row.provider)?.label ?? row.provider,
     name: row.name,
     description: describeConnection(row),
+    field_options: fieldOptionsOf(row),
     config: row.config,
     secret_mask: row.secret_mask,
     secret_fingerprint: row.secret_fingerprint,
@@ -186,6 +217,7 @@ function connectionSummary(row: HubConnectionRow) {
     provider_label: adapterOf(row.provider)?.label ?? row.provider,
     name: row.name,
     description: describeConnection(row),
+    field_options: fieldOptionsOf(row),
     status: row.status
   }
 }
@@ -205,8 +237,30 @@ function desiredOut(desired: Record<string, unknown> | null): Record<string, unk
   return out
 }
 
-function resourceOut(row: HubResourceRow) {
-  return { ...row, desired: desiredOut(row.desired) }
+/**
+ * A resource for the answer. A row with no provider id (its create never reached the provider,
+ * or is running now) carries `pending_create`: its change, that change's status, and whether
+ * resume can run it (engine/discard.ts). `cache` keeps one read per change across a list.
+ */
+async function resourceOut(
+  row: HubResourceRow,
+  cache: Map<number, Promise<HubResourceChangeRow | null>> = new Map()
+) {
+  let pending: ReturnType<typeof pendingCreateOf> = null
+  if (!row.external_id && !row.deleted_at) {
+    const id = createChangeIdOf(row)
+    let change: HubResourceChangeRow | null = null
+    if (id != null) {
+      if (!cache.has(id))
+        cache.set(
+          id,
+          readChange(id).catch(() => null)
+        )
+      change = (await cache.get(id)) ?? null
+    }
+    pending = pendingCreateOf(row, change)
+  }
+  return { ...row, desired: desiredOut(row.desired), pending_create: pending }
 }
 
 function specFor(type: string | null | undefined): ResourceTypeSpec | null {
@@ -888,7 +942,8 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         const own = await ownedAppIds(req)
         rows = rows.filter((r) => r.scope === 'app' && r.app_id !== null && own.has(r.app_id))
       }
-      return { data: rows.map(resourceOut) }
+      const cache = new Map<number, Promise<HubResourceChangeRow | null>>()
+      return { data: await Promise.all(rows.map((r) => resourceOut(r, cache))) }
     })
   )
 
@@ -902,7 +957,23 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         (row.scope !== 'app' || row.app_id === null || !(await isAppOwner(row.app_id, userId(req))))
       )
         return notFound(reply, 'resource')
-      return { data: resourceOut(row) }
+      return { data: await resourceOut(row) }
+    })
+  )
+
+  app.post('/resources/:id/discard', { preHandler: requireAuth }, async (req, reply) =>
+    guarded(reply, async () => {
+      const id = idParam((req.params as { id: string }).id)
+      const row = id === null ? null : await readResource(id)
+      if (!row || row.deleted_at) return notFound(reply, 'resource')
+      // An owner never learns a row of another app (or a shared one) exists.
+      if (
+        !req.isAdmin &&
+        (row.scope !== 'app' || row.app_id === null || !(await isAppOwner(row.app_id, userId(req))))
+      )
+        return notFound(reply, 'resource')
+      // The engine writes the audit row (hub-resource-discard).
+      return { data: await discardResourceCreate(row.id, actorOf(req)) }
     })
   )
 
@@ -944,6 +1015,9 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         if (c === null) return invalid(reply, ['connection must be an id.'])
         filter.connectionId = c
       }
+      if (q.scope && q.scope !== 'app' && q.scope !== 'shared')
+        return invalid(reply, ['scope must be app or shared.'])
+      if (q.scope) filter.scope = q.scope as ResourceScope
       if (q.status) filter.status = q.status.split(',').filter(Boolean) as never
       if (q.limit) filter.limit = Number(q.limit) || 50
       if (q.before) filter.beforeId = idParam(q.before) ?? undefined

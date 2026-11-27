@@ -1,4 +1,5 @@
 import { scrubValues } from '../context.js'
+import { fieldWords, typedName } from '../plan-words.js'
 import type {
   ConnectionTest,
   DesiredResource,
@@ -300,6 +301,9 @@ function changesFor(
   return { changes, preconditions }
 }
 
+const expoSpec = (type: string) => EXPO_TYPES.find((t) => t.key === type)
+const expoLabel = (type: string) => expoSpec(type)?.label ?? type
+
 function planOps(desired: DesiredResource | null, observed: Observed | null): PlannedOp[] {
   if (!desired && !observed) return []
   if (!desired && observed) {
@@ -309,7 +313,7 @@ function planOps(desired: DesiredResource | null, observed: Observed | null): Pl
         type: observed.type,
         resourceId: null,
         externalId: observed.externalId,
-        reason: `Delete ${observed.type} ${observed.name ?? observed.externalId}.`,
+        reason: `Delete ${typedName(expoLabel(observed.type), observed.name ?? observed.externalId)}.`,
         changes: [],
         preconditions: { name: observed.name },
         risk: []
@@ -327,7 +331,7 @@ function planOps(desired: DesiredResource | null, observed: Observed | null): Pl
         reason:
           d.type === 'expo.build'
             ? 'Start a build.'
-            : `Create ${d.type} ${String(d.fields.name ?? '')}. If one with this name already exists in Expo the change stops with ALREADY_EXISTS: adopt it instead.`.trim(),
+            : `Create ${typedName(expoLabel(d.type), String(d.fields.name ?? ''))}. If one with this name already exists in Expo the change stops with ALREADY_EXISTS: adopt it instead.`,
         changes: EXPO_TYPES.find((t) => t.key === d.type)!.fields.flatMap((f): FieldChange[] => {
           if (f.readOnly) return []
           if (f.kind === 'secret')
@@ -363,7 +367,7 @@ function planOps(desired: DesiredResource | null, observed: Observed | null): Pl
         type: d.type,
         resourceId: d.resourceId,
         externalId: observed.externalId,
-        reason: `${observed.name ?? observed.externalId} cannot be edited in place: delete and create again.`,
+        reason: `Replace ${typedName(expoLabel(d.type), observed.name ?? observed.externalId)}: ${fieldWords(spec.fields, changes)} cannot change in place.`,
         changes,
         preconditions,
         risk: []
@@ -377,8 +381,8 @@ function planOps(desired: DesiredResource | null, observed: Observed | null): Pl
       resourceId: d.resourceId,
       externalId: observed.externalId,
       reason: onlyBranch
-        ? `Point channel ${observed.name ?? ''} at another branch.`.replace('  ', ' ')
-        : `Update ${observed.name ?? observed.externalId}.`,
+        ? `Point ${typedName(expoLabel(d.type), observed.name)} at another branch.`
+        : `Change ${fieldWords(spec.fields, changes)} on ${typedName(expoLabel(d.type), observed.name ?? observed.externalId)}.`,
       changes,
       preconditions,
       risk: [],
@@ -393,7 +397,7 @@ function noop(d: DesiredResource, observed: Observed): PlannedOp {
     type: d.type,
     resourceId: d.resourceId,
     externalId: observed.externalId,
-    reason: 'Already as wanted.',
+    reason: `${typedName(expoLabel(d.type), observed.name ?? observed.externalId)} is up to date.`,
     changes: [],
     preconditions: {},
     risk: []
@@ -705,7 +709,10 @@ export const expoAdapter: ProviderAdapter = {
     try {
       who = (await gql(ctx, Q.Q_WHOAMI)).meActor
     } catch (err) {
-      if (err instanceof ProviderError && ['EXPO_AUTH', 'EXPO_GRAPHQL'].includes(err.code))
+      if (
+        err instanceof ProviderError &&
+        ['AUTH_FAILED', 'EXPO_AUTH', 'EXPO_GRAPHQL'].includes(err.code)
+      )
         return {
           ok: false,
           identity: null,

@@ -1,3 +1,4 @@
+import { fieldWords, typedName } from '../plan-words.js'
 import type {
   ConnectionTest,
   DesiredResource,
@@ -468,26 +469,31 @@ function planCrud(
       risk: [] as RiskFlag[],
       ...extra
     }) satisfies PlannedOp
+  const spec = types.find((t) => t.key === impl.type)
+  const typeLabel = spec?.label ?? impl.type
   if (!desired) {
     if (!observed) return []
     return [
       base(
         'delete',
         observed.externalId,
-        `${observed.name ?? observed.externalId} will be deleted.`,
+        `Delete ${typedName(typeLabel, observed.name ?? observed.externalId)}.`,
         {
           preconditions: { name: observed.name }
         }
       )
     ]
   }
-  const label = String(desired.fields.name ?? desired.fields.identifier ?? impl.type)
+  const label = typedName(
+    typeLabel,
+    String(desired.fields.name ?? desired.fields.identifier ?? observed?.name ?? '')
+  )
   if (!observed)
     return [
       base(
         'create',
         null,
-        `${label} will be created (an Auth0 resource with the same identifier is refused: adopt it instead).`,
+        `Create ${label} (an Auth0 resource with the same identifier is refused: adopt it instead).`,
         { changes: createChanges(impl, desired) }
       )
     ]
@@ -499,7 +505,7 @@ function planCrud(
       base(
         'replace',
         observed.externalId,
-        `${label} must be deleted and created again (${replace.join(', ')} cannot be changed).`,
+        `Replace ${label}: ${fieldWords(spec?.fields, replace)} cannot change in place.`,
         {
           changes: replace.map((field) => ({
             field,
@@ -515,12 +521,12 @@ function planCrud(
     ]
   }
   const changes = diffCrud(impl, desired, observed)
-  if (!changes.length) return [base('noop', observed.externalId, `${label} is already as wanted.`)]
+  if (!changes.length) return [base('noop', observed.externalId, `${label} is up to date.`)]
   return [
     base(
       'update',
       observed.externalId,
-      `${label}: ${changes.map((c) => c.field).join(', ')} will change.`,
+      `Change ${fieldWords(spec?.fields, changes)} on ${label}.`,
       {
         changes,
         preconditions: preconditionsOf(changes, observed)
@@ -713,6 +719,8 @@ async function listBindings(ctx: ProviderContext, cursor?: string | null): Promi
   return { items, cursor: rows.length >= 20 ? String(page + 1) : null }
 }
 
+const bindingLabel = () => types.find((t) => t.key === BINDING)?.label ?? BINDING
+
 function planBinding(desired: DesiredResource | null, observed: Observed | null): PlannedOp[] {
   const op = (
     kind: PlannedOp['kind'],
@@ -734,7 +742,7 @@ function planBinding(desired: DesiredResource | null, observed: Observed | null)
   if (!desired) {
     if (!observed) return []
     return [
-      op('delete', observed.externalId, `${observed.name} will be switched off.`, {
+      op('delete', observed.externalId, `Switch off ${typedName(bindingLabel(), observed.name)}.`, {
         preconditions: {
           client: observed.fields.client,
           connection_id: observed.fields.connection_id
@@ -749,21 +757,26 @@ function planBinding(desired: DesiredResource | null, observed: Observed | null)
   ]
   if (!observed)
     return [
-      op('create', null, `Connection ${connectionId} will be enabled for the application.`, {
-        changes
-      })
+      op(
+        'create',
+        null,
+        `Create ${typedName(bindingLabel(), connectionId)}: enable it for the application.`,
+        {
+          changes
+        }
+      )
     ]
   const sameClient = typeof client !== 'string' || client === observed.fields.client
   const sameConn = !connectionId || connectionId === observed.fields.connection_id
   if (sameClient && sameConn)
     return [
-      op('noop', observed.externalId, 'The connection is already enabled for the application.')
+      op('noop', observed.externalId, `${typedName(bindingLabel(), observed.name)} is up to date.`)
     ]
   return [
     op(
       'replace',
       observed.externalId,
-      'The connection or application changed: enable the new pair, switch off the old.',
+      `Replace ${typedName(bindingLabel(), observed.name)}: the connection or application changed (enable the new pair, switch off the old).`,
       {
         changes: [
           { field: 'client', from: observed.fields.client, to: client },

@@ -28,6 +28,7 @@ export type ResourceAuditAction =
   | 'hub-resource-adopt'
   | 'hub-resource-accept'
   | 'hub-resource-action'
+  | 'hub-resource-discard'
 
 export async function auditChange(
   action: ResourceAuditAction,
