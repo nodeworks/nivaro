@@ -1,0 +1,5 @@
+{
+  "webhook": {
+    "urls": ["https://hooks.example.com/mailgun"]
+  }
+}

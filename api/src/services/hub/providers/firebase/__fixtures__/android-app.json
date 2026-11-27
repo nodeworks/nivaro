@@ -1,0 +1,8 @@
+{
+  "name": "projects/demo-app-12345/androidApps/1:123456789012:android:abc123def456",
+  "appId": "1:123456789012:android:abc123def456",
+  "displayName": "Demo Android",
+  "projectId": "demo-app-12345",
+  "packageName": "com.example.demo",
+  "state": "ACTIVE"
+}

@@ -1,0 +1,9 @@
+{
+  "name": "projects/demo-app-12345/operations/op1",
+  "done": true,
+  "response": {
+    "appId": "1:123456789012:android:abc123def456",
+    "displayName": "Demo Android",
+    "packageName": "com.example.demo"
+  }
+}

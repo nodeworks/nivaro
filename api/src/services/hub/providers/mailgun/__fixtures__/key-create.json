@@ -1,0 +1,12 @@
+{
+  "message": "great success",
+  "key": {
+    "id": "fake-key-id-0002",
+    "description": "demo-app-sending",
+    "kind": "domain",
+    "role": "sending",
+    "domain_name": "mg.example.com",
+    "is_disabled": false,
+    "secret": "test-secret-mailgun-sending-key-0002"
+  }
+}
