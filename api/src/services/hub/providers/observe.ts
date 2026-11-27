@@ -3,7 +3,7 @@ import { db } from '../../../db/index.js'
 import { logActivity } from '../../activity.js'
 import { hubModeEnabled } from '../mode.js'
 import { makeProviderContext } from './context.js'
-import { type HubActor, ResourceChangeError } from './engine/contract.js'
+import { type HubActor, healResourceChanges, ResourceChangeError } from './engine/contract.js'
 import { ensureCoreProviders } from './index.js'
 import { findType, getProvider } from './registry.js'
 import {
@@ -451,6 +451,23 @@ export async function observeAll(
 }
 
 /**
+ * One cron tick: first marks changes whose run stopped (`applying` with no live lock) as
+ * `interrupted`, Hub-wide, so a resource a dead run held is observable again, then observes.
+ * Healing is fail-safe: an error there is reported and never stops the observe pass.
+ */
+export async function observeTick(
+  warn: (message: string) => void = () => {}
+): Promise<ObserveSummary> {
+  try {
+    const marked = await healResourceChanges()
+    if (marked) warn(`${OBSERVE_JOB}: marked ${marked} stopped change(s) as interrupted`)
+  } catch (e) {
+    warn(`${OBSERVE_JOB}: heal failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  return observeAll()
+}
+
+/**
  * Registers the 15-minute job. The cron plugin holds the one-leader Redis lease and ticks only
  * where cronTicksEnabled(); this adds the Hub-mode check. Call once from the Hub provider routes.
  */
@@ -461,7 +478,7 @@ export function registerResourceObserveCron(app: FastifyInstance): void {
     OBSERVE_CRON,
     async () => {
       if (!hubModeEnabled()) return
-      const r = await observeAll()
+      const r = await observeTick((m) => app.log.warn(m))
       if (r.drifted || r.gone || r.failed)
         app.log.info(
           `${OBSERVE_JOB}: ${r.checked} checked, ${r.drifted} drifted, ${r.gone} gone, ${r.failed} failed`
