@@ -345,7 +345,8 @@ export const TYPES: ResourceTypeSpec[] = [
         key: 'dispatch',
         label: 'Run now',
         kind: 'boolean',
-        help: 'Starts one workflow_dispatch run on the next apply.'
+        help: 'Starts one workflow_dispatch run on the next apply.',
+        trigger: true
       }
     ],
     capabilities: NO_CREATE_CAPS,

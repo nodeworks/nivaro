@@ -106,6 +106,21 @@ export interface StoredChangePlan {
   preconditionFingerprint: string
   /** Same length as `ops`: the Hub resource row each op is for (null = a create not stored yet). */
   resourceIds: Array<number | null>
+  /**
+   * Task 1 (engine): same length as `ops` — the index in `request.ops` each planned op came from
+   * (an adapter may answer several ops for one request op).
+   */
+  sources?: number[]
+  /** Task 1: the pre-deploy checklist an owner's pending change was started with (claimed on approval). */
+  checklistRunId?: number | null
+  /** Task 1: the change this one undoes (undoResourceChange). */
+  undoOf?: number | null
+  /**
+   * Task 1: the NEW plain values of secret fields this change sets, as ONE sealed envelope
+   * (sealSecret of `{"<request op index>:<field>": plain}`); request ops hold only
+   * `{fingerprint, changed}`. Never answer it: use plan.ts `publicStoredPlan`.
+   */
+  sealed?: string | null
 }
 
 /** One entry of `nivaro_hub_resource_changes.steps`, one per op (same order as plan.ops). */
@@ -120,6 +135,11 @@ export interface ChangeStep {
   error: OpError | null
   startedAt: string | null
   finishedAt: string | null
+  /**
+   * Task 1: the resource's stored desired fields just before the op (refs as RefValue, secrets
+   * sealed as StoredSecretField — never plain) — what an undo plans back to.
+   */
+  beforeDesired?: Record<string, unknown> | null
 }
 
 // ── Errors ──
@@ -152,6 +172,17 @@ export const RESOURCE_CHANGE_CODES = {
   CHECKLIST_REQUIRED: 409,
   CHECKLIST_INCOMPLETE: 409,
   PROVIDER_ERROR: 502,
+  // Task 1 (engine) additions: the existing Hub gates' other answers, passed through as they are.
+  CHECKLIST_MISMATCH: 409,
+  CHECKLIST_USED: 409,
+  CHECKLIST_UNKNOWN: 503,
+  FREEZE_UNKNOWN: 503,
+  MOVE_UNKNOWN: 503,
+  ENV_ARCHIVED: 409,
+  WINDOW_INVALID: 409,
+  LOCK_UNAVAILABLE: 503,
+  CONNECTION_DISABLED: 409,
+  ALREADY_EXISTS: 409,
   NOT_IMPLEMENTED: 501
 } as const
 
@@ -170,62 +201,71 @@ export class ResourceChangeError extends Error {
   }
 }
 
-// ── Engine functions (Task 1 replaces the bodies) ──
-
-function notImplemented(): never {
-  throw new Error('not implemented')
-}
+// ── Engine functions (Task 1: plan.ts, run.ts, approval.ts, undo.ts) ──
+// Loaded on call, so this module (types + errors) stays a leaf every engine file imports.
 
 /** Reads the provider, diffs, stores a `planned` change. Nothing is written at the provider. */
-export async function planResourceChange(_req: PlanRequest, _actor: HubActor): Promise<ChangePlan> {
-  return notImplemented()
+export async function planResourceChange(req: PlanRequest, actor: HubActor): Promise<ChangePlan> {
+  const { createPlannedChange } = await import('./run.js')
+  return createPlannedChange(req, actor, { mode: 'request' })
 }
 
 /**
  * Starts a planned change (or saves it `pending_approval` for an owner's cost change). Refused
  * STALE_PLAN when `planHash` differs, CONFIRM_MISMATCH when `confirm` ≠ needsConfirm.
+ * `checklistRunId` (Task 1, optional): the ticked pre-deploy checklist of a production change
+ * (checklist version `resource-change-<changeId>`).
  */
 export async function startResourceChange(
-  _changeId: number,
-  _input: { planHash: string; confirm?: string },
-  _actor: HubActor
+  changeId: number,
+  input: { planHash: string; confirm?: string; checklistRunId?: number | null },
+  actor: HubActor
 ): Promise<ChangePlan> {
-  return notImplemented()
+  const { startChange } = await import('./run.js')
+  return startChange(changeId, input, actor)
 }
 
-export async function cancelResourceChange(
-  _changeId: number,
-  _actor: HubActor
-): Promise<ChangePlan> {
-  return notImplemented()
+export async function cancelResourceChange(changeId: number, actor: HubActor): Promise<ChangePlan> {
+  const { cancelChange } = await import('./run.js')
+  return cancelChange(changeId, actor)
 }
 
 /** Re-runs an `interrupted` / failed-retryable change: only steps without a recorded success. */
-export async function resumeResourceChange(
-  _changeId: number,
-  _actor: HubActor
-): Promise<ChangePlan> {
-  return notImplemented()
+export async function resumeResourceChange(changeId: number, actor: HubActor): Promise<ChangePlan> {
+  const { resumeChange } = await import('./run.js')
+  return resumeChange(changeId, actor)
 }
 
 /** A NEW planned change from the observed state back to the stored before-state. */
-export async function undoResourceChange(_changeId: number, _actor: HubActor): Promise<ChangePlan> {
-  return notImplemented()
+export async function undoResourceChange(changeId: number, actor: HubActor): Promise<ChangePlan> {
+  const { undoChange } = await import('./undo.js')
+  return undoChange(changeId, actor)
 }
 
 /** Hub admin approves a pending_approval change; starts it only if the plan hash still matches. */
 export async function approveResourceChange(
-  _changeId: number,
-  _input: { planHash: string },
-  _actor: HubActor
+  changeId: number,
+  input: { planHash: string },
+  actor: HubActor
 ): Promise<ChangePlan> {
-  return notImplemented()
+  const { approveChange } = await import('./approval.js')
+  return approveChange(changeId, input, actor)
 }
 
 export async function declineResourceChange(
-  _changeId: number,
-  _reason: string,
-  _actor: HubActor
+  changeId: number,
+  reason: string,
+  actor: HubActor
 ): Promise<ChangePlan> {
-  return notImplemented()
+  const { declineChange } = await import('./approval.js')
+  return declineChange(changeId, reason, actor)
+}
+
+/**
+ * Task 1: `applying` changes whose runner stopped (old heartbeat, lock gone) become
+ * `interrupted`. Call it before reading changes (the REST layer) and from a Hub tick.
+ */
+export async function healResourceChanges(changeId?: number): Promise<number> {
+  const run = await import('./run.js')
+  return run.healResourceChanges(changeId)
 }

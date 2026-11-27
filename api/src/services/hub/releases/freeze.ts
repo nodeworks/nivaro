@@ -41,6 +41,8 @@ export type FrozenAction =
   | 'access_change'
   /** Hub enhancement 47: every step of an app's retirement wizard (services/hub/lifecycle). */
   | 'retire'
+  /** Hub providers: a change of an app's (or a shared) managed resource at a provider. */
+  | 'resource_change'
 
 export interface HubFreeze {
   id: number
@@ -163,7 +165,8 @@ const ACTION_WORDS: Record<FrozenAction, string> = {
   extension_promote: 'Extension promotions',
   placement: 'Placement changes',
   access_change: 'Access review removals',
-  retire: 'Retirements'
+  retire: 'Retirements',
+  resource_change: 'Resource changes'
 }
 
 export interface FreezeRefusal {

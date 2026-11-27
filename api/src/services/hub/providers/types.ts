@@ -160,6 +160,12 @@ export interface FieldSpec {
   max?: number
   /** A regular expression source the value must match (strings). */
   pattern?: string
+  /**
+   * A one-shot trigger of a named op (GitHub `dispatch`, a build request): the engine clears it
+   * from the stored desired state once the op that used it applied, so a re-apply, a resume or
+   * drift never runs it again. (An op may also list such fields in `data.$oneShot`.)
+   */
+  trigger?: boolean
 }
 
 export interface ResourceCapabilities {
@@ -362,6 +368,16 @@ export interface ProviderAdapter {
   /** Before a delete / replace when the type's `capabilities.snapshot` is true. */
   snapshot?(ctx: ProviderContext, type: string, externalId: string): Promise<SnapshotRef>
   health?(ctx: ProviderContext, type: string, externalId: string): Promise<HealthAnswer>
+  /**
+   * Optional: the resource a create would collide with (same name / key at the provider), read
+   * while planning a create. A hit makes the plan's blocker ALREADY_EXISTS ("adopt it instead");
+   * the engine never adopts on its own. `apply` must still refuse a collision itself.
+   */
+  findExisting?(
+    ctx: ProviderContext,
+    type: string,
+    desired: DesiredResource
+  ): Promise<Observed | null>
 }
 
 // ── Errors ──

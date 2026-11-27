@@ -689,6 +689,8 @@ const SHARED: Record<string, string> = {
   'services/hub/promote-lock.ts :: memLocks': HUB_ONLY,
   'services/hub/promote-lock.ts :: memShared': HUB_ONLY,
   'services/hub/providers/context.ts :: tokenCaches': HUB_ONLY,
+  'services/hub/providers/engine/deps.ts :: current': HUB_ONLY,
+  'services/hub/providers/engine/locks.ts :: memResourceLocks': HUB_ONLY,
   'services/hub/providers/registry.ts :: providers': REGISTRY,
   'services/hub/promote-lock.ts :: memBranch': HUB_ONLY,
   'services/hub/promote-run.ts :: live': HUB_ONLY,

@@ -27,6 +27,11 @@ export interface ProviderContextInput {
   now?: () => Date
   /** Passed to makeProviderFetch (timeout, test fetchImpl). */
   fetch?: Omit<ProviderFetchOptions, 'signal'>
+  /**
+   * More values `ctx.scrub` masks besides the connection's secrets and tokens — the engine passes
+   * the plain values of a resource's own secret fields it opened for `apply`.
+   */
+  scrubExtra?: string[]
 }
 
 const SILENT: ProviderLogger = { info() {}, warn() {}, error() {} }
@@ -108,6 +113,7 @@ export function makeProviderContext(input: ProviderContextInput): ProviderContex
   const now = input.now ?? (() => new Date())
   const signal = input.signal ?? new AbortController().signal
   const known = new Set<string>(Object.values(input.secrets).filter((v) => typeof v === 'string'))
+  for (const v of input.scrubExtra ?? []) if (typeof v === 'string') known.add(v)
   const tokens = tokenCacheFor(input.connectionId, credentialStamp(input.secrets), now, (value) =>
     known.add(value)
   )

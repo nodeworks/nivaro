@@ -16,6 +16,7 @@ import {
   startResourceChange,
   undoResourceChange
 } from '../services/hub/providers/engine/contract.js'
+import { publicStoredPlan } from '../services/hub/providers/engine/plan.js'
 import {
   ensureCoreProviders,
   forgetConnectionTokens,
@@ -260,7 +261,25 @@ async function changeOut(row: HubResourceChangeRow) {
       type = plan.ops?.find((p) => p.resourceId === op.resourceId)?.type ?? null
     ops.push({ ...op, fields: maskedFields(op.fields, specFor(type)) })
   }
-  return { ...row, plan: { ...plan, request: { ...plan.request, ops } } }
+  // The engine's sealed envelope of new secret values and the sealed before-state of secret
+  // fields (undo data) never leave either (engine/plan.ts publicStoredPlan).
+  const steps = row.steps.map((st) => ({
+    ...st,
+    beforeDesired: st.beforeDesired
+      ? Object.fromEntries(
+          Object.entries(st.beforeDesired).map(([k, v]) => {
+            const o = plainObject(v)
+            return [
+              k,
+              o && typeof o.$sealed === 'string'
+                ? { secret: true, fingerprint: o.fingerprint ?? null }
+                : v
+            ]
+          })
+        )
+      : (st.beforeDesired ?? null)
+  }))
+  return { ...row, steps, plan: { ...publicStoredPlan(plan), request: { ...plan.request, ops } } }
 }
 
 // ── Who may see what ──
@@ -965,7 +984,14 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         return invalid(reply, ['confirm must be text.'])
       const plan = await startResourceChange(
         id,
-        { planHash: b.planHash, ...(typeof b.confirm === 'string' ? { confirm: b.confirm } : {}) },
+        {
+          planHash: b.planHash,
+          ...(typeof b.confirm === 'string' ? { confirm: b.confirm } : {}),
+          // A production change's ticked pre-deploy checklist (version resource-change-<id>).
+          ...(Number.isSafeInteger(b.checklistRunId) && Number(b.checklistRunId) > 0
+            ? { checklistRunId: Number(b.checklistRunId) }
+            : {})
+        },
         actorOf(req)
       )
       await activityLog(req, 'hub-resource-start', RESOURCE_CHANGES, id, plan.status)

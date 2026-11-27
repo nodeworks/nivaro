@@ -531,11 +531,11 @@ describe('provider store (migration 582, SQLite)', () => {
 })
 
 describe('engine contract', () => {
-  it('is signatures only until Task 1', async () => {
+  it('is implemented by Task 1 (an empty plan is refused before anything is read)', async () => {
     const actor = { id: 'u', isAdmin: true, via: 'session' as const }
     await expect(
       engine.planResourceChange({ connectionId: 1, scope: 'shared', ops: [] }, actor)
-    ).rejects.toThrow('not implemented')
+    ).rejects.toMatchObject({ code: 'INVALID_FIELDS', status: 400 })
     const err = new engine.ResourceChangeError('SHARED_IN_USE', 'in use')
     expect(err.status).toBe(409)
   })
