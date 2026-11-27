@@ -18,7 +18,7 @@ const { eachBounded, probeEnvironment, probeFetch, versionOf, PROBE_BODY_MAX } =
 )
 const { rotate } = await import('../../../services/hub/fleet/tick.js')
 const { p95 } = await import('../../../services/hub/fleet/store.js')
-const { auditCsv, categoryOf, labelOf, readComment } = await import(
+const { auditCsv, categoryOf, labelOf, readComment, resourceDetail } = await import(
   '../../../services/hub/fleet/audit.js'
 )
 
@@ -329,6 +329,50 @@ describe('audit helpers', () => {
       detail: 'move_id: 3'
     })
     expect(readComment('Check now: ok')).toMatchObject({ note: null, detail: 'Check now: ok' })
+  })
+  it('resource changes get their own category, labels and field-names-only detail', () => {
+    expect(categoryOf('hub-resource-change-start', 'nivaro_hub_resource_changes')).toBe('resources')
+    expect(categoryOf('hub-resource-adopt', 'nivaro_hub_resources')).toBe('resources')
+    expect(labelOf('hub-resource-delete', 'nivaro_hub_resource_changes')).toBe('Resource deleted')
+    const detail = resourceDetail({
+      change_id: 7,
+      resource_id: 3,
+      type: 'github.repository',
+      kind: 'update',
+      fields: ['visibility', 'token'],
+      external_id: 'acme/web',
+      token: { plain: 'test-secret-leak' },
+      value: 'test-secret-leak'
+    })
+    expect(detail).toBe(
+      'change 7 · resource 3 · type: github.repository · kind: update · fields: visibility, token'
+    )
+    expect(detail).not.toContain('test-secret-leak')
+    expect(detail).not.toContain('acme/web')
+    expect(resourceDetail(null)).toBeNull()
+  })
+  it('CSV lists a resource row with its category and field names', () => {
+    const csv = auditCsv([
+      {
+        id: 'a:9',
+        at: '2026-11-26T00:00:00.000Z',
+        action: 'hub-resource-update',
+        category: 'resources',
+        label: 'Resource changed',
+        app_id: 1,
+        app_key: 'efp',
+        environment_id: 2,
+        env_key: 'staging',
+        user_id: 'u1',
+        user_name: 'Rob',
+        result: null,
+        note: null,
+        detail: 'change 7 · fields: visibility',
+        target: { table: 'nivaro_hub_resource_changes', id: '7' }
+      }
+    ])
+    expect(csv).toContain('"resources"')
+    expect(csv).toContain('"change 7 · fields: visibility"')
   })
   it('CSV quotes cells and defuses formulas', () => {
     const csv = auditCsv([
