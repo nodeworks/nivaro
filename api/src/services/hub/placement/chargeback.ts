@@ -2,6 +2,7 @@ import type { Knex } from 'knex'
 import { db } from '../../../db/index.js'
 import { csvRow } from '../../../lib/csv-cell.js'
 import { SAMPLES } from '../capacity/store.js'
+import type { CostEstimate, CostLine } from '../providers/types.js'
 import { plainText, REGION_DRIVERS, REGIONS } from './regions.js'
 
 /**
@@ -246,6 +247,107 @@ export function costOf(u: EnvUsage, rates: ChargebackRates, factorPercent = 100)
   }
 }
 
+/**
+ * Task 44a: what a planned Docker stack shape will cost a month at the chargeback rates — the
+ * same rule as `costOf`, from the shape instead of measured means: CPU cores = Σ replicas × the
+ * role's CPU limit, memory = Σ replicas × its memory limit, plus the storage and database the Hub
+ * measured (or expects) and the flat amount per environment, × the region factor. Basis
+ * `rate_card` (the Hub's own rates). Lines are before the factor; one "Region factor" line
+ * carries the difference, so the lines always sum to the total. Pure.
+ */
+export interface StackShape {
+  roles: ReadonlyArray<{
+    role?: string
+    replicas: number
+    cpus?: number | null
+    memory_mb?: number | null
+  }>
+  storage_gb?: number | null
+  database_gb?: number | null
+  /**
+   * A stack on a shared deployment reserves no CPU or memory of its own: those are charged by
+   * measured use (the run-rate), so the estimate counts storage, database and the flat amount.
+   */
+  shared?: boolean
+}
+
+export function stackUsageOf(shape: StackShape): EnvUsage {
+  let cores = 0
+  let memMb = 0
+  for (const r of shape.shared ? [] : shape.roles) {
+    const n = Number.isFinite(r.replicas) && r.replicas > 0 ? r.replicas : 0
+    if (r.cpus != null && Number.isFinite(r.cpus) && r.cpus > 0) cores += n * r.cpus
+    if (r.memory_mb != null && Number.isFinite(r.memory_mb) && r.memory_mb > 0)
+      memMb += n * r.memory_mb
+  }
+  return {
+    cpu_cores: cores,
+    memory_gb: memMb / 1024,
+    storage_gb: shape.storage_gb ?? null,
+    database_gb: shape.database_gb ?? null
+  }
+}
+
+export function estimateStack(
+  shape: StackShape,
+  rates: ChargebackRates,
+  factorPercent = 100,
+  currency = 'USD'
+): CostEstimate {
+  const u = stackUsageOf(shape)
+  const c = costOf(u, rates, factorPercent)
+  const cents = (v: number) => Math.round(v * 100)
+  const unrated = RATE_KEYS.every((k) => rates[k] === 0)
+  const lines: CostLine[] = []
+  const add = (label: string, qty: number | null, unit: string, rate: number, part: number) => {
+    if (!qty || qty <= 0 || rate <= 0) return
+    lines.push({
+      label,
+      qty: Math.round(qty * 1000) / 1000,
+      unit,
+      unitCents: rate * 100,
+      monthlyCents: cents(part),
+      kind: 'base',
+      source: 'admin_rate'
+    })
+  }
+  add('CPU (limits × replicas)', u.cpu_cores, 'core-month', rates.cpu_core_month, c.cpu)
+  add('Memory (limits × replicas)', u.memory_gb, 'GB-month', rates.memory_gb_month, c.memory)
+  add('Stored files', u.storage_gb, 'GB-month', rates.storage_gb_month, c.storage)
+  add('Database', u.database_gb, 'GB-month', rates.database_gb_month, c.database)
+  add('Environment', 1, 'month', rates.environment_month, c.environment)
+  const total = cents(c.total)
+  const listed = lines.reduce((n, l) => n + l.monthlyCents, 0)
+  if (total !== listed)
+    lines.push({
+      label: `Region factor ${c.factor_percent}%`,
+      qty: 1,
+      unit: 'month',
+      unitCents: total - listed,
+      monthlyCents: total - listed,
+      kind: 'base',
+      source: 'admin_rate'
+    })
+  const gaps: string[] = []
+  if (u.storage_gb == null) gaps.push('stored files')
+  if (u.database_gb == null) gaps.push('database size')
+  const notes: string[] = []
+  if (unrated) notes.push('No chargeback rates are set yet.')
+  if (shape.shared) notes.push('CPU and memory on a shared deployment are charged by measured use.')
+  if (gaps.length) notes.push(`Not counted (not measured yet): ${gaps.join(', ')}.`)
+  return {
+    currency,
+    monthlyCents: total,
+    oneTimeCents: 0,
+    yearlyCents: 0,
+    basis: 'rate_card',
+    confidence: unrated ? 'unknown' : 'exact',
+    lines,
+    priceAsOf: null,
+    ...(notes.length ? { note: notes.join(' ') } : {})
+  }
+}
+
 interface SampleLike {
   scope: 'shared' | 'environment'
   shared_deployment_id: number | null
@@ -484,7 +586,7 @@ function iso(v: unknown): string | null {
 }
 
 /** The newest successful Hub backup's size per environment (one row per environment, L4). */
-async function databaseBytes(envIds: number[]): Promise<Map<number, number>> {
+export async function databaseBytes(envIds: number[]): Promise<Map<number, number>> {
   const out = new Map<number, number>()
   if (!envIds.length || !(await db.schema.hasTable(DATA_RUNS))) return out
   const done = () =>

@@ -151,6 +151,8 @@ export const OWNER_GUARDED: OwnerRoute[] = [
  * writes the route itself limits). The guard test fails on a requireAuth write missing from both.
  */
 export const OWNER_UNGUARDED: Record<string, string> = {
+  'POST /environments/:envId/stack/estimate':
+    'a read (a cost estimate, writes nothing); an owner of the app only, judged inside the route (404 otherwise)',
   'POST /environments/:envId/stack/check-name':
     'a name check (read of DNS + the app), owners only while the environment waits for its name',
   'POST /environments/:envId/stack/remove': 'admin-only inside the route',

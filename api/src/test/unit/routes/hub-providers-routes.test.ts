@@ -271,11 +271,13 @@ describe('provider types', () => {
     const data = res.json().data
     expect(data.risk_flags).toContain('destructive')
     const demo = data.providers.find((p: { key: string }) => p.key === 'demo')
+    // The adapter's own fields, then the cost settings every connection takes (Task 44a).
     expect(demo.connection.fields.map((f: { key: string }) => f.key)).toEqual([
       'org',
       'note',
       'token',
-      'hook'
+      'hook',
+      'tax_percent'
     ])
     expect(demo.types[0]).toMatchObject({ key: 'demo.thing', scope: 'app', reversible: true })
     expect(JSON.stringify(data)).not.toContain(SECRET)
@@ -975,5 +977,55 @@ describe('Task 3b: failed creates, field options, open changes', () => {
       .data as Array<{ scope: string }>
     expect(shared.map((x) => x.scope)).toEqual(['shared'])
     expect((await inject('GET', '/resource-changes?scope=galaxy')).statusCode).toBe(400)
+  })
+})
+
+describe('estimates (Task 44a)', () => {
+  it('answers a read through the gate; an owner never learns of another app resource', async () => {
+    const c = await makeConnection()
+    await store.setAppAllowedConnections(appA, [c.id])
+    const ok = await inject(
+      'POST',
+      '/providers/estimate',
+      { connection_id: c.id, type: 'demo.thing', desired: { name: 'x' }, app_id: appA },
+      { ...owner, 'x-mcp': '1' }
+    )
+    expect(ok.statusCode).toBe(200)
+    // A type with no costClass and no estimate costs nothing by contract.
+    expect(ok.json().data).toMatchObject({ basis: 'free', monthlyCents: 0, deltaMonthlyCents: 0 })
+    expect(engine.plan).not.toHaveBeenCalled()
+    const theirs = await makeResource(c.id, { app: appB })
+    const hidden = await inject(
+      'POST',
+      '/providers/estimate',
+      { connection_id: c.id, resource_id: theirs.id, desired: {} },
+      owner
+    )
+    expect(hidden.statusCode).toBe(404)
+    const bad = await inject(
+      'POST',
+      '/providers/estimate',
+      { connection_id: c.id, type: 'demo.thing', egress_gb_month: -1 },
+      owner
+    )
+    expect(bad.statusCode).toBe(400)
+  })
+
+  it('takes the tax rate on every connection, a number from 0 to 100', async () => {
+    const ok = await inject('POST', '/connections', {
+      provider: 'demo',
+      name: 'Taxed',
+      config: { org: 'o', tax_percent: 8.5 },
+      secrets: { token: SECRET }
+    })
+    expect(ok.statusCode).toBe(201)
+    expect(ok.json().data.config.tax_percent).toBe(8.5)
+    const bad = await inject('POST', '/connections', {
+      provider: 'demo',
+      name: 'Bad',
+      config: { org: 'o', tax_percent: 120 },
+      secrets: { token: SECRET }
+    })
+    expect(bad.statusCode).toBe(400)
   })
 })

@@ -129,7 +129,8 @@ export function viewOf(row: HubResourceChangeRow): ChangePlan {
     gates: p?.gates ?? [],
     needsConfirm: p?.needsConfirm ?? null,
     needsApproval: p?.needsApproval ?? false,
-    blockers: p?.blockers ?? []
+    blockers: p?.blockers ?? [],
+    costTotal: p?.costTotal ?? null
   }
 }
 

@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { markConfigRead } from '../services/config-live.js'
 import { idParam, isAppOwner, listApps, readApp } from '../services/hub/apps.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { estimateProvider } from '../services/hub/providers/costs-live.js'
 import {
   approveResourceChange,
   cancelResourceChange,
@@ -36,6 +38,11 @@ import {
   listUnmanaged,
   registerResourceObserveCron
 } from '../services/hub/providers/observe.js'
+import {
+  COST_CONNECTION_FIELDS,
+  COST_CONNECTION_KEYS,
+  costConfigProblems
+} from '../services/hub/providers/pricing/index.js'
 import {
   APP_CONNECTIONS,
   appAllowedConnections,
@@ -400,7 +407,9 @@ function checkKeys(
 ): string[] {
   const plain = new Set(adapter.connection.fields.filter((f) => !f.secret).map((f) => f.key))
   const sec = new Set(adapter.connection.fields.filter((f) => f.secret).map((f) => f.key))
-  const problems: string[] = []
+  // Task 44a: every connection also takes the cost settings (the tax rate on its estimates).
+  for (const k of COST_CONNECTION_KEYS) if (!sec.has(k)) plain.add(k)
+  const problems: string[] = [...costConfigProblems(config)]
   for (const k of Object.keys(config))
     if (!plain.has(k))
       problems.push(sec.has(k) ? `${k} is a secret: send it in secrets.` : `Unknown field ${k}.`)
@@ -513,7 +522,8 @@ function typeOut(t: ResourceTypeSpec) {
     reversible: typeof t.reversible === 'function' ? 'partial' : t.reversible,
     refs: t.refs,
     name_field: t.nameField ?? 'name',
-    has_cost_class: typeof t.costClass === 'function'
+    has_cost_class: typeof t.costClass === 'function',
+    has_estimate: typeof t.estimate === 'function'
   }
 }
 
@@ -534,7 +544,15 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         providers: listProviders().map((p) => ({
           key: p.key,
           label: p.label,
-          connection: { fields: p.connection.fields },
+          // The adapter's own fields, then the cost settings every connection takes (Task 44a).
+          connection: {
+            fields: [
+              ...p.connection.fields,
+              ...COST_CONNECTION_FIELDS.filter(
+                (f) => !p.connection.fields.some((x) => x.key === f.key)
+              )
+            ]
+          },
           types: p.types.map(typeOut)
         }))
       }
@@ -990,6 +1008,61 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         `${parsed.ops.map((o) => `${o.action} ${o.type ?? o.resourceId ?? ''}`.trim()).join(', ')} · ${parsed.scope}`
       )
       return { data: plan }
+    })
+  )
+
+  // ── Estimates (Task 44a) ──
+  // A read: no plan is saved, no audit row is written (only the price cache may fill), open during
+  // maintenance and to hub:read keys and connected apps. Judged like a plan (judgeAccess).
+  app.post('/providers/estimate', { preHandler: requireAuth }, async (req, reply) =>
+    guarded(reply, async () => {
+      markConfigRead(req)
+      const b = body(req)
+      const connectionId = idParam(String(b.connection_id ?? ''))
+      if (connectionId === null) return invalid(reply, ['connection_id is required.'])
+      const resourceId =
+        b.resource_id === undefined || b.resource_id === null
+          ? null
+          : idParam(String(b.resource_id))
+      if (b.resource_id != null && resourceId === null)
+        return invalid(reply, ['resource_id is a resource id.'])
+      if (b.type !== undefined && typeof b.type !== 'string')
+        return invalid(reply, ['type is a resource type key.'])
+      if (b.desired !== undefined && b.desired !== null && !plainObject(b.desired))
+        return invalid(reply, ['desired must be an object of field values.'])
+      const egress = b.egress_gb_month
+      if (
+        egress !== undefined &&
+        egress !== null &&
+        (typeof egress !== 'number' || !Number.isFinite(egress) || egress < 0 || egress > 1e9)
+      )
+        return invalid(reply, ['egress_gb_month is a number of GB a month.'])
+      const appId = b.app_id == null ? null : idParam(String(b.app_id))
+      const envId = b.environment_id == null ? null : idParam(String(b.environment_id))
+      // An owner never learns a row of another app (or a shared one) exists.
+      if (resourceId !== null && !req.isAdmin) {
+        const row = await readResource(resourceId)
+        if (
+          row?.scope !== 'app' ||
+          row.app_id === null ||
+          !(await isAppOwner(row.app_id, userId(req)))
+        )
+          return notFound(reply, 'resource')
+      }
+      const data = await estimateProvider(
+        {
+          connection_id: connectionId,
+          ...(typeof b.type === 'string' ? { type: b.type } : {}),
+          desired: plainObject(b.desired),
+          resource_id: resourceId,
+          app_id: appId,
+          environment_id: envId,
+          egress_gb_month: typeof egress === 'number' ? egress : null,
+          delete: b.delete === true
+        },
+        actorOf(req)
+      )
+      return { data }
     })
   )
 

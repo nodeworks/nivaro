@@ -92,6 +92,20 @@ export interface ChangePlan {
   needsApproval: boolean
   /** Anything that stops the start outright (SHARED_IN_USE, BUCKET_NOT_EMPTY…). */
   blockers: ChangeBlocker[]
+  /** Task 44a: the change's cost totals (each op carries its own `cost`); null on old plans. */
+  costTotal?: PlanCostTotal | null
+}
+
+/**
+ * Task 44a: a change's estimate totals — the monthly difference, one-time and yearly amounts,
+ * how many costed ops have no figure, and when the prices were read. Never part of plan_hash.
+ */
+export interface PlanCostTotal {
+  deltaMonthlyCents: number
+  oneTimeCents: number
+  yearlyCents: number
+  unknownOps: number
+  checkedAt: string
 }
 
 /** What `nivaro_hub_resource_changes.plan` holds. */
@@ -104,6 +118,8 @@ export interface StoredChangePlan {
   blockers: ChangeBlocker[]
   /** Hash of every op's preconditions (part of planHash). */
   preconditionFingerprint: string
+  /** Task 44a: the estimate totals the plan showed (not part of planHash). */
+  costTotal?: PlanCostTotal | null
   /** Same length as `ops`: the Hub resource row each op is for (null = a create not stored yet). */
   resourceIds: Array<number | null>
   /**

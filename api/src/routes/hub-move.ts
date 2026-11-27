@@ -19,6 +19,7 @@ import {
   startMove
 } from '../services/hub/move/run.js'
 import { PromotionError } from '../services/hub/promote-lock.js'
+import { moveCost } from '../services/hub/providers/costs-live.js'
 import { environmentFreezeRefusal } from '../services/hub/releases/freeze.js'
 import { HubSecretError } from '../services/hub/secrets.js'
 
@@ -132,7 +133,12 @@ export function hubMoveRoutes(app: FastifyInstance) {
   app.post('/environments/:envId/move/plan', { preHandler: requireAdmin }, async (req, reply) => {
     const envId = envParam(req)
     if (envId === null) return refuse(reply, 404, 'NOT_FOUND', 'No such environment.')
-    return guarded(reply, async () => reply.send({ data: await planFor(envId, body(req).to) }))
+    return guarded(reply, async () => {
+      const plan = await planFor(envId, body(req).to)
+      // Task 44a: where it runs now → the target, at the chargeback rates (not in the plan hash).
+      const cost = await moveCost(envId, body(req).to).catch(() => null)
+      return reply.send({ data: { ...plan, cost } })
+    })
   })
 
   app.post('/environments/:envId/move', { preHandler: requireAdmin }, async (req, reply) => {

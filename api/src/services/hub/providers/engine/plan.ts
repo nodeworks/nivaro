@@ -1,7 +1,17 @@
 import { createHash, createHmac } from 'node:crypto'
 import { HUB_MASK, openSecret, sealSecret } from '../../secrets.js'
 import { makeProviderContext } from '../context.js'
+import {
+  autoApproveLimit,
+  autoApproves,
+  costsLiveDeps,
+  estimateResource,
+  opCostOf,
+  planCostTotal,
+  trafficFor
+} from '../estimate.js'
 import { ensureCoreProviders } from '../index.js'
+import { effectiveRates } from '../pricing/index.js'
 import { findType, getProvider } from '../registry.js'
 import {
   type HubConnectionRow,
@@ -103,6 +113,13 @@ export function preconditionFingerprint(ops: PlannedOp[]): string {
   return sha256(canonical(ops.map((o) => o.preconditions ?? {})))
 }
 
+/** An op without its cost (Task 44a): estimates are never part of the plan hash — prices move. */
+function withoutCost(op: PlannedOp): PlannedOp {
+  if (!('cost' in op)) return op
+  const { cost: _cost, ...rest } = op
+  return rest
+}
+
 /** The hash a start must send back: ops + precondition fingerprint + what the request applies. */
 export function planHashOf(stored: StoredChangePlan): string {
   return sha256(
@@ -113,7 +130,7 @@ export function planHashOf(stored: StoredChangePlan): string {
       appId: stored.request.appId ?? null,
       environmentId: stored.request.environmentId ?? null,
       request: stored.request.ops,
-      ops: stored.ops,
+      ops: stored.ops.map(withoutCost),
       resourceIds: stored.resourceIds,
       sources: stored.sources ?? null,
       preconditionFingerprint: stored.preconditionFingerprint,
@@ -1015,10 +1032,20 @@ export async function computePlan(
   const sources: number[] = []
   const names: Array<{ op: PlannedOp; name: string | null }> = []
   const refExternal = (id: number) => (id > 0 ? (rowsById.get(id)?.external_id ?? null) : null)
+  // Task 44a: one estimate job per adapter-planned resource (filled in after the loop).
+  const costJobs: Array<{
+    opIndex: number
+    type: ResourceTypeSpec
+    kind: OpKind
+    desired: DesiredResource | null
+    observed: Observed | null
+    ctx: ProviderContext
+  }> = []
 
   for (const w of ordered) {
     const region = regionFor(conn.row.config, w.fields, w.row?.observed ?? null)
     const ctx = contextFor(conn, region)
+    let costFor: { desired: DesiredResource | null } | null = null
     let observed: Observed | null = null
     if (w.externalId && w.action !== 'create') {
       try {
@@ -1152,7 +1179,9 @@ export async function computePlan(
           ...new Set([...(op.risk ?? []), ...w.type.risk(op, desiredForRisk), ...extra])
         ].sort() as RiskFlag[]
       }
+      costFor = { desired }
     }
+    const firstOp = ops.length
     for (const raw of planned) {
       const kind = raw.kind
       const cap = w.type.capabilities
@@ -1189,7 +1218,47 @@ export async function computePlan(
       sources.push(w.index)
       names.push({ op, name: nameOf(w.type, w.fields, observed, w.row, w.externalId) })
     }
+    // The resource's cost rides its first real op (a replace's or a named op's included).
+    if (costFor) {
+      const at = ops.findIndex((o, i) => i >= firstOp && o.kind !== 'noop')
+      if (at >= 0)
+        costJobs.push({
+          opIndex: at,
+          type: w.type,
+          kind: ops[at].kind,
+          desired: costFor.desired,
+          observed,
+          ctx
+        })
+    }
   }
+
+  // Task 44a: estimates before → after per op (never part of the hash; never stop a plan).
+  const nowDate = new Date(engineDeps().now())
+  if (costJobs.length) {
+    const appIdForCost = access.app?.id ?? null
+    const traffic = await trafficFor(appIdForCost, access.env?.id ?? null)
+    const rates = await effectiveRates(conn.row.id, {
+      now: costsLiveDeps().now(),
+      config: conn.row.config
+    })
+    await Promise.all(
+      costJobs.map(async (j) => {
+        if (traffic) j.ctx.traffic = traffic
+        const opts = { connectionId: conn.row.id, config: conn.row.config, rates }
+        const before =
+          j.kind !== 'create' && j.observed
+            ? await estimateResource(j.ctx, j.type, null, j.observed, opts)
+            : null
+        const after =
+          j.kind === 'delete' || !j.desired
+            ? null
+            : await estimateResource(j.ctx, j.type, j.desired, j.observed, opts)
+        if (before || after) ops[j.opIndex].cost = opCostOf(before, after)
+      })
+    )
+  }
+  const costTotal = planCostTotal(ops, nowDate)
 
   // A change let through only by the carried per-resource grant makes nothing new.
   assertCarriedGrantOps(
@@ -1259,14 +1328,23 @@ export async function computePlan(
       passed: false,
       message: `Type ${needsConfirm} to start.`
     })
-  const needsApproval = !actor.isAdmin && ops.some((o) => o.risk.includes('cost'))
-  if (ops.some((o) => o.risk.includes('cost')))
+  const costed = ops.some((o) => o.risk.includes('cost'))
+  // Task 44a: an owner's change under the auto-approve limit runs without an approval (an
+  // unknown estimate, or no limit set, never does).
+  const underLimit =
+    !actor.isAdmin && costed
+      ? autoApproves(ops, costTotal, await autoApproveLimit(access.app?.id ?? null))
+      : false
+  const needsApproval = !actor.isAdmin && costed && !underLimit
+  if (costed)
     gates.push({
       code: 'APPROVAL_REQUIRED',
       passed: !needsApproval,
       message: needsApproval
         ? 'This change adds a monthly cost: a Hub administrator approves it before it runs.'
-        : 'This change adds a monthly cost.'
+        : underLimit
+          ? 'This change adds a monthly cost under the auto-approve limit: it runs without an approval.'
+          : 'This change adds a monthly cost.'
     })
   if (access.env)
     gates.push({
@@ -1298,6 +1376,7 @@ export async function computePlan(
     needsApproval,
     blockers,
     preconditionFingerprint: preconditionFingerprint(ops),
+    costTotal,
     resourceIds,
     sources,
     undoOf: opts.undoOf ?? null,

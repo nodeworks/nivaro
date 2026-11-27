@@ -19,6 +19,7 @@
  *           reference; the gate refuses every write to connected apps anyway.
  */
 
+import { COST_ROUTES } from './catalog-costs.js'
 import { LIFECYCLE_ROUTES } from './catalog-lifecycle.js'
 import { PROVIDER_ROUTES } from './catalog-providers.js'
 
@@ -2852,7 +2853,8 @@ export const HUB_ROUTES: HubRoute[] = [
   }),
   // ─── App lifecycle: cloning, retirement (routes/hub-lifecycle.ts) ─────────────────────
   ...LIFECYCLE_ROUTES,
-  ...PROVIDER_ROUTES
+  ...PROVIDER_ROUTES,
+  ...COST_ROUTES
 ]
 
 /** Fastify's template for a request (`/api/hub/apps/:id`) → its catalog entry, else null. */
