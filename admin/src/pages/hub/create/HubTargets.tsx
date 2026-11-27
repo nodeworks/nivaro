@@ -1,6 +1,6 @@
 import { ConfirmButton, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Globe, Plus, Trash2, X } from 'lucide-react'
+import { Check, Globe, Link2, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
@@ -31,6 +31,7 @@ import {
   segmentButton,
   segmentGroup
 } from '../hub-parts'
+import { fetchConnections, providerKeys } from '../providers/providers-api'
 import { ConnectionPicker, ManagedResourcePicker } from '../providers/ResourcePickers'
 import {
   type AnyHubTarget,
@@ -213,6 +214,23 @@ function TargetCard({
           ? `${target.config.template} · ${target.config.deploy_workflow}`
           : `${target.config.namespace} · ${target.config.template_project}@${target.config.template_ref}`}
       </span>
+      {!isGithubTarget(target) && target.connection_id != null && (
+        <span
+          className={cn(
+            'mt-0.5 flex items-center gap-1 truncate text-[11px]',
+            target.connection?.problem
+              ? 'text-amber-800 dark:text-amber-300'
+              : 'text-slate-500 dark:text-muted-foreground'
+          )}
+        >
+          <Link2 className='h-3 w-3 shrink-0' aria-hidden />
+          <span className='truncate'>
+            {target.connection?.problem
+              ? target.connection.problem
+              : `Through ${target.connection?.name || 'a GitLab connection'}`}
+          </span>
+        </span>
+      )}
       {c.wildcard_domain && (
         <span className='mt-0.5 flex items-center gap-1 truncate font-mono text-[11px] text-slate-500 dark:text-muted-foreground'>
           <Globe className='h-3 w-3 shrink-0' aria-hidden />
@@ -225,6 +243,9 @@ function TargetCard({
 
 interface Draft {
   name: string
+  /** G-A: the Hub signs in to GitLab with the target's own token, or a GitLab connection's. */
+  source?: 'token' | 'connection'
+  connection_id?: number | null
   api: string
   namespace: string
   template_project: string
@@ -246,9 +267,13 @@ interface Draft {
 
 function draftOf(t: HubTarget | null): Draft {
   const c: Partial<HubTargetConfig> = t?.config ?? {}
+  const viaConnection = t?.connection_id != null
   return {
     name: t?.name ?? '',
-    api: c.api ?? '',
+    source: viaConnection ? 'connection' : 'token',
+    connection_id: t?.connection_id ?? null,
+    // A connection's address is shown from the connection, never typed into the target.
+    api: viaConnection ? '' : (c.api ?? ''),
     namespace: c.namespace ?? '',
     template_project: c.template_project ?? '',
     template_ref: c.template_ref ?? '',
@@ -272,7 +297,9 @@ function draftOf(t: HubTarget | null): Draft {
 export function targetDraftErrors(d: Draft): Partial<Record<keyof Draft, string>> {
   const e: Partial<Record<keyof Draft, string>> = {}
   if (!d.name.trim()) e.name = 'Give the target a name'
-  if (!/^https?:\/\/\S+$/i.test(d.api.trim()))
+  if (d.source === 'connection') {
+    if (!d.connection_id) e.connection_id = 'Pick the GitLab connection the Hub signs in with'
+  } else if (!/^https?:\/\/\S+$/i.test(d.api.trim()))
     e.api = 'The GitLab API address, e.g. https://gitlab.example.com/api/v4'
   if (!d.namespace.trim()) e.namespace = 'The GitLab group new repositories go in'
   if (!d.template_project.trim()) e.template_project = 'The template project, e.g. ops/nivaro-app'
@@ -350,6 +377,15 @@ function TargetForm({
   const qc = useQueryClient()
   const stored = !!target?.secret
   const [d, setD] = useState<Draft>(() => draftOf(target))
+  const viaConnection = d.source === 'connection'
+  const connections = useQuery({
+    queryKey: providerKeys.connections(),
+    queryFn: fetchConnections,
+    enabled: viaConnection
+  })
+  const picked = viaConnection
+    ? (connections.data ?? []).find((c) => c.id === d.connection_id)
+    : undefined
   const [token, setToken] = useState(stored ? HUB_MASK : '')
   const [tried, setTried] = useState(false)
   const [failure, setFailure] = useState<unknown>(null)
@@ -368,8 +404,10 @@ function TargetForm({
     mutationFn: () => {
       const body = {
         name: d.name.trim(),
+        // A target that uses a connection sends no address and no token of its own.
+        connection_id: viaConnection ? d.connection_id : null,
         config: {
-          api: d.api.trim().replace(/\/+$/, ''),
+          ...(viaConnection ? {} : { api: d.api.trim().replace(/\/+$/, '') }),
           namespace: d.namespace.trim(),
           template_project: d.template_project.trim(),
           template_ref: d.template_ref.trim(),
@@ -382,7 +420,7 @@ function TargetForm({
           traefik_version: d.traefik_version === '2' ? 2 : 3
         },
         // Unchanged = not sent (the stored token stays); cleared = removed.
-        ...(token !== (stored ? HUB_MASK : '') ? { secret: token.trim() } : {})
+        ...(!viaConnection && token !== (stored ? HUB_MASK : '') ? { secret: token.trim() } : {})
       }
       return saveTarget(target?.id ?? null, body)
     },
@@ -445,16 +483,90 @@ function TargetForm({
             className={plain}
           />
         </Field>
-        <Field id={id('api')} label='GitLab API URL' error={err('api')}>
-          <Input
-            id={id('api')}
-            value={d.api}
-            onChange={(e) => set({ api: e.target.value })}
-            placeholder='https://gitlab.example.com/api/v4'
-            inputMode='url'
-            className={plain}
-          />
-        </Field>
+        <div className='sm:col-span-2'>
+          <Field
+            id={id('source')}
+            label='Signs in to GitLab with'
+            hint={
+              viaConnection
+                ? "The connection's address and token. Apps made here follow it when its token changes."
+                : 'An address and a token kept on this target.'
+            }
+          >
+            <fieldset id={id('source')} className={cn(segmentGroup, 'flex w-fit')}>
+              <legend className='sr-only'>How the Hub signs in to GitLab</legend>
+              {(
+                [
+                  ['token', 'Own token'],
+                  ['connection', 'A GitLab connection']
+                ] as const
+              ).map(([k, label]) => (
+                <button
+                  key={k}
+                  type='button'
+                  aria-pressed={d.source === k}
+                  className={segmentButton(d.source === k)}
+                  onClick={() =>
+                    set({
+                      source: k,
+                      // Leaving a connection: start from its address (the token is typed anew).
+                      ...(k === 'token' && !d.api.trim() && target?.connection_id != null
+                        ? { api: target.config.api ?? '' }
+                        : {})
+                    })
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </fieldset>
+          </Field>
+        </div>
+        {viaConnection ? (
+          <>
+            <Field
+              id={id('conn')}
+              label='Connection'
+              hint='Namespace and template must be inside the group the connection is pinned to.'
+              error={err('connection_id')}
+            >
+              <ConnectionPicker
+                id={id('conn')}
+                provider='gitlab'
+                value={d.connection_id ?? null}
+                onChange={(c) => set({ connection_id: c })}
+                placeholder='Pick a GitLab connection'
+              />
+            </Field>
+            <Field id={id('conn-at')} label='Address and group'>
+              <Input
+                id={id('conn-at')}
+                readOnly
+                tabIndex={-1}
+                value={
+                  picked
+                    ? connectionWhere((picked as { config?: Record<string, unknown> }).config ?? {})
+                    : target?.connection_id != null && target.connection_id === d.connection_id
+                      ? (target.config.api ?? '')
+                      : ''
+                }
+                placeholder='Comes from the connection'
+                className='h-8 cursor-default border-dashed bg-slate-50 font-mono text-[12px] text-slate-600 shadow-none focus-visible:ring-0 dark:bg-muted/40 dark:text-muted-foreground'
+              />
+            </Field>
+          </>
+        ) : (
+          <Field id={id('api')} label='GitLab API URL' error={err('api')}>
+            <Input
+              id={id('api')}
+              value={d.api}
+              onChange={(e) => set({ api: e.target.value })}
+              placeholder='https://gitlab.example.com/api/v4'
+              inputMode='url'
+              className={plain}
+            />
+          </Field>
+        )}
         <Field
           id={id('namespace')}
           label='Namespace'
@@ -497,17 +609,21 @@ function TargetForm({
             className={mono}
           />
         </Field>
-        <Field
-          id={id('token')}
-          label='Access token'
-          hint={
-            stored
-              ? 'Stored sealed. Leave as is to keep it; clear it to remove it.'
-              : 'A GitLab token with api scope, Maintainer on the namespace. Stored sealed.'
-          }
-        >
-          <SecretInput id={id('token')} value={token} onChange={setToken} stored={stored} />
-        </Field>
+        {!viaConnection && (
+          <Field
+            id={id('token')}
+            label='Access token'
+            hint={
+              target?.connection_id != null
+                ? 'This target used a connection: type its own token to stop using it.'
+                : stored
+                  ? 'Stored sealed. Leave as is to keep it; clear it to remove it.'
+                  : 'A GitLab token with api scope, Maintainer on the namespace. Stored sealed.'
+            }
+          >
+            <SecretInput id={id('token')} value={token} onChange={setToken} stored={stored} />
+          </Field>
+        )}
       </FormGroup>
 
       <FormGroup title='Deploys'>
@@ -641,6 +757,13 @@ function TargetForm({
       </div>
     </div>
   )
+}
+
+/** A GitLab connection's address and pinned group, as the target form shows them. */
+function connectionWhere(config: Record<string, unknown>): string {
+  const base = String(config.baseUrl ?? '').trim() || 'https://gitlab.com'
+  const group = String(config.groupPath ?? '').trim()
+  return group ? `${base.replace(/\/+$/, '')} · ${group}` : base
 }
 
 function FormGroup({ title, children }: { title: string; children: React.ReactNode }) {

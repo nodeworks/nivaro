@@ -217,6 +217,9 @@ const m546 = await import('../../../db/migrations/546_hub_stack_settings.js')
 const m550 = await import('../../../db/migrations/550_hub_oidc.js')
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
 const m570 = await import('../../../db/migrations/570_hub_people_owner_policy.js')
+// G-A: a GitLab target may use a `gitlab` provider connection (582 + targets.connection_id 583).
+const m582 = await import('../../../db/migrations/582_hub_providers.js')
+const m583 = await import('../../../db/migrations/583_hub_provider_hooks.js')
 const { hubRoutes } = await import('../../../routes/hub.js')
 const { countOwnerTry } = await import('../../../routes/hub-create.js')
 const { maintenanceFreezeHook } = await import('../../../services/maintenance-freeze.js')
@@ -353,6 +356,8 @@ beforeAll(async () => {
   await m550.up(db)
   await m551.up(db)
   await m570.up(db)
+  await m582.up(db)
+  await m583.up(db)
   await db.schema.createTable('nivaro_users', (t) => t.uuid('id').primary())
   await db('nivaro_users').insert([{ id: ADMIN_ID }, { id: OWNER }, { id: OTHER }])
   app = Fastify()
@@ -722,6 +727,104 @@ describe('targets', () => {
     } finally {
       process.env.ENCRYPTION_KEY = KEY
     }
+  })
+})
+
+describe('targets that use a GitLab connection (G-A)', () => {
+  const CONN_TOKEN = 'glpat-connection-token-Secret-77'
+
+  async function gitlabConnection(groupPath = 'apps') {
+    const ps = await import('../../../services/hub/providers/store.js')
+    await db('nivaro_hub_connections').del()
+    return ps.createConnection({
+      provider: 'gitlab',
+      name: 'GitLab apps',
+      config: { baseUrl: 'https://gitlab.example.com', groupPath },
+      secrets: { token: CONN_TOKEN },
+      createdBy: null
+    })
+  }
+
+  it('saves no token and no address; the answer names the connection', async () => {
+    const conn = await gitlabConnection()
+    const { api: _api, ...config } = targetConfig
+    const res = await call('POST', '/targets', asAdmin, {
+      kind: 'gitlab',
+      name: 'via connection',
+      connection_id: conn.id,
+      config
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    const data = res.json().data
+    expect(data).toMatchObject({
+      secret: null,
+      connection_id: conn.id,
+      connection: { id: conn.id, name: 'GitLab apps', problem: null },
+      config: { api: 'https://gitlab.example.com' }
+    })
+    expect(res.body).not.toContain(CONN_TOKEN)
+    const stored = await db('nivaro_hub_targets').where({ id: data.id }).first()
+    expect(stored.secret).toBeNull()
+    expect(stored.connection_id).toBe(conn.id)
+    expect(JSON.parse(stored.config)).not.toHaveProperty('api')
+    const listed = (await call('GET', '/targets', asAdmin)).body
+    expect(listed).not.toContain(CONN_TOKEN)
+
+    // A token of its own while it uses the connection: refused.
+    const tok = await call('PATCH', `/targets/${data.id}`, asAdmin, {
+      secret: 'glpat-x-0000000000'
+    })
+    expect(tok.json().code).toBe('BAD_SECRET')
+    // A namespace outside the connection's group: refused.
+    const out = await call('PATCH', `/targets/${data.id}`, asAdmin, {
+      config: { namespace: 'corp' }
+    })
+    expect(out.json().code).toBe('BAD_CONFIG')
+    // Leaving the connection without a token: refused.
+    const leave = await call('PATCH', `/targets/${data.id}`, asAdmin, {
+      connection_id: null,
+      config: { api: 'https://gitlab.example.com' }
+    })
+    expect(leave.json().code).toBe('SECRET_REQUIRED')
+    expect(m.sync).not.toHaveBeenCalled()
+    // With its own token: saved, and the drivers get the change (the connection's token was
+    // the previous one).
+    const own = await call('PATCH', `/targets/${data.id}`, asAdmin, {
+      connection_id: null,
+      config: { api: 'https://gitlab.example.com' },
+      secret: GITLAB_TOKEN
+    })
+    expect(own.statusCode, own.body).toBe(200)
+    expect(own.json().data).toMatchObject({ secret: HUB_MASK, connection_id: null })
+    const after = await db('nivaro_hub_targets').where({ id: data.id }).first()
+    expect(after.connection_id).toBeNull()
+    expect(openSecret(after.secret)).toBe(GITLAB_TOKEN)
+    const [, opts] = m.sync.mock.calls[0] as [
+      number,
+      { previousSecret: string; previousApi: string }
+    ]
+    expect(openSecret(opts.previousSecret)).toBe(CONN_TOKEN)
+    expect(opts.previousApi).toBe('https://gitlab.example.com')
+  })
+
+  it('a connection that is not a GitLab one is refused', async () => {
+    const ps = await import('../../../services/hub/providers/store.js')
+    await db('nivaro_hub_connections').del()
+    const gh = await ps.createConnection({
+      provider: 'github',
+      name: 'GitHub',
+      config: { owner: 'acme' },
+      secrets: { token: 'test-secret-gh-0000' },
+      createdBy: null
+    })
+    const res = await call('POST', '/targets', asAdmin, {
+      kind: 'gitlab',
+      name: 'wrong',
+      connection_id: gh.id,
+      config: targetConfig
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().code).toBe('BAD_TARGET_CONNECTION')
   })
 })
 

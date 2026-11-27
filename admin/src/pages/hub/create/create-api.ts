@@ -56,6 +56,12 @@ export interface HubTarget {
   config: HubTargetConfig
   /** '••••••' when a token is stored (never the token itself), else null. */
   secret: string | null
+  /**
+   * G-A: the `gitlab` provider connection whose address and token the target uses instead of
+   * its own (then `secret` is null and `config.api` is the connection's address).
+   */
+  connection_id?: number | null
+  connection?: { id: number; name: string; problem: string | null } | null
 }
 
 /** Task 11: a GitHub target — repositories made through a GitHub provider connection. */
@@ -774,11 +780,13 @@ export const CREATE_COPY: Record<string, Copy> = {
     title: 'Plain http is only for test names',
     hint: 'Use https, or a wildcard domain that is localhost or ends in .test.'
   },
-  BAD_SECRET: { title: 'The token must be text', hint: 'Type the token again.' },
+  BAD_SECRET: { title: 'The token was not taken', detail: true },
   SECRET_REQUIRED: {
     title: 'Enter the token again',
-    hint: 'The GitLab address or namespace changed, so the saved token is not sent there.'
+    hint: 'The GitLab address, the namespace or where the token comes from changed, so the saved token is not used.'
   },
+  // G-A: a GitLab target that uses a gitlab provider connection.
+  BAD_TARGET_CONNECTION: { title: 'Pick a usable GitLab connection', detail: true },
   TARGET_MISCONFIGURED: { title: 'The target is not set up completely', detail: true },
   IN_USE: { title: 'It is still in use', detail: true },
   PROJECT_NOT_OURS: {

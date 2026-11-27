@@ -69,7 +69,7 @@ export const PROVIDER_ROUTES: HubRoute[] = [
   }),
   r('PATCH', '/connections/:id', 'admin', 'write', 'Edit a provider connection', {
     sensitive: true,
-    notes: `${SECRETS_NOTE} Only the secret keys sent change; a masked value keeps the stored one, an empty value clears it.`,
+    notes: `${SECRETS_NOTE} Only the secret keys sent change; a masked value keeps the stored one, an empty value clears it. A gitlab connection that Hub targets use: a new token or address re-syncs every app created on them (answer target_sync), and a group or address that would leave a target outside is refused (409 CONNECTION_IN_USE).`,
     body: {
       name: s('Display name'),
       config: o('Non-secret fields to change (merged over the stored ones)'),
@@ -78,7 +78,8 @@ export const PROVIDER_ROUTES: HubRoute[] = [
   }),
   r('DELETE', '/connections/:id', 'admin', 'write', 'Delete a provider connection', {
     sensitive: true,
-    notes: 'Refused (409 CONNECTION_IN_USE) while it still has managed resources.'
+    notes:
+      'Refused (409 CONNECTION_IN_USE) while it still has managed resources or a Hub target names it.'
   }),
   r(
     'POST',

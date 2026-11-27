@@ -495,14 +495,22 @@ export const HUB_ROUTES: HubRoute[] = [
       api: s('GitLab API url'),
       group: s(),
       token: secret('GitLab token'),
-      connection_id: n('github: the GitHub connection repositories are made through'),
+      connection_id: n(
+        'github: the GitHub connection repositories are made through. gitlab: a gitlab connection whose address and token the target uses instead of its own (no token or api then); null = its own token'
+      ),
       config: o(
         'github: { template, visibility, deploy_workflow, source_branch, dns_mode automatic|manual|route53, dns_zone_resource_id?, wildcard_domain, edge_address, scheme, port, cert_note }'
       )
     }
   }),
   r('PATCH', '/targets/:id', 'Targets', 'admin', 'write', 'Change a target', {
-    body: { name: s(), token: secret('New token (re-syncs created apps)') },
+    body: {
+      name: s(),
+      token: secret('New token (re-syncs created apps)'),
+      connection_id: n(
+        'gitlab: use this gitlab connection (null = stop, with a token of its own in the same request)'
+      )
+    },
     sensitive: true
   }),
   r('DELETE', '/targets/:id', 'Targets', 'admin', 'write', 'Delete a target', { sensitive: true }),

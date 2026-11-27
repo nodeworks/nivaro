@@ -30,7 +30,14 @@ import {
   provisionDatabase
 } from '../db/databases.js'
 import { generateHexSecret } from '../db/names.js'
-import { createDriver, createPlacement, getDriver, getPlacement, listDrivers } from '../drivers.js'
+import {
+  createDriver,
+  createPlacement,
+  getDriver,
+  getPlacement,
+  listDrivers,
+  repositoryIdentity
+} from '../drivers.js'
 import {
   findPipeline,
   GitlabWriteError,
@@ -955,23 +962,41 @@ export interface TargetSyncResult {
   driver_token?: 'updated'
 }
 
+/** A GitLab address as a driver and a target compare it: no /api/v4, no trailing slash, lower case. */
+const gitlabBase = (api: unknown) => repositoryIdentity(String(api ?? ''), '').replace(/\|$/, '')
+
 /**
  * A rotated target token reaches the driver the creation made for an app (ruling P3-32): its
  * copy is replaced only while it still holds the target's PREVIOUS token (a driver an admin gave
  * another token is left alone). Answers whether it was replaced. Never throws.
+ *
+ * G-A: with `previousApi` (the target's address before the change — a target that uses a GitLab
+ * connection follows the connection's address too) the driver must also still point at that
+ * address; when the address moved, the driver's address moves with the token in the same write,
+ * so a token is never sent to an address it was not entered for.
  */
 async function followRotatedToken(
   driverId: number | undefined,
   previous: string,
-  next: string | null
+  next: string | null,
+  move?: { previousApi: string; nextApi: string }
 ): Promise<boolean> {
   if (!driverId || !next) return false
   try {
     const driver = await getDriver(driverId)
-    if (!driver?.secret || openSecret(driver.secret) !== openSecret(previous)) return false
+    if (driver?.kind !== 'gitlab') return false
+    if (!driver.secret || openSecret(driver.secret) !== openSecret(previous)) return false
+    const moved = !!move && gitlabBase(move.previousApi) !== gitlabBase(move.nextApi)
+    if (move && gitlabBase(driver.config?.api) !== gitlabBase(move.previousApi)) return false
     const n = await db('nivaro_hub_drivers')
       .where({ id: driverId, secret: driver.secret })
-      .update({ secret: next, updated_at: new Date() })
+      .update({
+        secret: next,
+        ...(moved && move
+          ? { config: JSON.stringify({ ...driver.config, api: move.nextApi }) }
+          : {}),
+        updated_at: new Date()
+      })
     return Number(n) > 0
   } catch {
     return false
@@ -1053,6 +1078,12 @@ export async function syncTargetApps(
      * driver copy that still holds it gets the new one.
      */
     previousSecret?: string | null
+    /**
+     * G-A: the target's GitLab address before this update (a target that uses a connection
+     * follows the connection's). With it, a driver copy follows only while it still points
+     * there, and moves to the target's address now in the same write as the token.
+     */
+    previousApi?: string | null
   } = {}
 ): Promise<TargetSyncResult[]> {
   const target = await getTargetRow(targetId)
@@ -1078,7 +1109,14 @@ export async function syncTargetApps(
       return
     }
     const rotated = opts.previousSecret
-      ? await followRotatedToken(made.driver_id, opts.previousSecret, target.secret)
+      ? await followRotatedToken(
+          made.driver_id,
+          opts.previousSecret,
+          target.secret,
+          opts.previousApi
+            ? { previousApi: opts.previousApi, nextApi: target.config.api }
+            : undefined
+        )
       : false
     const mark = rotated ? { driver_token: 'updated' as const } : {}
     const fallback = made.project_id == null ? a.deploy_project?.trim() || null : null
