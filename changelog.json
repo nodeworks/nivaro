@@ -1,10 +1,818 @@
 {
-  "generated_at": "2026-11-25T17:38:38.937Z",
+  "generated_at": "2026-11-27T11:04:10.438Z",
   "releases": [
+    {
+      "version": "0.3.218",
+      "tag": "v0.3.218",
+      "date": "2026-11-27T06:03:48-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitLab targets backed by a gitlab provider connection",
+              "hash": "cda841eeb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "an ACME certificate reaches Traefik on Docker hosts",
+              "hash": "a0f672710"
+            },
+            {
+              "section": "Added",
+              "scope": "hub-agent",
+              "text": "0.2.5 serves a stack's own certificate through Traefik",
+              "hash": "ea372510b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Hub auto-renew for Namecheap domains",
+              "hash": "8598fe5a1"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Expo Android push credentials from a Firebase FCM key",
+              "hash": "0c74dbc53"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "link a Neon branch as a database server",
+              "hash": "e956b1ede"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "admin screens for Wave 2 create parts, DNS modes, scans and routes",
+              "hash": "8a9b3d6eb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "wave 3 providers in create, promote, security and costs",
+              "hash": "87d733994"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Cloudflare Registrar and Namecheap",
+              "hash": "0f5eda96e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "wave 2 providers in create, promote, DNS and security",
+              "hash": "4525ab287"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "AWS SNS, cost feed and Route 53 Domains",
+              "hash": "061a684c2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "AWS SNS, cost feed and Route 53 Domains (work in progress)",
+              "hash": "f96b00a45"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "ACME owner gate, name normalisation and account key generation",
+              "hash": "4e0b15995"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Azure SQL provider",
+              "hash": "1b0976599"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Anthropic and OpenAI cost feeds; Outside spend copy",
+              "hash": "0b8375456"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider cost feed and domain expiry watch",
+              "hash": "472a493f5"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "ACME (Let's Encrypt) provider adapter",
+              "hash": "58fb2720b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Firebase provider adapter",
+              "hash": "5d3f17991"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Mailgun provider adapter",
+              "hash": "4afcd3122"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Jira provider adapter",
+              "hash": "c2e21a807"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Portainer provider adapter",
+              "hash": "c292a3585"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "LiveKit Cloud provider adapter",
+              "hash": "f602d1f0a"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Snyk provider adapter",
+              "hash": "ba1323b9a"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "AWS ECR, SES and Secrets Manager",
+              "hash": "d23cb2480"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "live cost and estimate screens",
+              "hash": "cdeb4519d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Anthropic provider adapter",
+              "hash": "360529e76"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "OpenAI provider adapter",
+              "hash": "3a1f2ec44"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Microsoft Teams provider adapter",
+              "hash": "ff11da2d8"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Stripe provider adapter",
+              "hash": "9b934312f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitHub provider, full coverage",
+              "hash": "ce23b69a3"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Twilio provider adapter",
+              "hash": "56b4dfb20"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "SendGrid provider adapter",
+              "hash": "7075c98a1"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "PagerDuty provider adapter",
+              "hash": "804e19491"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Slack provider adapter",
+              "hash": "72534661c"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitLab provider adapter",
+              "hash": "90d80e20e"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Cloudflare provider adapter",
+              "hash": "fd1a7b06d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Microsoft Entra ID provider adapter",
+              "hash": "13cca2fc1"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Docker Hub provider adapter",
+              "hash": "18fa4ed38"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Redis Cloud provider adapter",
+              "hash": "80396fb13"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Upstash provider adapter",
+              "hash": "8bf445074"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Sentry provider adapter",
+              "hash": "bd8643458"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Neon provider adapter",
+              "hash": "1f02853b0"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "cost estimates for AWS, Vercel, Auth0, Expo and GitHub types",
+              "hash": "a0c17883d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "over-budget alerts also go out through notify routes",
+              "hash": "357d85d9b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "screens for GitHub targets, provider parts, provider components, Route 53 and RDS servers",
+              "hash": "30c954182"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "outputs, bindings and notify routes in the admin",
+              "hash": "9166689d9"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider outputs, bindings and notify routes",
+              "hash": "fb7760f3f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "live costs and estimates for providers and stacks",
+              "hash": "e570abd59"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitHub environment approval, AUTH_FAILED resume, hook reads in GraphQL and SDK",
+              "hash": "ccd253c5f"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "providers in create, promote, DNS, database servers and retire",
+              "hash": "123eb3cc2"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "GitHub, Vercel, Auth0, Expo and AWS answer findExisting at plan time",
+              "hash": "6da6983a9"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider routes in the GraphQL hub namespace, nivaro.hub.* and the MCP Hub tools",
+              "hash": "526ed7a0d"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the audit timeline lists provider resource changes",
+              "hash": "ebdafcea4"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Connections and Shared infrastructure open the change named by ?change=",
+              "hash": "35211add9"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "the resource observe cron heals stopped changes first",
+              "hash": "b4cd6ef86"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider change engine",
+              "hash": "9f659c568"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider connections, resources and change UI",
+              "hash": "5dfde2645"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "aws provider adapter — RDS, S3, Route 53, load balancers, ACM",
+              "hash": "fc1a02ccd"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "aws provider adapter — networking and compute",
+              "hash": "2d0d34b64"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "github provider adapter",
+              "hash": "1f657b5cb"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "auth0 provider adapter",
+              "hash": "9a77f187a"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "expo provider adapter",
+              "hash": "ee20b26ea"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "vercel provider adapter",
+              "hash": "993436e74"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider API routes",
+              "hash": "54e2e0aa0"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider drift and adoption",
+              "hash": "4c056916a"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "provider framework contract (types, registry, fetch, store, migration 582)",
+              "hash": "1a729a068"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Hub pages update live, no reload needed",
+              "hash": "5faa785f7"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "a Docker host says how people reach its edge (scheme + port)",
+              "hash": "8ddf9d92d"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "plain words for the edge certificate refusals",
+              "hash": "d7dc2a497"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub-agent",
+              "text": "a certificate's CN counts beside its SANs",
+              "hash": "f2e3f9647"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a stack certificate answers only for its own stack's names",
+              "hash": "180e7fa4a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "plain words for BINDING_PUSH_FAILED on Create app",
+              "hash": "2d0218b5a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Azure budget owner tag and connection-string validation",
+              "hash": "fc0a3f439"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "any IPv6 range that reaches IPv4 hosts counts as everyone",
+              "hash": "c416cd19d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Jira webhook's JQL cannot escape the project limit",
+              "hash": "d9daca19c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Jira notify markup and webhook project limits",
+              "hash": "97ea3b209"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "LiveKit trunk exposure check parses CIDRs; rooms, egress and trunks are shared scope",
+              "hash": "b67318dc6"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "SES SMTP users carry their row tag from creation",
+              "hash": "99af47342"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "bind AWS secrets and SMTP users to their own resource row",
+              "hash": "c155ff20a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "removing or raising an Anthropic spend limit waits for approval",
+              "hash": "7c9772e5f"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Twilio key in the connection's own account is a main-account key",
+              "hash": "533c077a5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "an unknown price is no change of figure, never a saving",
+              "hash": "a02b39f7d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "a Twilio key's admin gate follows the account it really lives in",
+              "hash": "43ac52fb4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Twilio app keys, notify guards and rotation",
+              "hash": "abd018431"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "GitHub repo files outside docs need an admin; removing branch protection too",
+              "hash": "203e0bcf4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "GitHub protection changes are admin-only unless provably tighter",
+              "hash": "4f008d972"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "finish merge of integration into Twilio branch",
+              "hash": "d94481c64"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "stricter Cloudflare tunnel and Access exposure rules",
+              "hash": "8c5cb846c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Cloudflare Access and tunnel exposure checks",
+              "hash": "43d0f4917"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Auth0 errors are scrubbed before they are clipped",
+              "hash": "2a25542c5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Neon branch delete takes no snapshot and is blocked while it has children",
+              "hash": "5ee5a180a"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "secret outputs bind only to credential app settings; owner route edits",
+              "hash": "df0fb1d6c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "auto-approve counts cost increases only",
+              "hash": "da8ad22a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "bind a GitHub approval to its promotion, environment, run and commit",
+              "hash": "b0df027e2"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the carried grant also judges the ops the adapter planned",
+              "hash": "16061cd9e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "judge the per-resource grant on the request's own ops",
+              "hash": "c695d132c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "app creation no longer adds its connections to the app's allowed list",
+              "hash": "42b32f947"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "change view uses field labels and plain values",
+              "hash": "5ca142299"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "failed creates, bad keys and plan words in the provider engine",
+              "hash": "c41e9279d"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "AWS findExisting typechecks (optional method read once)",
+              "hash": "82bb70ce4"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "resource refs never cross environments",
+              "hash": "34da5651e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "plain words for the engine's gate codes; shared-infra is a known route segment",
+              "hash": "c02ac72e5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "plain words for NOT_IMPLEMENTED in the providers UI",
+              "hash": "4e7cbf7f9"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "github adapter refuses path-escaping names and ids",
+              "hash": "d6f8231bc"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "provider calls refuse whitespace, control characters and backslashes",
+              "hash": "bbf1ab472"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "provider connection host change needs secrets again",
+              "hash": "359c5f577"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "auth0 token cache keyed by domain and audience, custom domains confirmed",
+              "hash": "06fadb8aa"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "provider calls refuse dot segments in the path",
+              "hash": "cffd73274"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "expo build trigger takes its variables from desired, not op.data",
+              "hash": "366e9bf2b"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "provider change reads mask plan secrets fail-closed",
+              "hash": "6ff04adca"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "vercel adapter refuses to adopt or cross projects silently",
+              "hash": "e75db47fd"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "expo adapter refuses silent binds, enforces the pinned account",
+              "hash": "01208bac3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "adopt and Unmanaged check managed resources across connections",
+              "hash": "a944726c7"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "treat a provider connection's sealed secret as a credential column",
+              "hash": "4cf5a6b4e"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the live Hub listener sits inside the realtime provider",
+              "hash": "281a7bbb5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "the top bar's notification panel opens below the bell",
+              "hash": "ebf1090a8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "hub",
+              "text": "Hub pages no longer scroll past their end",
+              "hash": "077e7cfad"
+            },
+            {
+              "section": "Fixed",
+              "scope": "release",
+              "text": "the prod portal check accepts the production merge commit",
+              "hash": "6a52a3a70"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync docs for the Hub third-party providers",
+              "hash": "24079635c"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "wave 3 providers",
+              "hash": "8eeac8185"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "wave 2 providers",
+              "hash": "8f128912d"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "providers",
+              "hash": "7e7e7bbab"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "AWS part 4 tests",
+              "hash": "857a195c0"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "load the engine's run and plan modules before the engine tests",
+              "hash": "564df0985"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "classify the live-cost tables for refresh; drop a doubled guard entry",
+              "hash": "443b48675"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "the engine's resource lock on its Redis path",
+              "hash": "cfcaf1462"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "finish the provider-routes sentinel rename",
+              "hash": "973f718b5"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "provider-types test uses a connection value no adapter text holds",
+              "hash": "d4a798b69"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "control-character check as a char-code loop (biome refuses the regex)",
+              "hash": "529251010"
+            },
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "driver config answer includes edge_scheme and edge_port",
+              "hash": "3076a85a3"
+            }
+          ]
+        }
+      ],
+      "count": 130
+    },
     {
       "version": "0.3.217",
       "tag": "v0.3.217",
-      "date": "2026-11-25T12:38:17-05:00",
+      "date": "2026-11-25T12:38:39-05:00",
       "sections": [
         {
           "label": "Fixed",
