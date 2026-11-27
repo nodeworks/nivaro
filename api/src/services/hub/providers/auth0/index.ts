@@ -16,8 +16,8 @@ import { ProviderError } from '../types.js'
 import {
   audienceProblem,
   CONNECTION_FIELDS,
+  domainAllowed,
   domainOf,
-  domainProblem,
   managementToken,
   mgmt,
   mintToken,
@@ -884,14 +884,14 @@ export const auth0Provider: ProviderAdapter = {
   connection: {
     fields: CONNECTION_FIELDS,
     hosts(config) {
-      return domainProblem(config.domain) ? [] : [domainOf(config)]
+      return domainAllowed(config) ? [] : [domainOf(config)]
     },
     describe(config) {
-      return `Auth0 ${domainOf(config)} · client ${String(config.client_id ?? '')}`
+      return `Auth0 ${domainOf(config)}${domainOf(config).endsWith('.auth0.com') ? '' : ' (custom domain, confirmed)'} · client ${String(config.client_id ?? '')}`
     },
     validate(config, secrets) {
       const problems: string[] = []
-      const d = domainProblem(config.domain)
+      const d = domainAllowed(config)
       if (d) problems.push(d)
       if (!str(config.client_id)) problems.push('Enter the client ID.')
       if ('client_secret' in secrets && !secrets.client_secret)

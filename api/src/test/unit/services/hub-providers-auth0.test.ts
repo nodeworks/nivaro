@@ -161,7 +161,24 @@ describe('auth0 connection', () => {
     const ok = (domain: string) =>
       spec.validate?.({ domain, client_id: 'cm_test_client' }, { client_secret: SECRET })
     expect(ok('acme-test.us.auth0.com')).toEqual([])
-    expect(ok('login.example.com')).toEqual([])
+    expect(ok('acme-test.eu.auth0.com')).toEqual([])
+    expect(ok('acme-test.auth0.com')).toEqual([])
+    // A custom domain needs the admin's confirmation (the secret is sent there).
+    expect(ok('login.example.com')?.length).toBeGreaterThan(0)
+    expect(
+      spec.validate?.(
+        { domain: 'login.example.com', client_id: 'x', custom_domain_confirmed: true },
+        { client_secret: SECRET }
+      )
+    ).toEqual([])
+    expect(spec.hosts({ domain: 'login.example.com' })).toEqual([])
+    expect(spec.hosts({ domain: 'login.example.com', custom_domain_confirmed: true })).toEqual([
+      'login.example.com'
+    ])
+    expect(
+      spec.describe({ domain: 'login.example.com', client_id: 'x', custom_domain_confirmed: true })
+    ).toContain('custom domain')
+    expect(ok('evilauth0.com')?.length).toBeGreaterThan(0)
     for (const bad of [
       'https://acme.auth0.com',
       'acme.auth0.com/path',
@@ -260,6 +277,44 @@ describe('auth0 testConnection', () => {
 })
 
 describe('auth0 management token', () => {
+  it('is never reused after the domain or audience changes', async () => {
+    const hosts: string[] = []
+    const fetchImpl = async (url: string) => {
+      const u = new URL(url)
+      if (u.pathname === '/oauth/token') {
+        hosts.push(`mint:${u.hostname}`)
+        return new Response(
+          JSON.stringify({ access_token: jwt(ALL_SCOPES) + u.hostname, expires_in: 86400 })
+        )
+      }
+      hosts.push(`call:${u.hostname}:${u.pathname}`)
+      return new Response('{}', { status: 404 })
+    }
+    const id = nextId++
+    const make = (config: Record<string, unknown>) =>
+      makeProviderContext({
+        adapter: auth0Provider,
+        connectionId: id,
+        config: { client_id: 'cm_test_client', ...config },
+        secrets: { client_secret: SECRET },
+        fetch: { fetchImpl }
+      })
+    await auth0Provider.observe(make({ domain: 'one.us.auth0.com' }), 'auth0.api', 'a')
+    await auth0Provider.observe(make({ domain: 'one.us.auth0.com' }), 'auth0.api', 'b')
+    expect(hosts.filter((h) => h.startsWith('mint:'))).toEqual(['mint:one.us.auth0.com'])
+    await auth0Provider.observe(make({ domain: 'two.us.auth0.com' }), 'auth0.api', 'a')
+    await auth0Provider.observe(
+      make({ domain: 'two.us.auth0.com', audience: 'https://other.example.com/api/v2/' }),
+      'auth0.api',
+      'a'
+    )
+    expect(hosts.filter((h) => h.startsWith('mint:'))).toEqual([
+      'mint:one.us.auth0.com',
+      'mint:two.us.auth0.com',
+      'mint:two.us.auth0.com'
+    ])
+  })
+
   it('is cached until 60 s before it expires', async () => {
     const { ctx, state } = setup(() => ({ status: 404, body: {} }), { expiresIn: 600 })
     await auth0Provider.observe(ctx, 'auth0.application', 'cl_a')
