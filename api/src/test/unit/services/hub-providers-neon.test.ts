@@ -473,14 +473,12 @@ describe('neon adapter: risk flags per type', () => {
     expect(t.costClass?.(desired('neon.project', {}))).toBe('monthly')
   })
 
-  it('branch reset is data_loss; delete is destructive + data_loss; it can be snapshotted', () => {
+  it('branch reset is data_loss; delete is destructive + data_loss', () => {
     const t = typeOf('neon.branch')
     expect(t.risk(op('update', 'neon.branch', { action: 'reset_from_parent' }), null)).toEqual([
       'data_loss'
     ])
     expect(t.risk(op('delete', 'neon.branch'), null)).toEqual(['destructive', 'data_loss'])
-    expect(t.capabilities.snapshot).toBe(true)
-    expect(typeOf('neon.project').capabilities.snapshot).toBe(false)
   })
 
   it('endpoint size change is downtime; autosuspend alone is not; delete is destructive + downtime', () => {
@@ -834,7 +832,7 @@ describe('neon adapter: apply is idempotent (read-before-write)', () => {
   })
 })
 
-describe('neon adapter: named op and snapshot', () => {
+describe('neon adapter: named op and branch delete', () => {
   const reset = (externalId = `${PRJ}/${STAGE}`): PlannedOp => ({
     kind: 'update',
     type: 'neon.branch',
@@ -848,6 +846,7 @@ describe('neon adapter: named op and snapshot', () => {
   })
   const branchRoutes: Route[] = [
     ...PROJECT_ROUTES,
+    { method: 'GET', path: new RegExp(`^/projects/${PRJ}/branches$`), body: fx('branches') },
     {
       method: 'GET',
       path: new RegExp(`^/projects/${PRJ}/branches/${STAGE}$`),
@@ -908,20 +907,38 @@ describe('neon adapter: named op and snapshot', () => {
     expect(root.calls.some((c) => c.method === 'POST')).toBe(false)
   })
 
-  it('snapshot before a delete is a child branch of the branch; delete maps "has children"; the primary is refused', async () => {
-    const { ctx, calls } = harness([
-      ...branchRoutes,
-      {
-        method: 'POST',
-        path: new RegExp(`^/projects/${PRJ}/branches$`),
-        body: { branch: { id: 'br-test-snap-0004', name: 'x' }, operations: ops() }
-      }
-    ])
-    const snap = await neonAdapter.snapshot!(ctx, 'neon.branch', `${PRJ}/${STAGE}`)
-    expect(snap).toMatchObject({ kind: 'neon_branch', id: `${PRJ}/br-test-snap-0004` })
-    expect(snap.label).toMatch(/^nivaro-hub-snapshot-staging-/)
-    expect(calls.find((c) => c.method === 'POST')!.body.branch).toMatchObject({ parent_id: STAGE })
+  it('there is no snapshot before a branch delete (a child branch would block its own parent)', () => {
+    expect(typeOf('neon.branch').capabilities.snapshot).toBe(false)
+    expect(typeOf('neon.branch').reversible).toBe(false)
+    expect(neonAdapter.snapshot).toBeUndefined()
+  })
 
+  it('plan time: a delete says the data cannot come back and is blocked while the branch has children', async () => {
+    const ctx = noCalls().ctx
+    const seen = (await neonAdapter.observe(
+      harness([
+        ...PROJECT_ROUTES,
+        {
+          method: 'GET',
+          path: new RegExp(`^/projects/${PRJ}/branches/${MAIN}$`),
+          body: { branch: fx('branches').branches[0] }
+        },
+        { method: 'GET', path: new RegExp(`^/projects/${PRJ}/branches$`), body: fx('branches') }
+      ]).ctx,
+      'neon.branch',
+      `${PRJ}/${MAIN}`
+    )) as Observed
+    expect(seen.fields.children).toBe(1)
+    const blocked = neonAdapter.plan(ctx, null, seen)
+    expect(blocked[0].reason).toContain('cannot bring its data back')
+    expect(blocked[0].data?.$blocker).toMatchObject({ code: 'BRANCH_HAS_CHILDREN' })
+    const leaf = neonAdapter.plan(ctx, null, { ...seen, fields: { ...seen.fields, children: 0 } })
+    expect(leaf[0].kind).toBe('delete')
+    expect(leaf[0].data?.$blocker).toBeUndefined()
+    expect(typeOf('neon.branch').risk(leaf[0], null)).toEqual(['destructive', 'data_loss'])
+  })
+
+  it("apply refuses a delete while children exist (BRANCH_HAS_CHILDREN, no DELETE); maps Neon's own refusal; the primary is refused", async () => {
     const del: PlannedOp = {
       kind: 'delete',
       type: 'neon.branch',
@@ -932,7 +949,21 @@ describe('neon adapter: named op and snapshot', () => {
       preconditions: {},
       risk: []
     }
+    const withChild = {
+      branches: [
+        ...fx('branches').branches,
+        { id: 'br-test-dev-0003', name: 'dev', parent_id: STAGE, default: false }
+      ]
+    }
     const kids = harness([
+      { method: 'GET', path: new RegExp(`^/projects/${PRJ}/branches$`), body: withChild },
+      ...branchRoutes
+    ])
+    expect((await neonAdapter.apply(kids.ctx, del, null).catch((e) => e)).code).toBe(
+      'BRANCH_HAS_CHILDREN'
+    )
+    expect(kids.calls.some((c) => c.method === 'DELETE')).toBe(false)
+    const theirs = harness([
       ...branchRoutes,
       {
         method: 'DELETE',
@@ -941,9 +972,18 @@ describe('neon adapter: named op and snapshot', () => {
         body: { message: 'branch has child branches' }
       }
     ])
-    expect((await neonAdapter.apply(kids.ctx, del, null).catch((e) => e)).code).toBe(
+    expect((await neonAdapter.apply(theirs.ctx, del, null).catch((e) => e)).code).toBe(
       'BRANCH_HAS_CHILDREN'
     )
+    const clean = harness([
+      ...branchRoutes,
+      {
+        method: 'DELETE',
+        path: new RegExp(`^/projects/${PRJ}/branches/${STAGE}$`),
+        body: { operations: ops() }
+      }
+    ])
+    expect((await neonAdapter.apply(clean.ctx, del, null)).ok).toBe(true)
     const primary = harness([
       ...PROJECT_ROUTES,
       {

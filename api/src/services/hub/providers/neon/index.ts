@@ -13,8 +13,7 @@ import {
   type ProviderContext,
   ProviderError,
   type ResourceTypeSpec,
-  type RiskFlag,
-  type SnapshotRef
+  type RiskFlag
 } from '../types.js'
 import { neonCall, orgIdOf, seg, waitOperations } from './client.js'
 import { NEON_BUNDLED, neonEstimate } from './pricing.js'
@@ -43,7 +42,6 @@ const T_ROLE = 'neon.role'
 const PAGE = 50
 const CONSOLE = 'https://console.neon.tech/app/projects'
 const RESET_ACTION = 'reset_from_parent'
-const SNAPSHOT_PREFIX = 'nivaro-hub-snapshot-'
 
 // ── Small helpers ──
 
@@ -187,7 +185,7 @@ function projectObserved(p: any): Observed {
   }
 }
 
-function branchObserved(projectId: string, b: any): Observed {
+function branchObserved(projectId: string, b: any, children: number | null = null): Observed {
   return {
     type: T_BRANCH,
     externalId: `${projectId}/${b.id}`,
@@ -197,7 +195,8 @@ function branchObserved(projectId: string, b: any): Observed {
       name: b.name ?? null,
       parent: b.parent_id ?? null,
       protected: !!b.protected,
-      default: !!(b.default ?? b.primary)
+      default: !!(b.default ?? b.primary),
+      children
     },
     tags: {},
     version: b.updated_at ?? null,
@@ -275,7 +274,9 @@ async function readBranchRaw(ctx: ProviderContext, p: string, b: string): Promis
 async function readBranch(ctx: ProviderContext, p: string, b: string): Promise<Observed | null> {
   if (!(await projectInOrg(ctx, p))) return null
   const raw = await readBranchRaw(ctx, p, b)
-  return raw ? branchObserved(p, raw) : null
+  if (!raw) return null
+  const kids = (await listBranchesRaw(ctx, p)).filter((x) => x.parent_id === b).length
+  return branchObserved(p, raw, kids)
 }
 
 async function listBranchesRaw(ctx: ProviderContext, p: string): Promise<any[]> {
@@ -554,10 +555,11 @@ const TYPES: ResourceTypeSpec[] = [
         trigger: true,
         help: 'One-shot: replaces this branch’s data with its parent’s current data. Everything written to this branch since it was made is lost.'
       },
-      { key: 'default', label: 'Primary branch', kind: 'boolean', readOnly: true }
+      { key: 'default', label: 'Primary branch', kind: 'boolean', readOnly: true },
+      { key: 'children', label: 'Child branches', kind: 'number', readOnly: true }
     ],
-    // The snapshot is a child branch of the branch about to be deleted.
-    capabilities: { ...FULL, snapshot: true },
+    // No snapshot: a child branch would block its own parent's delete. A delete is final.
+    capabilities: FULL,
     reversible: false,
     refs: [{ field: 'project', type: T_PROJECT, required: true }],
     risk(op) {
@@ -801,6 +803,21 @@ function planBranch(desired: DesiredResource | null, observed: Observed | null):
     desired,
     observed
   )
+  if (!desired && observed) {
+    const del = ops[0]
+    const kids = Number(observed.fields.children ?? 0)
+    if (del) {
+      del.reason = `Delete ${typedName(labelOf(T_BRANCH), observed.name)}. The Hub cannot bring its data back.`
+      if (kids > 0)
+        del.data = {
+          ...(del.data ?? {}),
+          $blocker: {
+            code: 'BRANCH_HAS_CHILDREN',
+            message: `${observed.name ?? 'The branch'} still has ${kids} child branch${kids === 1 ? '' : 'es'}. Delete them first.`
+          }
+        }
+    }
+  }
   // The reset trigger needs a branch that exists; a create never resets.
   if (desired && observed && desired.fields.resetFromParent === true) {
     ops.push({
@@ -923,6 +940,12 @@ async function applyBranch(
         'PRIMARY_BRANCH',
         'The primary branch cannot be deleted. Delete the project, or make another branch primary in Neon first.'
       )
+    const kids = (await listBranchesRaw(ctx, p)).filter((x) => x.parent_id === b)
+    if (kids.length)
+      throw new ProviderError(
+        'BRANCH_HAS_CHILDREN',
+        `${raw.name ?? 'The branch'} still has ${kids.length} child branch${kids.length === 1 ? '' : 'es'}. Delete them first.`
+      )
     try {
       const r = await neonCall(ctx, 'DELETE', `/projects/${seg(p)}/branches/${seg(b)}`)
       await waitOperations(ctx, p, r.body?.operations)
@@ -934,7 +957,7 @@ async function applyBranch(
       )
         throw new ProviderError(
           'BRANCH_HAS_CHILDREN',
-          'Neon cannot delete a branch that still has child branches (a snapshot taken by the Hub is one). Delete the children first; the snapshot is kept.'
+          'Neon cannot delete a branch that still has child branches Delete the children first.'
         )
       throw err
     }
@@ -1360,9 +1383,11 @@ export const neonAdapter: ProviderAdapter = {
     const items: Observed[] = []
     for (const proj of projects) {
       const p = String(proj.id)
-      if (type === T_BRANCH)
-        for (const b of await listBranchesRaw(ctx, p)) items.push(branchObserved(p, b))
-      else if (type === T_ENDPOINT)
+      if (type === T_BRANCH) {
+        const all = await listBranchesRaw(ctx, p)
+        for (const b of all)
+          items.push(branchObserved(p, b, all.filter((x) => x.parent_id === b.id).length))
+      } else if (type === T_ENDPOINT)
         for (const e of await listEndpointsRaw(ctx, p)) items.push(endpointObserved(p, e))
       else
         for (const b of await listBranchesRaw(ctx, p)) {
@@ -1436,30 +1461,6 @@ export const neonAdapter: ProviderAdapter = {
     if (op.type === T_DATABASE) return applyDatabase(ctx, op, desired)
     if (op.type === T_ROLE) return applyRole(ctx, op, desired)
     throw new ProviderError('UNKNOWN_TYPE', `Neon has no ${op.type}.`)
-  },
-
-  /** Before a branch delete: a child branch holding the data as it is now. */
-  async snapshot(ctx, type, externalId): Promise<SnapshotRef> {
-    if (type !== T_BRANCH)
-      throw new ProviderError('UNKNOWN_TYPE', `Neon cannot snapshot a ${type}.`)
-    const [p, b] = parts(externalId, 2)
-    await mustProject(ctx, p)
-    const raw = await readBranchRaw(ctx, p, b)
-    if (!raw) throw new ProviderError('NOT_FOUND', 'The branch no longer exists.', { status: 404 })
-    const stamp = ctx.now().toISOString().replace(/[-:]/g, '').slice(0, 13)
-    const name = `${SNAPSHOT_PREFIX}${String(raw.name ?? b)}-${stamp}`.slice(0, 256)
-    const r = await neonCall(ctx, 'POST', `/projects/${seg(p)}/branches`, {
-      body: { branch: { name, parent_id: b } }
-    })
-    await waitOperations(ctx, p, r.body?.operations)
-    const id = String(r.body?.branch?.id ?? '')
-    seg(id)
-    return {
-      kind: 'neon_branch',
-      id: `${p}/${id}`,
-      label: name,
-      createdAt: ctx.now().toISOString()
-    }
   },
 
   async readOutputs(ctx, type, externalId) {

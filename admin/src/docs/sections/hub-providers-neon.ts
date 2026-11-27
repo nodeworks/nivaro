@@ -24,7 +24,7 @@ export const hubProvidersNeonDocs: DocSection = {
         [
           '`neon.branch`',
           '`<projectId>/<branchId>`',
-          'One per environment. Name, protected flag and a parent (a branch id or name, at create only; empty = the primary branch). No compute is made with a branch: an endpoint is its own resource. **Reset from parent** is a one-shot trigger that restores the parent’s current data over the branch: `data_loss`, typed confirm. Delete is `destructive` + `data_loss` and takes a snapshot first (a child branch named `nivaro-hub-snapshot-…`). The primary branch cannot be deleted.'
+          'One per environment. Name, protected flag and a parent (a branch id or name, at create only; empty = the primary branch). No compute is made with a branch: an endpoint is its own resource. **Reset from parent** is a one-shot trigger that restores the parent’s current data over the branch: `data_loss`, typed confirm. Delete is `destructive` + `data_loss` (typed confirm) and final: the Hub takes no snapshot (a child branch would block its own parent’s delete) and cannot bring the data back. A delete is blocked with `BRANCH_HAS_CHILDREN` while the branch has child branches, at plan time (the branch shows a child count) and again when applied. The primary branch cannot be deleted.'
         ],
         [
           '`neon.endpoint`',
@@ -50,7 +50,7 @@ export const hubProvidersNeonDocs: DocSection = {
         'A create that finds a project, branch, database, role or endpoint the Hub did not make stops with `ALREADY_EXISTS`: adopt it instead. A resumed run reuses what it made.',
         'Neon runs most writes as operations. The Hub waits a short time for them; a locked project (423) or a slow operation is retryable.',
         'Estimates use a dated price table bundled with the adapter (Neon has no price API) and the plan read from the project’s owner. An organization on a contract plan is "No estimate".',
-        'Needs a live check: the restore call behind "Reset from parent", the endpoint and operation paths, and whether Neon refuses to delete a branch that has the Hub’s snapshot as a child (the Hub then answers `BRANCH_HAS_CHILDREN`). The bundled prices were copied by hand and should be compared with Neon’s pricing page.'
+        'Needs a live check: the restore call behind "Reset from parent", the endpoint and operation paths, The bundled prices were copied by hand and should be compared with Neon’s pricing page.'
       ]
     }
   ]
