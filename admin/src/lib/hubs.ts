@@ -65,7 +65,7 @@ export type HubTabDef = {
 
 /**
  * A named group of a hub's tabs. A hub with groups shows two strips: the groups, then the open
- * group's tabs. Only the Apps hub has them (40 tabs in one strip did not read); every other hub
+ * group's tabs. Only the Apps hub has them (39 tabs in one strip did not read); every other hub
  * keeps its one strip. The standalone Hub look shows the groups in its top bar instead.
  */
 export type HubTabGroup = {
