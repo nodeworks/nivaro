@@ -74,6 +74,8 @@ function checkType(adapter: ProviderAdapter, t: ResourceTypeSpec): void {
     invalid(`Type ${t.key} costClass must be a function.`)
   if (t.estimate !== undefined && typeof t.estimate !== 'function')
     invalid(`Type ${t.key} estimate must be a function.`)
+  if (t.registrar !== undefined && typeof t.registrar !== 'boolean')
+    invalid(`Type ${t.key} registrar must be true or false.`)
 }
 
 function checkAdapter(adapter: ProviderAdapter): void {
@@ -92,7 +94,7 @@ function checkAdapter(adapter: ProviderAdapter): void {
     invalid(`Provider ${adapter.key} needs connection { fields, hosts(), describe() }.`)
   for (const m of ['testConnection', 'observe', 'list', 'plan', 'apply'] as const)
     if (typeof adapter[m] !== 'function') invalid(`Provider ${adapter.key} needs ${m}().`)
-  for (const m of ['snapshot', 'health', 'findExisting', 'usageNow', 'priceApi'] as const)
+  for (const m of ['snapshot', 'health', 'findExisting', 'usageNow', 'priceApi', 'costs'] as const)
     if (adapter[m] !== undefined && typeof adapter[m] !== 'function')
       invalid(`Provider ${adapter.key} ${m} must be a function.`)
   if (!Array.isArray(adapter.types) || adapter.types.length === 0)

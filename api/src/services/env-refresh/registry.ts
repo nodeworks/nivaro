@@ -458,6 +458,9 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_price_cache',
       'nivaro_hub_cost_runrate',
       'nivaro_hub_cost_budgets',
+      // Hub provider cost feed + domain watch (586): billed rows per day, registrar domain checks
+      'nivaro_hub_provider_costs',
+      'nivaro_hub_domain_checks',
       // Hub placement (580): regions + host membership, cost centres, peer Hubs (sealed key)
       'nivaro_hub_regions',
       'nivaro_hub_region_drivers',
