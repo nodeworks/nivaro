@@ -930,24 +930,31 @@ async function createObject(
   ctx: ProviderContext,
   def: Def,
   desired: DesiredResource,
-  opts: { keyTag: string; transferLookup?: boolean }
+  opts: { keyTag: string; replacingId?: string }
 ): Promise<{ raw: any; fresh: boolean }> {
   def.validate(desired)
   if (desired.externalId) {
     const have = await readRaw(ctx, def, desired.externalId)
     if (have) return { raw: have, fresh: false }
   }
-  if (!opts.transferLookup) {
-    const hit = await def.find(ctx, desired)
-    if (hit) {
+  // The lookup-key check always runs. A create that finds someone else's object stops; a replace
+  // may take the key over only from the price it replaces or one carrying this resource's tag.
+  let transfer = false
+  const hit = await def.find(ctx, desired)
+  if (hit) {
+    const ours = !!tagsOf(hit)[RESOURCE_TAG] && tagsOf(hit)[RESOURCE_TAG] === tagOf(desired)
+    if (opts.replacingId) {
+      if (hit.id !== opts.replacingId && !ours)
+        throw alreadyExists(typedName(def.label, def.nameOf(desired.fields)))
+      transfer = true
+    } else {
       // Ours (a resumed run whose id was not recorded) is returned as it is; anyone else's is not touched.
-      if (tagsOf(hit)[RESOURCE_TAG] && tagsOf(hit)[RESOURCE_TAG] === tagOf(desired))
-        return { raw: hit, fresh: false }
+      if (ours) return { raw: hit, fresh: false }
       throw alreadyExists(typedName(def.label, def.nameOf(desired.fields)))
     }
   }
   const form = def.createForm(desired)
-  if (opts.transferLookup && form.lookup_key) form.transfer_lookup_key = true
+  if (transfer && form.lookup_key) form.transfer_lookup_key = true
   const r = await stripeCall(ctx, 'POST', def.base, {
     form,
     idempotencyKey: `nivaro-hub-${opts.keyTag}`.slice(0, 255)
@@ -1005,7 +1012,7 @@ async function applyDef(
       ctx,
       def,
       { ...desired, externalId: null },
-      { keyTag: `replace-${def.type}-${tagOf(desired)}-${id}`, transferLookup: true }
+      { keyTag: `replace-${def.type}-${tagOf(desired)}-${id}`, replacingId: id }
     )
     if (isActive(def, have)) await archiveRaw(ctx, def, id)
     return ok(String(raw.id), observedOf(def, raw), { replaced: id })

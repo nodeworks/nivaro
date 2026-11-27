@@ -380,11 +380,14 @@ import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
+import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
 import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
 } from './sections/hub-providers-redis.js'
 import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
+import { hubProvidersSendgridDocs } from './sections/hub-providers-sendgrid.js'
+import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1261,6 +1264,9 @@ export const navSections: NavGroup[] = [
       hubProvidersNeonDocs,
       hubProvidersEntraDocs,
       hubProvidersStripeDocs,
+      hubProvidersSlackDocs,
+      hubProvidersPagerdutyDocs,
+      hubProvidersSendgridDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]

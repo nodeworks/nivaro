@@ -1,0 +1,6 @@
+{
+  "error": {
+    "message": "Rate limit exceeded: token test-secret-pagerduty-token-0001",
+    "code": 2020
+  }
+}

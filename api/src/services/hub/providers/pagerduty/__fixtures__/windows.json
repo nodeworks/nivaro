@@ -1,0 +1,18 @@
+{
+  "maintenance_windows": [
+    {
+      "id": "PWIN001",
+      "type": "maintenance_window",
+      "description": "Nivaro Hub: Change freeze",
+      "start_time": "2026-12-01T02:00:00-05:00",
+      "end_time": "2026-12-01T04:00:00-05:00",
+      "services": [
+        {
+          "id": "PSVC001",
+          "type": "service_reference"
+        }
+      ]
+    }
+  ],
+  "more": false
+}

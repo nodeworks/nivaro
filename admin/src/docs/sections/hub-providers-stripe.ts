@@ -29,7 +29,7 @@ export const hubProvidersStripeDocs: DocSection = {
         [
           '`stripe.price`',
           '`price_…`',
-          'Product (an adopted or managed `stripe.product`), currency, amount in the smallest unit, billing interval, nickname, lookup key, tax behavior, active. Prices are immutable: changing the product, currency, amount, interval or tax behavior is a replace. A new price is made first (taking over the lookup key), then the old one is archived, so there is no gap. Its Stripe id changes. Nickname, lookup key and active change in place. Never deleted, only archived.'
+          'Product (an adopted or managed `stripe.product`), currency, amount in the smallest unit, billing interval, nickname, lookup key, tax behavior, active. Prices are immutable: changing the product, currency, amount, interval or tax behavior is a replace. A new price is made first (taking over the lookup key), then the old one is archived, so there is no gap. Its Stripe id changes. A replace always checks the lookup key first: it takes the key over only from the price being replaced or one tagged with this resource, and stops with `ALREADY_EXISTS` when any other price (unmanaged, or another app’s) holds it. Nickname, lookup key and active change in place. Never deleted, only archived.'
         ],
         [
           '`stripe.webhook_endpoint`',
@@ -78,7 +78,7 @@ export const hubProvidersStripeDocs: DocSection = {
       type: 'ul',
       items: [
         'All behavior is tested against recorded answers with fake ids and keys; no live or test-mode Stripe account was called.',
-        'The Stripe API has no call that makes a restricted key, so the Hub does not create keys: a person makes the restricted key in the dashboard and adds it to the connection.',
+        'The Hub has no resource type that creates keys (Stripe has no API call for restricted keys, and a ruling keeps it that way): the restricted key stays the connection credential. A person makes it in the dashboard and adds it to the connection.',
         'Adopting an existing endpoint cannot recover its signing secret: rotate it, or paste the secret into the stack secret by hand.',
         'The Stripe API version is pinned to `2024-06-20`; a newer one is not tried.'
       ]

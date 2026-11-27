@@ -1,0 +1,13 @@
+{
+  "schedules": [
+    {
+      "id": "PSCH001",
+      "type": "schedule",
+      "name": "checkout on-call",
+      "description": "",
+      "time_zone": "America/New_York",
+      "html_url": "https://testco.pagerduty.com/schedules/PSCH001"
+    }
+  ],
+  "more": false
+}

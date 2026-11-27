@@ -1306,74 +1306,61 @@ describe('cloudflare adapter: risk flags per type', () => {
     expect(s.risk(op('noop'), null)).toEqual([])
   })
 
-  it('tunnel route: deleting a tunnel is destructive + downtime; a hostname not guarded by a Hub-managed Access application is public exposure', () => {
+  it('tunnel route: every create, update or replace is public exposure, guarded or not, whatever the target', () => {
     expect(spec('cloudflare.tunnel').risk(op('delete'), null)).toEqual(['destructive', 'downtime'])
     const r = spec('cloudflare.tunnel_route')
-    const route = (service: string, guarded = false) =>
+    const route = (service: string, guarded: boolean) =>
       desired(
         'cloudflare.tunnel_route',
         { service, hostname: 'app.example.test' },
         guarded ? { access_application: APP } : {}
       )
-    expect(r.risk(op('create'), route('http://a:1'))).toEqual(['public_exposure'])
-    expect(r.risk(op('update'), route('http://a:1'))).toEqual(['downtime', 'public_exposure'])
-    expect(r.risk(op('create'), route('http://a:1', true))).toEqual([])
-    expect(r.risk(op('update'), route('http://a:1', true))).toEqual(['downtime'])
-    expect(r.risk(op('delete'), null)).toEqual(['downtime', 'destructive'])
-  })
-
-  it('tunnel route: ssh/rdp/tcp, unix sockets and loopback, link-local or private targets are always public exposure, guarded or not', () => {
-    const r = spec('cloudflare.tunnel_route')
     for (const service of [
-      'ssh://host:22',
-      'rdp://host:3389',
-      'tcp://db:5432',
-      'unix:/var/run/docker.sock',
+      'http://app:3055',
+      'https://203.0.113.9',
       'http://localhost:3055',
-      'http://127.0.0.1:3055',
-      'http://[::1]:80',
-      'http://10.1.2.3',
-      'http://172.20.0.5',
-      'http://192.168.1.9',
-      'http://169.254.169.254/latest',
-      'http://[fd00::1]'
+      'ssh://host:22',
+      'unix:/var/run/docker.sock',
+      'http://10.0.0.1'
     ])
       for (const guarded of [false, true])
-        expect(
-          r.risk(
-            op('create'),
-            desired(
-              'cloudflare.tunnel_route',
-              { service },
-              guarded ? { access_application: APP } : {}
-            )
-          ),
-          `${service} guarded=${guarded}`
-        ).toContain('public_exposure')
-    expect(
-      r.risk(
-        op('create'),
-        desired(
-          'cloudflare.tunnel_route',
-          { service: 'http://172.32.0.1' },
-          { access_application: APP }
-        )
-      )
-    ).toEqual([])
-    expect(
-      r.risk(
-        op('create'),
-        desired(
-          'cloudflare.tunnel_route',
-          { service: 'http://app:3055' },
-          { access_application: APP }
-        )
-      )
-    ).toEqual([])
+        for (const kind of ['create', 'update', 'replace'] as const)
+          expect(
+            r.risk(op(kind), route(service, guarded)),
+            `${service} ${guarded} ${kind}`
+          ).toContain('public_exposure')
+    expect(r.risk(op('delete'), null)).toEqual(['downtime', 'destructive'])
+    expect(r.risk(op('noop'), route('http://app:3055', true))).toEqual([])
   })
 
-  it('tunnel route: the guard must really cover the hostname, checked when applying', async () => {
-    const routes: Route[] = [
+  it('tunnel route: the plan says it puts the service on the internet and that an administrator starts it', () => {
+    const { ctx } = harness([])
+    const ops = adapter.plan(
+      ctx,
+      desired(
+        'cloudflare.tunnel_route',
+        { hostname: 'app.example.test', service: 'http://app:3055' },
+        { tunnel: T }
+      ),
+      null
+    )
+    expect(ops[0].reason).toBe(
+      'Puts http://app:3055 on the internet at app.example.test; a Hub administrator starts it.'
+    )
+  })
+
+  it('tunnel route: the guard must really cover the hostname with a restricting policy, checked when applying', async () => {
+    const policiesRoute = (body: unknown): Route => ({
+      method: 'GET',
+      path: new RegExp(`^/accounts/${A}/access/apps/${APP}/policies$`),
+      body
+    })
+    const appRoute = (domain: string): Route => ({
+      method: 'GET',
+      path: new RegExp(`^/accounts/${A}/access/apps/${APP}$`),
+      body: { ...fx('access-app'), result: { ...fx('access-app').result, domain } }
+    })
+    const routes = (domain: string, policies: unknown): Route[] => [
       { method: 'GET', path: new RegExp(`^/accounts/${A}/cfd_tunnel/${T}$`), body: fx('tunnel') },
       {
         method: 'GET',
@@ -1381,11 +1368,8 @@ describe('cloudflare adapter: risk flags per type', () => {
         body: fx('tunnel-config')
       },
       { method: 'PUT', path: /configurations$/, body: {} },
-      {
-        method: 'GET',
-        path: new RegExp(`^/accounts/${A}/access/apps/${APP}$`),
-        body: fx('access-app')
-      }
+      appRoute(domain),
+      policiesRoute(policies)
     ]
     const make = (hostname: string) => ({
       op: {
@@ -1404,15 +1388,37 @@ describe('cloudflare adapter: risk flags per type', () => {
         { tunnel: T, access_application: APP }
       )
     })
-    const bad = harness(routes)
-    const m = make('other.example.test')
-    await expect(adapter.apply(bad.ctx, m.op, m.want)).rejects.toMatchObject({
-      code: 'ACCESS_NOT_COVERING'
-    })
-    expect(bad.writes()).toEqual([])
-    const good = harness(routes)
-    const g = make('admin.example.test')
-    expect((await adapter.apply(good.ctx, g.op, g.want)).ok).toBe(true)
+    const run = async (domain: string, policies: unknown, hostname = 'admin.example.test') => {
+      const h = harness(routes(domain, policies))
+      const m = make(hostname)
+      return { h, result: adapter.apply(h.ctx, m.op, m.want) }
+    }
+    // Another hostname, a path on the same hostname (even "/x") and a wildcard that does not match.
+    for (const domain of [
+      'other.example.test',
+      'admin.example.test/x',
+      'admin.example.test/api/',
+      '*.other.test'
+    ]) {
+      const { h, result } = await run(domain, fx('access-policies'))
+      await expect(result, domain).rejects.toMatchObject({ code: 'ACCESS_NOT_COVERING' })
+      expect(h.writes()).toEqual([])
+    }
+    // The same host, with or without a trailing slash, and a matching wildcard cover it.
+    for (const domain of ['admin.example.test', 'admin.example.test/', '*.example.test']) {
+      const { result } = await run(domain, fx('access-policies'))
+      expect((await result).ok, domain).toBe(true)
+    }
+    // No policy at all, or a policy that lets everyone in, is no guard.
+    const open = {
+      ...fx('access-policies'),
+      result: [{ ...fx('access-policy').result, include: [{ everyone: {} }] }]
+    }
+    for (const policies of [{ success: true, result: [] }, open]) {
+      const { h, result } = await run('admin.example.test', policies)
+      await expect(result).rejects.toMatchObject({ code: 'ACCESS_NOT_RESTRICTING' })
+      expect(h.writes()).toEqual([])
+    }
   })
 
   it('access: a policy that lets everyone in is public exposure; require narrows it', () => {
@@ -1509,6 +1515,68 @@ describe('cloudflare adapter: risk flags per type', () => {
         desired('cloudflare.access_policy', { decision: 'deny', exclude: [other] })
       )
     ).toEqual(['destructive'])
+  })
+
+  it('access: short IP prefixes (IPv4 under /8, IPv6 under /16), unparseable ranges and unions of ranges are everyone', () => {
+    const s = spec('cloudflare.access_policy')
+    const flagged = (include: unknown[], decision = 'allow') =>
+      s
+        .risk(op('create'), desired('cloudflare.access_policy', { decision, include }))
+        .includes('public_exposure')
+    const ip = (value: string) => ({ kind: 'ip', value })
+    expect(flagged([ip('0.0.0.0/4')])).toBe(true)
+    expect(flagged([ip('64.0.0.0/2')])).toBe(true)
+    expect(flagged([ip('10.0.0.0/7')])).toBe(true)
+    expect(flagged([ip('10.0.0.0/8')])).toBe(false)
+    expect(flagged([ip('203.0.113.7')])).toBe(false)
+    expect(flagged([ip('2000::/12')])).toBe(true)
+    expect(flagged([ip('2001:db8::/32')])).toBe(false)
+    expect(flagged([ip('not-an-ip')])).toBe(true)
+    expect(flagged([ip('10.0.0.0/33')])).toBe(true)
+    // Two /1 ranges together are the whole IPv4 space; so are four /2 and the IPv6 halves.
+    expect(flagged([ip('0.0.0.0/1'), ip('128.0.0.0/1')])).toBe(true)
+    expect(flagged([ip('0.0.0.0/2'), ip('64.0.0.0/2'), ip('128.0.0.0/2'), ip('192.0.0.0/2')])).toBe(
+      true
+    )
+    expect(flagged([ip('::/1'), ip('8000::/1')])).toBe(true)
+    expect(flagged([ip('10.0.0.0/8'), ip('128.0.0.0/8')])).toBe(false)
+    expect(flagged([ip('10.0.0.0/8'), ip('203.0.113.0/24')])).toBe(false)
+    // Several /8s covering the space also add up (256 of them).
+    const all = Array.from({ length: 256 }, (_, i) => ip(`${i}.0.0.0/8`))
+    expect(flagged(all)).toBe(true)
+    expect(flagged(all.slice(1))).toBe(false)
+    // Narrowed by a restricting require rule, even the whole space is not open.
+    expect(
+      s
+        .risk(
+          op('create'),
+          desired('cloudflare.access_policy', {
+            decision: 'allow',
+            include: [ip('0.0.0.0/1'), ip('128.0.0.0/1')],
+            require: [{ kind: 'email_domain', value: 'example.test' }]
+          })
+        )
+        .includes('public_exposure')
+    ).toBe(false)
+  })
+
+  it('access: non_identity (and bypass) with everyone is flagged like allow; only deny is not', () => {
+    const s = spec('cloudflare.access_policy')
+    for (const decision of ['allow', 'bypass', 'non_identity'])
+      expect(
+        s.risk(
+          op('create'),
+          desired('cloudflare.access_policy', { decision, include: [{ kind: 'everyone' }] })
+        ),
+        decision
+      ).toEqual(['public_exposure'])
+    expect(
+      s.risk(
+        op('create'),
+        desired('cloudflare.access_policy', { decision: 'deny', include: [{ kind: 'everyone' }] })
+      )
+    ).toEqual([])
+    expect(letsEveryoneIn({ decision: 'non_identity', include: [{ kind: 'everyone' }] })).toBe(true)
   })
 
   it('bucket delete is destructive + data_loss; worker routes move traffic; secret delete is destructive', () => {

@@ -11,29 +11,35 @@ import {
   type PlannedOp,
   type ProviderAdapter,
   type ProviderContext,
-  ProviderError
+  ProviderError,
+  ROTATE_OUTPUTS_FIELD
 } from '../types.js'
 import {
+  assertInAccount,
   authMethod,
+  checkNumericId,
   checkOwner,
   checkWorkflowFile,
   gh,
+  inAccount,
   installationPermissions,
   ownerOf,
   seg
 } from './api.js'
+import { handlerFor } from './handlers.js'
 import { GITHUB_BUNDLED } from './pricing.js'
 import {
   approvePendingDeployment,
   archiveRepository,
   dispatchWorkflow,
   type Handler,
-  handlerFor,
   same,
   splitChild,
   splitRepo
 } from './resources.js'
+import { registrationToken } from './resources-extra.js'
 import { connection, TYPES, typeSpec } from './specs.js'
+import { isSensitivePath } from './specs-extra.js'
 
 /**
  * GitHub (+ GitHub Actions) provider. Auth: a GitHub App (JWT → installation token, cached in
@@ -56,14 +62,20 @@ function specFieldKinds(type: string): Map<string, string> {
   return new Map((t?.fields ?? []).map((f) => [f.key, f.kind]))
 }
 
+/** One-shot trigger fields (dispatch, approve, register_runner ...): never a stored value. */
+function triggerFields(type: string): Set<string> {
+  const t = TYPES.find((x) => x.key === type)
+  return new Set((t?.fields ?? []).filter((f) => f.trigger).map((f) => f.key))
+}
+
 function createChanges(type: string, desired: DesiredResource): FieldChange[] {
   const kinds = specFieldKinds(type)
+  const triggers = triggerFields(type)
   const out: FieldChange[] = []
   for (const [field, value] of Object.entries(desired.fields)) {
     if (value === undefined || value === null || value === '') continue
     const kind = kinds.get(field)
-    if (kind === 'ref' || field === 'destroy' || field === 'dispatch' || field === 'approve')
-      continue
+    if (kind === 'ref' || field === 'destroy' || triggers.has(field)) continue
     if (kind === 'secret') out.push({ field, secret: true })
     else out.push({ field, to: value })
   }
@@ -112,7 +124,24 @@ function noop(type: string, observed: Observed | null, reason: string): PlannedO
   }
 }
 
+const SENSITIVE_NOTE =
+  ' This file runs in the repository’s workflows or decides who reviews, so only an administrator may apply it.'
+
 export function planGithub(
+  ctx: ProviderContext | null,
+  desired: DesiredResource | null,
+  observed: Observed | null
+): PlannedOp[] {
+  const ops = planInner(ctx, desired, observed)
+  const path = desired?.fields.path
+  if (desired?.type !== 'github.repo_file' || typeof path !== 'string' || !isSensitivePath(path))
+    return ops
+  return ops.map((op) =>
+    op.kind === 'noop' || op.kind === 'delete' ? op : { ...op, reason: op.reason + SENSITIVE_NOTE }
+  )
+}
+
+function planInner(
   _ctx: ProviderContext | null,
   desired: DesiredResource | null,
   observed: Observed | null
@@ -243,6 +272,29 @@ export function planGithub(
     })
   }
 
+  // Task 19: a new runner registration token (once-only output); either field asks for it.
+  if (
+    type === 'github.runner_group' &&
+    (desired.fields.register_runner === true || desired.fields[ROTATE_OUTPUTS_FIELD] === true)
+  ) {
+    ops.push({
+      ...base,
+      kind: 'update',
+      externalId: observed.externalId,
+      action: 'register_runner',
+      reason: `Make a new runner registration token for ${named(observed.externalId)}. GitHub shows it once; the Hub keeps it sealed.`,
+      changes: [
+        {
+          field: desired.fields.register_runner === true ? 'register_runner' : ROTATE_OUTPUTS_FIELD,
+          from: false,
+          to: true
+        }
+      ],
+      preconditions: { status: observed.status ?? null },
+      risk: []
+    })
+  }
+
   // Task 11c: environment approval — approve ONE waiting run (id + commit named by the
   // promotion that planned it; bound in the plan hash through op.data).
   if (type === 'github.workflow' && desired.fields.approve === true) {
@@ -314,6 +366,20 @@ function wrap(
   return new ProviderError('PROVIDER_ERROR', msg.slice(0, 300))
 }
 
+/** Every id an op touches names the connection's own account (ids, refs and the resumed id). */
+function guardAccount(
+  ctx: ProviderContext,
+  ext: string | null,
+  desired: DesiredResource | null
+): void {
+  if (ext) assertInAccount(ctx, ext)
+  if (!desired) return
+  if (desired.externalId) assertInAccount(ctx, desired.externalId)
+  for (const v of Object.values(desired.refs)) {
+    for (const id of Array.isArray(v) ? v : [v]) if (id) assertInAccount(ctx, id)
+  }
+}
+
 async function applyOp(
   ctx: ProviderContext,
   op: PlannedOp,
@@ -322,6 +388,28 @@ async function applyOp(
   if (op.kind === 'noop') return { ok: true, externalId: op.externalId, observed: null }
   const h = handlerFor(op.type)
   const ext = op.externalId
+  guardAccount(ctx, ext, desired)
+
+  if (op.action === 'register_runner') {
+    if (!ext) throw new ProviderError('BAD_ID', 'The runner group is not known.')
+    if (!desired || desired.externalId !== ext)
+      throw new ProviderError(
+        'TARGET_MISMATCH',
+        'The runner group this token is for is not the one the resource points at.'
+      )
+    checkNumericId(ext.slice(ext.indexOf('#') + 1))
+    const found = await h.observe(ctx, ext)
+    if (!found) throw new ProviderError('NOT_FOUND', `${ext} no longer exists at GitHub.`)
+    const made = await registrationToken(ctx)
+    // The token goes out only as an output: the engine seals it; it is in no answer or error.
+    return {
+      ok: true,
+      externalId: ext,
+      observed: found,
+      answer: { tokenMade: true, expiresAt: made.expiresAt },
+      outputs: { registration_token: made.token }
+    }
+  }
 
   if (op.action === 'dispatch') {
     if (!ext) throw new ProviderError('BAD_ID', 'The workflow to run is not known.')
@@ -454,6 +542,30 @@ const NEEDS: Need[] = [
   { type: 'github.actions_secret', perm: 'secrets', scope: ['repo'] },
   { type: 'github.actions_variable', perm: 'variables', scope: ['repo'] },
   { type: 'github.workflow', perm: 'actions', scope: ['repo'] },
+  { type: 'github.team', perm: 'members', scope: ['admin:org', 'write:org'] },
+  { type: 'github.team_repo_access', perm: 'members', scope: ['admin:org', 'write:org'] },
+  { type: 'github.ruleset', perm: 'administration', scope: ['repo'] },
+  { type: 'github.environment_secret', perm: 'secrets', scope: ['repo'] },
+  { type: 'github.environment_variable', perm: 'variables', scope: ['repo'] },
+  { type: 'github.environment_protection', perm: 'administration', scope: ['repo'] },
+  {
+    type: 'github.org_secret',
+    perm: 'organization_secrets',
+    scope: ['admin:org', 'write:org']
+  },
+  {
+    type: 'github.org_variable',
+    perm: 'organization_variables',
+    scope: ['admin:org', 'write:org']
+  },
+  { type: 'github.dependabot_secret', perm: 'dependabot_secrets', scope: ['repo'] },
+  {
+    type: 'github.runner_group',
+    perm: 'organization_self_hosted_runners',
+    scope: ['admin:org', 'write:org']
+  },
+  { type: 'github.pages', perm: 'pages', scope: ['repo'] },
+  { type: 'github.repo_file', perm: 'contents', scope: ['repo'] },
   { type: 'github.deploy_key', perm: 'administration', scope: ['repo'] },
   {
     type: 'github.webhook',
@@ -523,6 +635,7 @@ function done(identity: string, permissions: ConnectionTest['permissions']): Con
 
 async function health(ctx: ProviderContext, type: string, ext: string): Promise<HealthAnswer> {
   const checkedAt = ctx.now().toISOString()
+  assertInAccount(ctx, ext)
   const found = await handlerFor(type).observe(ctx, ext)
   if (!found) return { status: 'down', message: 'Not found at GitHub.', checkedAt }
   if (type === 'github.repository' && found.fields.archived === true)
@@ -559,6 +672,8 @@ export const githubAdapter: ProviderAdapter = {
   testConnection,
   async observe(ctx, type, externalId): Promise<Observed | null> {
     try {
+      // An id of another account is not visible through this connection.
+      if (!inAccount(ctx, externalId)) return null
       return await handlerFor(type).observe(ctx, externalId)
     } catch (err) {
       throw wrap(ctx, err)
@@ -567,6 +682,7 @@ export const githubAdapter: ProviderAdapter = {
   /** Plan time: what a create would collide with (repository by name, environment by name …). */
   async findExisting(ctx, type, desired): Promise<Observed | null> {
     try {
+      guardAccount(ctx, null, desired)
       const h = handlerFor(type)
       const ext = await h.existing(ctx, desired)
       return ext ? await h.observe(ctx, ext) : null

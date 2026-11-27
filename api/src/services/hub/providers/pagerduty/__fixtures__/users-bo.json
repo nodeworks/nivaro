@@ -1,0 +1,12 @@
+{
+  "users": [
+    {
+      "id": "PUSER02",
+      "type": "user",
+      "name": "Bo Test",
+      "email": "bo@example.test",
+      "html_url": "https://testco.pagerduty.com/users/PUSER02"
+    }
+  ],
+  "more": false
+}

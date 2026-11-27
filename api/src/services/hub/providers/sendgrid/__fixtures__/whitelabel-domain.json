@@ -1,0 +1,33 @@
+{
+  "id": 2001,
+  "user_id": 900001,
+  "subdomain": "em",
+  "domain": "example.com",
+  "username": "fake-user",
+  "ips": [],
+  "custom_spf": false,
+  "default": false,
+  "legacy": false,
+  "automatic_security": true,
+  "valid": false,
+  "dns": {
+    "mail_cname": {
+      "valid": false,
+      "type": "cname",
+      "host": "em1234.example.com",
+      "data": "u900001.wl001.sendgrid.net"
+    },
+    "dkim1": {
+      "valid": false,
+      "type": "cname",
+      "host": "s1._domainkey.example.com",
+      "data": "s1.domainkey.u900001.wl001.sendgrid.net"
+    },
+    "dkim2": {
+      "valid": false,
+      "type": "cname",
+      "host": "s2._domainkey.example.com",
+      "data": "s2.domainkey.u900001.wl001.sendgrid.net"
+    }
+  }
+}

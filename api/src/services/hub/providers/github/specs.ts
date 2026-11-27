@@ -8,6 +8,8 @@ import type {
   RiskFlag
 } from '../types.js'
 import { githubRepositoryEstimate, githubWorkflowEstimate } from './pricing.js'
+import { EXTRA_TYPES } from './specs-extra.js'
+import { branchProtectionChangeIsTightening } from './weakening.js'
 
 /**
  * The GitHub adapter's connection form and resource type specs. External ids:
@@ -125,7 +127,7 @@ function repositoryRisk(op: PlannedOp, desired: DesiredResource | null): RiskFla
 
 const secretNamePattern = '^[A-Za-z_][A-Za-z0-9_]*$'
 
-export const TYPES: ResourceTypeSpec[] = [
+const BASE_TYPES: ResourceTypeSpec[] = [
   {
     key: 'github.repository',
     label: 'GitHub repository',
@@ -219,7 +221,13 @@ export const TYPES: ResourceTypeSpec[] = [
     capabilities: caps(),
     reversible: true,
     refs: repoRefs,
-    risk: (op) => (op.kind === 'delete' ? ['destructive'] : [])
+    risk(op) {
+      // Removing protection is the widest weakening there is.
+      if (op.kind === 'delete') return ['destructive', 'public_exposure']
+      // A change that is not provably a tightening needs a Hub administrator.
+      if (op.kind !== 'update' && op.kind !== 'replace') return []
+      return op.changes.every(branchProtectionChangeIsTightening) ? [] : ['public_exposure']
+    }
   },
   {
     key: 'github.environment',
@@ -459,6 +467,9 @@ export const TYPES: ResourceTypeSpec[] = [
     }
   }
 ]
+
+/** The Task 5 types, then the full-coverage ones (specs-extra.ts). */
+export const TYPES: ResourceTypeSpec[] = [...BASE_TYPES, ...EXTRA_TYPES]
 
 export function typeSpec(key: string): ResourceTypeSpec | undefined {
   return TYPES.find((t) => t.key === key)

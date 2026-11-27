@@ -510,6 +510,7 @@ describe('stripe adapter: apply', () => {
     const newPrice = { ...fx('price'), id: 'price_TESTprice0002', unit_amount: 2000 }
     const { ctx, calls } = harness([
       { method: 'GET', path: /\/prices\/price_TESTprice0001$/, body: fx('price') },
+      { method: 'GET', path: /\/prices$/, body: { data: [fx('price')] } },
       { method: 'POST', path: /\/prices$/, body: newPrice },
       {
         method: 'POST',
@@ -544,6 +545,78 @@ describe('stripe adapter: apply', () => {
     expect(posts[0].form.get('recurring[interval]')).toBe('month')
     expect(posts[0].form.get('transfer_lookup_key')).toBe('true')
     expect(posts[1].form.get('active')).toBe('false')
+  })
+
+  describe('price replace and the lookup key', () => {
+    const want = () =>
+      desired(
+        PRICE_T,
+        {
+          currency: 'usd',
+          unit_amount: 2000,
+          interval: 'month',
+          interval_count: 1,
+          nickname: 'Monthly',
+          lookup_key: 'demo_monthly',
+          active: true
+        },
+        PRICE,
+        { product: PROD }
+      )
+    const run = (holder: any) => {
+      const { ctx, calls } = harness([
+        { method: 'GET', path: /\/prices\/price_TESTprice0001$/, body: fx('price') },
+        { method: 'GET', path: /\/prices$/, body: { data: holder ? [holder] : [] } },
+        { method: 'POST', path: /\/prices$/, body: { ...fx('price'), id: 'price_TESTprice0002' } },
+        {
+          method: 'POST',
+          path: /\/prices\/price_TESTprice0001$/,
+          body: { ...fx('price'), active: false }
+        }
+      ])
+      return {
+        calls,
+        go: () =>
+          stripeAdapter.apply(ctx, op(PRICE_T, { kind: 'replace', externalId: PRICE }), want())
+      }
+    }
+
+    it('the price being replaced hands its lookup key over', async () => {
+      const { go, calls } = run(fx('price'))
+      await go()
+      const post = calls.find((c) => c.method === 'POST' && c.path === '/v1/prices')
+      expect(post?.form.get('transfer_lookup_key')).toBe('true')
+    })
+
+    it('a price carrying this resource’s tag may hand it over too', async () => {
+      const { go, calls } = run({
+        ...fx('price'),
+        id: 'price_TESTprice0003',
+        metadata: { 'nivaro-hub:resource': '7' }
+      })
+      await go()
+      expect(
+        calls
+          .find((c) => c.path === '/v1/prices' && c.method === 'POST')
+          ?.form.get('transfer_lookup_key')
+      ).toBe('true')
+    })
+
+    it('a key held by a price of another app is refused, nothing written', async () => {
+      const { go, calls } = run({
+        ...fx('price'),
+        id: 'price_FOREIGN0001',
+        metadata: { 'nivaro-hub:resource': '99' }
+      })
+      await expect(go()).rejects.toMatchObject({ code: 'ALREADY_EXISTS' })
+      expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+    })
+
+    it('a key held by an untagged price is refused, nothing written', async () => {
+      const { go, calls } = run({ ...fx('price'), id: 'price_UNTAGGED0001', metadata: {} })
+      await expect(go()).rejects.toMatchObject({ code: 'ALREADY_EXISTS' })
+      expect(calls.filter((c) => c.method !== 'GET')).toEqual([])
+    })
   })
 
   it('a price needs its product resolved; bad input is refused before any call', async () => {
