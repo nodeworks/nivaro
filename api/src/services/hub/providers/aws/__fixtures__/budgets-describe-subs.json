@@ -1,1 +1,6 @@
-{"Subscribers": [{"SubscriptionType": "SNS", "Address": "arn:aws:sns:us-east-1:123456789012:shop-alerts"}, {"SubscriptionType": "EMAIL", "Address": "fin@example.com"}]}
+{
+  "Subscribers": [
+    { "SubscriptionType": "SNS", "Address": "arn:aws:sns:us-east-1:123456789012:shop-alerts" },
+    { "SubscriptionType": "EMAIL", "Address": "fin@example.com" }
+  ]
+}

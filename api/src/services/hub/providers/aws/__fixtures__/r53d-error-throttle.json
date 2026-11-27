@@ -1,1 +1,1 @@
-{"__type": "ThrottlingException", "message": "Rate exceeded"}
+{ "__type": "ThrottlingException", "message": "Rate exceeded" }

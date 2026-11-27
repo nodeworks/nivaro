@@ -1,1 +1,6 @@
-{"ResourceTags": [{"Key": "nivaro-hub:managed", "Value": "true"}, {"Key": "nivaro-hub:resource", "Value": "41"}]}
+{
+  "ResourceTags": [
+    { "Key": "nivaro-hub:managed", "Value": "true" },
+    { "Key": "nivaro-hub:resource", "Value": "41" }
+  ]
+}

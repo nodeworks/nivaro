@@ -14,6 +14,7 @@ const { awsProvider } = await import('../../../services/hub/providers/aws/adapte
 const { domainExpiresAt } = await import('../../../services/hub/providers/aws/domains.js')
 const { recordTypeOf } = await import('../../../services/hub/providers/aws/cost-explorer.js')
 const { desired, harness, OTHER_PROBES_OK, observedOf } = await import('./hub-aws-harness.js')
+
 import type { HubResourceRow } from '../../../services/hub/providers/store.js'
 import type { PlannedOp } from '../../../services/hub/providers/types.js'
 
@@ -189,7 +190,11 @@ describe('aws.sns_topic', () => {
   it('a topic the Hub did not make is ALREADY_EXISTS; nothing is created or changed', async () => {
     const h = harness(reads({ 'sns:ListTagsForResource': 'sns-list-tags-other.xml' }) as never)
     await expect(
-      awsProvider.apply(h.ctx, op('create', 'aws.sns_topic'), desired('aws.sns_topic', { name: 'shop-alerts' }))
+      awsProvider.apply(
+        h.ctx,
+        op('create', 'aws.sns_topic'),
+        desired('aws.sns_topic', { name: 'shop-alerts' })
+      )
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS', retryable: false })
     expect(h.of('CreateTopic')).toHaveLength(0)
     expect(h.of('SetTopicAttributes')).toHaveLength(0)
@@ -355,11 +360,7 @@ describe('aws.sns_subscription', () => {
       externalId: SUB,
       fields: { region: 'us-east-1', topic: TOPIC, protocol: 'email', endpoint: 'ops@example.com' }
     })
-    const p = awsProvider.plan(
-      ctx(),
-      want({ protocol: 'email', endpoint: 'other@example.com' }),
-      o
-    )
+    const p = awsProvider.plan(ctx(), want({ protocol: 'email', endpoint: 'other@example.com' }), o)
     expect(p[0].kind).toBe('replace')
     expect(p[0].risk).toContain('destructive')
     expect(type('aws.sns_subscription')?.capabilities.update).toBe(false)
@@ -527,9 +528,9 @@ describe('aws.sns_sms_settings', () => {
 
     it('refuses a number outside the allowed countries before any call, and an empty list', async () => {
       const h = harness({ 'sns:Publish': 'sns-publish.xml' } as never)
-      await expect(
-        awsProvider.notify?.(h.ctx, r(['+442071838750']), msg())
-      ).rejects.toMatchObject({ code: 'COUNTRY_NOT_ALLOWED' })
+      await expect(awsProvider.notify?.(h.ctx, r(['+442071838750']), msg())).rejects.toMatchObject({
+        code: 'COUNTRY_NOT_ALLOWED'
+      })
       await expect(awsProvider.notify?.(h.ctx, r([]), msg())).rejects.toMatchObject({
         code: 'NO_RECIPIENTS'
       })
@@ -538,6 +539,13 @@ describe('aws.sns_sms_settings', () => {
 
     it('at most 20 texts an hour per resource, not retryable', async () => {
       const h = harness({ 'sns:Publish': 'sns-publish.xml' } as never)
+      const r = (n: string[]) =>
+        row({
+          id: 88,
+          type: 'aws.sns_sms_settings',
+          external_id: 'sms:us-east-1',
+          desired: { notify_numbers: n }
+        })
       const ten = Array.from({ length: 10 }, (_, i) => `+1202555${String(1000 + i)}`)
       await awsProvider.notify?.(h.ctx, r(ten), msg())
       await awsProvider.notify?.(h.ctx, r(ten), msg())
@@ -552,9 +560,9 @@ describe('aws.sns_sms_settings', () => {
       const h = harness({
         'sns:Publish': { status: 429, file: 'sns-error-throttle.xml' }
       } as never)
-      await expect(
-        awsProvider.notify?.(h.ctx, r(['+12025550142']), msg())
-      ).rejects.toMatchObject({ retryable: true })
+      await expect(awsProvider.notify?.(h.ctx, r(['+12025550142']), msg())).rejects.toMatchObject({
+        retryable: true
+      })
     })
   })
 })
@@ -645,7 +653,11 @@ describe('aws.sns_sms_user (the IAM exception)', () => {
         'iam:DeleteUser': 'iam-ok.xml'
       }) as never
     )
-    const d = desired('aws.sns_sms_user', { ...want, rotate_outputs: true }, { externalId: 'shop-sms' })
+    const d = desired(
+      'aws.sns_sms_user',
+      { ...want, rotate_outputs: true },
+      { externalId: 'shop-sms' }
+    )
     await expect(
       awsProvider.apply(
         h.ctx,
@@ -666,6 +678,7 @@ describe('aws.sns_sms_user (the IAM exception)', () => {
   it('rotate deletes the older of two keys and answers only the new outputs', async () => {
     const h = harness(
       createHandlers({
+        'iam:GetUser': 'iam-get-user-sns.xml',
         'iam:ListAccessKeys': 'iam-list-keys-two.xml',
         'iam:DeleteAccessKey': 'iam-ok.xml'
       }) as never
@@ -763,13 +776,60 @@ describe('Cost Explorer costs()', () => {
     const h = harness({ 'ce:GetCostAndUsage': 'ce-cost-usage.json' } as never)
     const rows = await costs(h)
     expect(rows).toEqual([
-      { date: '2026-11-25', amountCents: 1235, currency: 'USD', appTag: 'shop', service: 'AWS', recordType: 'usage' },
-      { date: '2026-11-25', amountCents: 310, currency: 'USD', service: 'AWS', recordType: 'usage' },
-      { date: '2026-11-25', amountCents: 102, currency: 'USD', appTag: 'shop', service: 'Tax', recordType: 'tax' },
-      { date: '2026-11-25', amountCents: -250, currency: 'USD', appTag: 'shop', service: 'Credit', recordType: 'credit' },
-      { date: '2026-11-25', amountCents: -40, currency: 'USD', service: 'Refund', recordType: 'refund' },
-      { date: '2026-11-25', amountCents: -75, currency: 'USD', appTag: 'shop', service: 'SavingsPlanNegation', recordType: 'discount' },
-      { date: '2026-11-25', amountCents: 50, currency: 'USD', appTag: 'shop', service: 'AWS', recordType: 'usage' }
+      {
+        date: '2026-11-25',
+        amountCents: 1235,
+        currency: 'USD',
+        appTag: 'shop',
+        service: 'AWS',
+        recordType: 'usage'
+      },
+      {
+        date: '2026-11-25',
+        amountCents: 310,
+        currency: 'USD',
+        service: 'AWS',
+        recordType: 'usage'
+      },
+      {
+        date: '2026-11-25',
+        amountCents: 102,
+        currency: 'USD',
+        appTag: 'shop',
+        service: 'Tax',
+        recordType: 'tax'
+      },
+      {
+        date: '2026-11-25',
+        amountCents: -250,
+        currency: 'USD',
+        appTag: 'shop',
+        service: 'Credit',
+        recordType: 'credit'
+      },
+      {
+        date: '2026-11-25',
+        amountCents: -40,
+        currency: 'USD',
+        service: 'Refund',
+        recordType: 'refund'
+      },
+      {
+        date: '2026-11-25',
+        amountCents: -75,
+        currency: 'USD',
+        appTag: 'shop',
+        service: 'SavingsPlanNegation',
+        recordType: 'discount'
+      },
+      {
+        date: '2026-11-25',
+        amountCents: 50,
+        currency: 'USD',
+        appTag: 'shop',
+        service: 'AWS',
+        recordType: 'usage'
+      }
     ])
     expect(recordTypeOf('DiscountedUsage')).toBe('usage')
     expect(recordTypeOf('EdpDiscount')).toBe('discount')
@@ -827,7 +887,11 @@ describe('aws.cost_allocation_tag', () => {
 
   it('create activates an inactive tag; an invisible tag says so; an active one is ALREADY_EXISTS', async () => {
     const h = harness({
-      'ce:ListCostAllocationTags': ['ce-list-tags-inactive.json', 'ce-list-tags-inactive.json', 'ce-list-tags.json'],
+      'ce:ListCostAllocationTags': [
+        'ce-list-tags-inactive.json',
+        'ce-list-tags-inactive.json',
+        'ce-list-tags.json'
+      ],
       'ce:UpdateCostAllocationTagsStatus': 'ce-update-tags-ok.json'
     } as never)
     await awsProvider.apply(
@@ -881,9 +945,9 @@ describe('aws.cost_allocation_tag', () => {
       op('delete', 'aws.cost_allocation_tag', { externalId: 'nivaro-hub:app' }),
       null
     )
-    expect(JSON.parse(ok.of('UpdateCostAllocationTagsStatus')[0].body).CostAllocationTagsStatus[0].Status).toBe(
-      'Inactive'
-    )
+    expect(
+      JSON.parse(ok.of('UpdateCostAllocationTagsStatus')[0].body).CostAllocationTagsStatus[0].Status
+    ).toBe('Inactive')
     const hh = await awsProvider.health?.(ok.ctx, 'aws.cost_allocation_tag', 'nivaro-hub:app')
     expect(hh?.message).toMatch(/24 hours/)
   })
@@ -954,7 +1018,9 @@ describe('aws.budget', () => {
   })
 
   it('a budget the Hub did not make is ALREADY_EXISTS; a duplicate answer maps the same', async () => {
-    const h = harness(reads({ 'budgets:ListTagsForResource': 'budgets-list-tags-none.json' }) as never)
+    const h = harness(
+      reads({ 'budgets:ListTagsForResource': 'budgets-list-tags-none.json' }) as never
+    )
     await expect(
       awsProvider.apply(h.ctx, op('create', 'aws.budget'), desired('aws.budget', want))
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' })
@@ -983,9 +1049,17 @@ describe('aws.budget', () => {
   })
 
   it('health: ok, warn near the limit, down over it, with the figures for the Hub', async () => {
-    const ok = await awsProvider.health?.(harness(reads() as never).ctx, 'aws.budget', 'shop-monthly')
+    const ok = await awsProvider.health?.(
+      harness(reads() as never).ctx,
+      'aws.budget',
+      'shop-monthly'
+    )
     expect(ok?.status).toBe('ok')
-    expect(ok?.details).toMatchObject({ limit_cents: 20000, actual_cents: 9050, forecast_cents: 15000 })
+    expect(ok?.details).toMatchObject({
+      limit_cents: 20000,
+      actual_cents: 9050,
+      forecast_cents: 15000
+    })
     const over = await awsProvider.health?.(
       harness(reads({ 'budgets:DescribeBudget': 'budgets-describe-over.json' }) as never).ctx,
       'aws.budget',
@@ -996,7 +1070,11 @@ describe('aws.budget', () => {
 
   it('an update rewrites only what changed: the limit, then the alerts', async () => {
     const h = harness(
-      reads({ 'budgets:UpdateBudget': 'budgets-ok.json', 'budgets:DeleteNotification': 'budgets-ok.json', 'budgets:CreateNotification': 'budgets-ok.json' }) as never
+      reads({
+        'budgets:UpdateBudget': 'budgets-ok.json',
+        'budgets:DeleteNotification': 'budgets-ok.json',
+        'budgets:CreateNotification': 'budgets-ok.json'
+      }) as never
     )
     await awsProvider.apply(
       h.ctx,
@@ -1030,7 +1108,8 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
     ...over
   })
   const ctx = () => harness({} as never).ctx
-  const NO_TRANSFER_OUT = /^(TransferDomain|TransferDomainToAnotherAwsAccount|RetrieveDomainAuthCode|AcceptDomainTransfer|DeleteDomain)/
+  const NO_TRANSFER_OUT =
+    /^(TransferDomain|TransferDomainToAnotherAwsAccount|RetrieveDomainAuthCode|AcceptDomainTransfer|DeleteDomain)/
 
   it('is shared scope (administrators only), never deletable, no transfer-out field', () => {
     const t = type('aws.domain')
@@ -1048,8 +1127,17 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
       nameservers: ['ns-1.awsdns-00.com', 'ns-2.awsdns-01.org'],
       registrant_email: 'owner@example.com'
     })
-    expect(o && domainExpiresAt(o)).toBe('2026-12-24T00:00:00.000Z'.replace('2026-12-24', new Date(1798243200 * 1000).toISOString().slice(0, 10)))
-    const none = harness(reads({ 'route53domains:GetDomainDetail': { status: 400, file: 'r53d-error-notfound.json' } }) as never)
+    expect(o && domainExpiresAt(o)).toBe(
+      '2026-12-24T00:00:00.000Z'.replace(
+        '2026-12-24',
+        new Date(1798243200 * 1000).toISOString().slice(0, 10)
+      )
+    )
+    const none = harness(
+      reads({
+        'route53domains:GetDomainDetail': { status: 400, file: 'r53d-error-notfound.json' }
+      }) as never
+    )
     expect(await awsProvider.observe(none.ctx, 'aws.domain', 'example.com')).toBeNull()
     await expect(awsProvider.observe(h.ctx, 'aws.domain', '../x')).rejects.toMatchObject({
       code: 'BAD_ID'
@@ -1060,7 +1148,7 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
     const h = harness({ 'route53domains:ListDomains': 'r53d-list.json' } as never)
     const p = await awsProvider.list(h.ctx, 'aws.domain')
     expect(p.items.map((i) => i.externalId)).toEqual(['example.com'])
-    expect(p.cursor).toBe('next-fake')
+    expect(p.cursor).toBe('0|next-fake')
   })
 
   it('registering is a cost change: admin only, its own typed confirm, contact required', () => {
@@ -1072,13 +1160,17 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
     expect(p[0].kind).toBe('create')
     expect(p[0].risk).toContain('cost')
     expect(p[0].data).toMatchObject({ $adminOnly: true, $confirm: 'register example.com' })
-    expect(() => awsProvider.plan(ctx(), desired('aws.domain', { name: 'example.com' }), null)).toThrow(
-      /contact/
-    )
+    expect(() =>
+      awsProvider.plan(ctx(), desired('aws.domain', { name: 'example.com' }), null)
+    ).toThrow(/contact/)
     expect(() =>
       awsProvider.plan(
         ctx(),
-        desired('aws.domain', { name: 'example.com', contact, nameservers: ['a.example.com', 'b.example.com'] }),
+        desired('aws.domain', {
+          name: 'example.com',
+          contact,
+          nameservers: ['a.example.com', 'b.example.com']
+        }),
         null
       )
     ).toThrow(/after the domain is registered/)
@@ -1098,7 +1190,9 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
     )
     expect(res.externalId).toBe('example.com')
     const actions = h.calls.map((c) => c.action)
-    expect(actions.indexOf('CheckDomainAvailability')).toBeLessThan(actions.indexOf('RegisterDomain'))
+    expect(actions.indexOf('CheckDomainAvailability')).toBeLessThan(
+      actions.indexOf('RegisterDomain')
+    )
     const body = JSON.parse(h.of('RegisterDomain')[0].body)
     expect(body).toMatchObject({
       DomainName: 'example.com',
@@ -1243,11 +1337,15 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
     expect(ok?.status).toBe('ok')
     expect(ok?.details).toMatchObject({ autoRenew: true, locked: true })
     expect(typeof ok?.details?.expiresAt).toBe('string')
-    const soon = harness(reads({ 'route53domains:GetDomainDetail': 'r53d-detail-expiring.json' }) as never)
+    const soon = harness(
+      reads({ 'route53domains:GetDomainDetail': 'r53d-detail-expiring.json' }) as never
+    )
     const w = await awsProvider.health?.(soon.ctx, 'aws.domain', 'example.com')
     expect(w?.status).toBe('warn')
     expect(w?.details).toMatchObject({ autoRenew: false, locked: true })
-    const open = harness(reads({ 'route53domains:GetDomainDetail': 'r53d-detail-unlocked.json' }) as never)
+    const open = harness(
+      reads({ 'route53domains:GetDomainDetail': 'r53d-detail-unlocked.json' }) as never
+    )
     expect((await awsProvider.health?.(open.ctx, 'aws.domain', 'example.com'))?.message).toMatch(
       /transfer lock is off/
     )
@@ -1255,7 +1353,9 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
 
   it('maps registrar 429 to retryable', async () => {
     const h = harness(
-      reads({ 'route53domains:GetDomainDetail': { status: 429, file: 'r53d-error-throttle.json' } }) as never
+      reads({
+        'route53domains:GetDomainDetail': { status: 429, file: 'r53d-error-throttle.json' }
+      }) as never
     )
     await expect(awsProvider.observe(h.ctx, 'aws.domain', 'example.com')).rejects.toMatchObject({
       retryable: true
@@ -1263,8 +1363,11 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
   })
 
   describe('estimate from recorded price answer', () => {
-    const est = (h: ReturnType<typeof harness>, d: ReturnType<typeof desired> | null, o = null as never) =>
-      type('aws.domain')?.estimate?.(h.ctx, d, o)
+    const est = (
+      h: ReturnType<typeof harness>,
+      d: ReturnType<typeof desired> | null,
+      o = null as never
+    ) => type('aws.domain')?.estimate?.(h.ctx, d, o)
 
     it('registration is one-time (first year, plus renewals for more) and renews yearly', async () => {
       const h = harness({ 'route53domains:ListPrices': 'r53d-prices.json' } as never)
@@ -1283,14 +1386,18 @@ describe('aws.domain (Route 53 Domains, us-east-1 only)', () => {
 
     it('an existing domain costs its renewal; auto-renew off costs none; unknown TLD is unknown', async () => {
       const h = harness({ 'route53domains:ListPrices': 'r53d-prices.json' } as never)
-      const o = observedOf({ type: 'aws.domain', externalId: 'example.com', fields: { name: 'example.com', auto_renew: true } })
+      const o = observedOf({
+        type: 'aws.domain',
+        externalId: 'example.com',
+        fields: { name: 'example.com', auto_renew: true }
+      })
       expect(await est(h, null, o as never)).toMatchObject({ oneTimeCents: 0, yearlyCents: 1500 })
       expect(
         await est(h, desired('aws.domain', { name: 'example.com', auto_renew: false }), o as never)
       ).toMatchObject({ yearlyCents: 0 })
-      expect(
-        await est(h, desired('aws.domain', { name: 'example.xyz', contact }))
-      ).toMatchObject({ confidence: 'unknown' })
+      expect(await est(h, desired('aws.domain', { name: 'example.xyz', contact }))).toMatchObject({
+        confidence: 'unknown'
+      })
     })
 
     it('never throws when the registrar errors', async () => {

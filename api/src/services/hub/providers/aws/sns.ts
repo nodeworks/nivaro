@@ -173,7 +173,8 @@ async function readTags(
 ): Promise<Record<string, string>> {
   const r = await orNull(() => sns(ctx, region, 'ListTagsForResource', { ResourceArn: arn }))
   const out: Record<string, string> = {}
-  for (const x of xmlList(r && c(r, 'Tags'), 'member')) out[t(c(x, 'Key'))] = t(c(x, 'Value'))
+  for (const x of xmlList(r ? c(r, 'Tags') : undefined, 'member'))
+    out[t(c(x, 'Key'))] = t(c(x, 'Value'))
   return out
 }
 

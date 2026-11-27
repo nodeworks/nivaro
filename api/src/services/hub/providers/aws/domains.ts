@@ -199,6 +199,11 @@ export const domainDef: AwsTypeDef = {
     key: 'aws.domain',
     label: 'Route 53 domain',
     scope: 'shared',
+    // Task 34: the domain expiry watch picks registrar types by this flag (health carries
+    // expiresAt, autoRenew, locked).
+    registrar: true,
+    // A registration is charged now and again every year: the owner-approval gate applies.
+    costClass: () => 'yearly',
     fields: [
       {
         key: 'name',

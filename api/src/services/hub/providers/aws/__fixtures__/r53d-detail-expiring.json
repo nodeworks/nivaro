@@ -1,1 +1,7 @@
-{"DomainName": "example.com", "Nameservers": [{"Name": "ns-1.awsdns-00.com"}, {"Name": "ns-2.awsdns-01.org"}], "AutoRenew": false, "StatusList": ["clientTransferProhibited"], "ExpirationDate": 1796000000}
+{
+  "DomainName": "example.com",
+  "Nameservers": [{ "Name": "ns-1.awsdns-00.com" }, { "Name": "ns-2.awsdns-01.org" }],
+  "AutoRenew": false,
+  "StatusList": ["clientTransferProhibited"],
+  "ExpirationDate": 1796000000
+}

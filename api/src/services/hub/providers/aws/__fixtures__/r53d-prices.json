@@ -1,1 +1,15 @@
-{"Prices": [{"Name": "com", "RegistrationPrice": {"Price": 15.0, "Currency": "USD"}, "RenewalPrice": {"Price": 15.0, "Currency": "USD"}, "TransferPrice": {"Price": 15.0, "Currency": "USD"}}, {"Name": "io", "RegistrationPrice": {"Price": 57.0, "Currency": "USD"}, "RenewalPrice": {"Price": 71.0, "Currency": "USD"}}]}
+{
+  "Prices": [
+    {
+      "Name": "com",
+      "RegistrationPrice": { "Price": 15.0, "Currency": "USD" },
+      "RenewalPrice": { "Price": 15.0, "Currency": "USD" },
+      "TransferPrice": { "Price": 15.0, "Currency": "USD" }
+    },
+    {
+      "Name": "io",
+      "RegistrationPrice": { "Price": 57.0, "Currency": "USD" },
+      "RenewalPrice": { "Price": 71.0, "Currency": "USD" }
+    }
+  ]
+}

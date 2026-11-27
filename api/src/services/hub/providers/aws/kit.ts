@@ -457,7 +457,7 @@ export type AwsCostsFn = (
   range: { from: string; to: string }
 ) => Promise<CostRow[]>
 
-export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter & { costs?: AwsCostsFn } {
+export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
   const byType = new Map(parts.defs.map((d) => [d.spec.key, d]))
   const defOf = (type: string): AwsTypeDef => {
     const d = byType.get(type)

@@ -1,1 +1,1 @@
-{"__type": "DuplicateRequest", "message": "A request for this domain is already in progress"}
+{ "__type": "DuplicateRequest", "message": "A request for this domain is already in progress" }
