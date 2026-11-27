@@ -1,0 +1,27 @@
+{
+  "id": "4000001",
+  "name": "New errors",
+  "actionMatch": "any",
+  "filterMatch": "all",
+  "frequency": 30,
+  "environment": null,
+  "status": "active",
+  "dateCreated": "2026-11-01T10:00:00Z",
+  "conditions": [
+    {
+      "id": "sentry.rules.conditions.first_seen_event.FirstSeenEventCondition",
+      "name": "A new issue is created"
+    }
+  ],
+  "filters": [],
+  "actions": [
+    {
+      "id": "sentry.mail.actions.NotifyEmailAction",
+      "name": "Send a notification to IssueOwners",
+      "targetType": "IssueOwners",
+      "targetIdentifier": "",
+      "fallthroughType": "ActiveMembers",
+      "uuid": "11111111-2222-3333-4444-555555555555"
+    }
+  ]
+}

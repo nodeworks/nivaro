@@ -1,0 +1,12 @@
+{
+  "id": "0123456789abcdef0123456789abcdef",
+  "name": "Hub key",
+  "isActive": true,
+  "rateLimit": null,
+  "public": "0123456789abcdef0123456789abcdef",
+  "secret": "test-secret-sentry-key-0001",
+  "dsn": {
+    "public": "https://0123456789abcdef0123456789abcdef@o1000001.ingest.sentry.io/3000001",
+    "secret": "https://0123456789abcdef0123456789abcdef:test-secret-sentry-key-0001@o1000001.ingest.sentry.io/3000001"
+  }
+}

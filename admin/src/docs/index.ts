@@ -368,6 +368,7 @@ import {
   hubProvidersExpoDocs,
   hubProvidersGithubDocs,
   hubProvidersHooksDocs,
+  hubProvidersSentryDocs,
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
@@ -1237,6 +1238,7 @@ export const navSections: NavGroup[] = [
       hubProvidersVercelDocs,
       hubProvidersAuth0Docs,
       hubProvidersExpoDocs,
+      hubProvidersSentryDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]

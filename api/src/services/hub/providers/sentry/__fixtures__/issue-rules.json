@@ -1,0 +1,24 @@
+[
+  {
+    "id": "4000001",
+    "name": "New errors",
+    "actionMatch": "any",
+    "filterMatch": "all",
+    "frequency": 30,
+    "environment": null,
+    "conditions": [
+      {
+        "id": "sentry.rules.conditions.first_seen_event.FirstSeenEventCondition",
+        "name": "A new issue is created"
+      }
+    ],
+    "filters": [],
+    "actions": [
+      {
+        "id": "sentry.mail.actions.NotifyEmailAction",
+        "targetType": "IssueOwners",
+        "fallthroughType": "ActiveMembers"
+      }
+    ]
+  }
+]
