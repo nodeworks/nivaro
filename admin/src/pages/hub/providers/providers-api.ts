@@ -587,6 +587,12 @@ export const deleteConnection = (id: number) => api.delete(`/hub/connections/${i
 export const testConnection = (id: number) =>
   api.post<{ data: ConnectionTest }>(`/hub/connections/${id}/test`).then(data)
 
+/** Makes and seals the ACME account key on the server; the key is never answered. */
+export const generateAcmeAccountKey = (id: number, replace = false) =>
+  api
+    .post<{ data: HubConnection }>(`/hub/connections/${id}/acme/generate-account-key`, { replace })
+    .then(data)
+
 export const saveAppConnections = (appId: number, ids: number[]) =>
   api
     .put<{ data: { connection_ids: number[] } }>(`/hub/apps/${appId}/connections`, {

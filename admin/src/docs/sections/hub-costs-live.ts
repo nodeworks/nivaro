@@ -52,6 +52,22 @@ export const hubCostsLiveDocs: DocSection = {
         '“No estimate” means the Hub has no price for it (an unknown region, a price list that could not be read). It is never shown as $0, and a change with an unknown part never approves itself.'
       ]
     },
+    {
+      type: 'h2',
+      id: 'hub-costs-live-providers',
+      text: 'Where each provider’s figure comes from'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**AWS**: the AWS Price List (needs `pricing:GetProducts`), with a bundled us-east-1 table as the fallback. Data transfer is measured from CloudWatch (`cloudwatch:GetMetricData`, the last 7 days scaled to 30) and prefills “Data out”. This is the only place the Hub measures traffic today, so other providers show “none assumed” until you enter a figure. Both permissions are optional: without them the figure falls back to the bundled table or reads “No estimate”.',
+        '**Plan-priced** (GitHub, GitLab, Vercel, Auth0, Expo, Docker Hub, Cloudflare zones): the provider bills the account, not the resource. The resource is a known zero with the plan and its dated list price in the note, or the plan’s price where one resource adds it.',
+        '**Usage-priced** (Anthropic, OpenAI, Neon storage and compute, Upstash, Redis Cloud pay as you go, Twilio messages): a base figure (often zero) plus usage. Anthropic, OpenAI and Twilio also report what was used, so the run-rate and the month so far count usage.',
+        '**Fixed plans** (a Twilio number’s rental, Redis Cloud fixed plans, Neon compute that never suspends): a dated price table in the adapter, because the provider has no price API. The estimate names the date.',
+        '**No estimate by design**: Stripe, Slack, Teams, Entra, PagerDuty, SendGrid and Snyk. Their cost is the account’s plan, not a resource.',
+        'The billed-cost feeds are not built yet: **Billed** reads “No bill yet” for every provider.'
+      ]
+    },
     { type: 'h2', id: 'hub-costs-live-forms', text: 'Estimates while you create or change' },
     {
       type: 'ul',

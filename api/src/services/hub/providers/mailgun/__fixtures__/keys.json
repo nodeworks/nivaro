@@ -1,0 +1,14 @@
+{
+  "total_count": 1,
+  "items": [
+    {
+      "id": "fake-key-id-0001",
+      "description": "demo-app-sending",
+      "kind": "domain",
+      "role": "sending",
+      "domain_name": "mg.example.com",
+      "is_disabled": false,
+      "created_at": "2026-11-26T10:00:00Z"
+    }
+  ]
+}

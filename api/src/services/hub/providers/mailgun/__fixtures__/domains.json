@@ -1,0 +1,15 @@
+{
+  "total_count": 1,
+  "items": [
+    {
+      "name": "mg.example.com",
+      "state": "active",
+      "web_scheme": "https",
+      "spam_action": "disabled",
+      "wildcard": false,
+      "created_at": "Thu, 26 Nov 2026 10:00:00 GMT",
+      "smtp_login": "postmaster@mg.example.com",
+      "type": "custom"
+    }
+  ]
+}

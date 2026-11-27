@@ -82,7 +82,15 @@ export function ipTooWide(value: unknown): boolean {
 }
 
 /** ::ffff:0:0/96, the IPv4-mapped IPv6 block. */
-const isMapped = (r: Range) => r.v === 6 && r.start >> 32n === 0xffffn
+// IPv6 blocks that carry IPv4 addresses: IPv4-mapped ::ffff:0:0/96 and NAT64 64:ff9b::/96. Any
+// range that overlaps either counts as everyone (security review: a /95 or a range straddling the
+// block also reaches IPv4 hosts).
+const V4_IN_V6: Array<[bigint, bigint]> = [
+  [0xffff_0000_0000n, 0xffff_ffff_ffffn],
+  [0x0064_ff9b_0000_0000_0000_0000_0000_0000n, 0x0064_ff9b_0000_0000_0000_0000_ffff_ffffn]
+]
+const isMapped = (r: Range) =>
+  r.v === 6 && V4_IN_V6.some(([lo, hi]) => r.start <= hi && r.end >= lo)
 
 /**
  * Does this allow-list amount to "everyone"? True for any entry that does not parse, any IPv4

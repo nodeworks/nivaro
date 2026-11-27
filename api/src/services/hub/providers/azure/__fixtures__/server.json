@@ -1,0 +1,22 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Sql/servers/sql-test-hub",
+  "name": "sql-test-hub",
+  "location": "eastus",
+  "tags": {
+    "nivaro-hub-app": "7"
+  },
+  "properties": {
+    "state": "Ready",
+    "version": "12.0",
+    "minimalTlsVersion": "1.2",
+    "publicNetworkAccess": "Disabled",
+    "fullyQualifiedDomainName": "sql-test-hub.database.windows.net",
+    "administratorLogin": "nivarohub",
+    "administrators": {
+      "administratorType": "ActiveDirectory",
+      "login": "dba-test-group",
+      "sid": "00000000-0000-4000-8000-0000000000cc",
+      "azureADOnlyAuthentication": false
+    }
+  }
+}

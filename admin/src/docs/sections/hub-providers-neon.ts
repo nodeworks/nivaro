@@ -9,6 +9,10 @@ export const hubProvidersNeonDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-neon', text: 'Provider: Neon — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: `orgId` (`org-…`, pinned: every list, create and read is limited to this organization) and a secret `apiKey` (an organization API key). The only host is `console.neon.tech`. Neon cannot list what a key may do, so Test checks that the key can list the organization’s projects and says write access is assumed from that. A project that belongs to another organization reads as missing and is refused (`NEON_OUT_OF_ACCOUNT`) on any write; branches, endpoints, databases and roles are judged through their project.'
     },

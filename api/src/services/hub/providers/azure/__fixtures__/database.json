@@ -1,0 +1,16 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Sql/servers/sql-test-hub/databases/app-db",
+  "name": "app-db",
+  "location": "eastus",
+  "sku": {
+    "name": "S0",
+    "tier": "Standard"
+  },
+  "tags": {
+    "nivaro-hub-app": "7"
+  },
+  "properties": {
+    "status": "Online",
+    "maxSizeBytes": 268435456000
+  }
+}

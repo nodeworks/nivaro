@@ -1,0 +1,57 @@
+{
+  "properties": {
+    "columns": [
+      {
+        "name": "Cost",
+        "type": "Number"
+      },
+      {
+        "name": "UsageDate",
+        "type": "Number"
+      },
+      {
+        "name": "ResourceId",
+        "type": "String"
+      },
+      {
+        "name": "ChargeType",
+        "type": "String"
+      },
+      {
+        "name": "Currency",
+        "type": "String"
+      }
+    ],
+    "rows": [
+      [
+        12.345,
+        20261105,
+        "/subscriptions/00000000-0000-4000-8000-000000000001/resourcegroups/rg-test-hub/providers/microsoft.sql/servers/sql-test-hub/databases/app-db",
+        "Usage",
+        "USD"
+      ],
+      [
+        -1.5,
+        20261105,
+        "/subscriptions/00000000-0000-4000-8000-000000000001/resourcegroups/rg-test-hub/providers/microsoft.sql/servers/sql-test-hub",
+        "Usage",
+        "USD"
+      ],
+      [
+        0.9,
+        20261106,
+        "/subscriptions/00000000-0000-4000-8000-000000000001/resourcegroups/rg-test-hub/providers/microsoft.sql/servers/sql-test-hub",
+        "Tax",
+        "USD"
+      ],
+      [-0.25, 20261106, "", "Refund", "USD"],
+      [
+        0,
+        20261106,
+        "/subscriptions/00000000-0000-4000-8000-000000000001/resourcegroups/rg-test-hub/providers/microsoft.sql/servers/sql-test-hub",
+        "Usage",
+        "USD"
+      ]
+    ]
+  }
+}

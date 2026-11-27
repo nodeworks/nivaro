@@ -1,0 +1,139 @@
+{
+  "myself": {
+    "accountId": "test-account-1",
+    "displayName": "Hub Bot (test)",
+    "emailAddress": "hub-bot@example.test"
+  },
+  "mypermissions-all": {
+    "permissions": {
+      "BROWSE_PROJECTS": { "havePermission": true },
+      "ADMINISTER_PROJECTS": { "havePermission": true },
+      "CREATE_ISSUES": { "havePermission": true },
+      "ADD_COMMENTS": { "havePermission": true },
+      "TRANSITION_ISSUES": { "havePermission": true }
+    }
+  },
+  "mypermissions-browse-only": {
+    "permissions": {
+      "BROWSE_PROJECTS": { "havePermission": true },
+      "ADMINISTER_PROJECTS": { "havePermission": false },
+      "CREATE_ISSUES": { "havePermission": false },
+      "ADD_COMMENTS": { "havePermission": true },
+      "TRANSITION_ISSUES": { "havePermission": false }
+    }
+  },
+  "mypermissions-admin": { "permissions": { "ADMINISTER": { "havePermission": true } } },
+  "project-web": {
+    "id": "10001",
+    "key": "WEB",
+    "name": "Web shop (test)",
+    "projectTypeKey": "software",
+    "issueTypes": [{ "id": "10", "name": "Task" }, { "id": "11", "name": "Bug" }]
+  },
+  "project-other": {
+    "id": "10002",
+    "key": "OTHER",
+    "name": "Other (test)",
+    "projectTypeKey": "software",
+    "issueTypes": []
+  },
+  "project-search": {
+    "isLast": true,
+    "values": [
+      { "id": "10001", "key": "WEB", "name": "Web shop (test)", "projectTypeKey": "software" },
+      { "id": "10002", "key": "OTHER", "name": "Other (test)", "projectTypeKey": "software" }
+    ]
+  },
+  "component-7": {
+    "id": "7",
+    "name": "shop-app",
+    "description": "The shop",
+    "project": "WEB",
+    "projectId": 10001
+  },
+  "component-8-other": { "id": "8", "name": "x", "project": "OTHER", "projectId": 10002 },
+  "components-web": [
+    { "id": "7", "name": "shop-app", "description": "The shop", "project": "WEB" }
+  ],
+  "version-9": {
+    "id": "9",
+    "name": "0.3.1",
+    "description": "",
+    "released": false,
+    "archived": false,
+    "projectId": 10001
+  },
+  "version-9-released": {
+    "id": "9",
+    "name": "0.3.1",
+    "released": true,
+    "releaseDate": "2026-11-27",
+    "archived": false,
+    "projectId": 10001
+  },
+  "versions-web": [
+    { "id": "9", "name": "0.3.1", "released": false, "archived": false, "projectId": 10001 }
+  ],
+  "webhook-3": {
+    "self": "https://jira.example.test/rest/webhooks/1.0/webhook/3",
+    "name": "hub events",
+    "url": "https://hub.example.test/hooks/jira",
+    "events": ["jira:issue_created", "jira:issue_updated"],
+    "enabled": true,
+    "filters": { "issue-related-events-section": "project = WEB" }
+  },
+  "issue-created": {
+    "id": "20001",
+    "key": "WEB-41",
+    "self": "https://acme.example.test/rest/api/2/issue/20001"
+  },
+  "search-empty": { "issues": [] },
+  "search-hit": { "issues": [{ "id": "20001", "key": "WEB-41" }] },
+  "issue-open": {
+    "key": "WEB-41",
+    "fields": {
+      "status": { "statusCategory": { "key": "indeterminate" } },
+      "labels": ["nivaro-hub", "LABEL"]
+    }
+  },
+  "issue-done": {
+    "key": "WEB-41",
+    "fields": {
+      "status": { "statusCategory": { "key": "done" } },
+      "labels": ["nivaro-hub", "LABEL"]
+    }
+  },
+  "transitions": {
+    "transitions": [
+      {
+        "id": "11",
+        "name": "Start",
+        "to": { "id": "3", "name": "In Progress", "statusCategory": { "key": "indeterminate" } }
+      },
+      {
+        "id": "31",
+        "name": "Erledigt",
+        "to": { "id": "5", "name": "Fertig", "statusCategory": { "key": "done" } }
+      }
+    ]
+  },
+  "transitions-none": {
+    "transitions": [
+      {
+        "id": "11",
+        "name": "Start",
+        "to": { "name": "In Progress", "statusCategory": { "key": "indeterminate" } }
+      }
+    ]
+  },
+  "error-404": { "errorMessages": ["Issue Does Not Exist"], "errors": {} },
+  "error-400-echo": {
+    "errorMessages": ["Bad request for test-secret-jira-token"],
+    "errors": { "summary": "bad" }
+  },
+  "oauth-token": {
+    "access_token": "test-secret-oauth-access-token",
+    "expires_in": 3600,
+    "token_type": "Bearer"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Sql/servers/sql-test-hub/privateEndpointConnections/pe-test-1",
+  "name": "pe-test-1",
+  "properties": {
+    "provisioningState": "Ready",
+    "privateEndpoint": {
+      "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Network/privateEndpoints/pe-test"
+    },
+    "privateLinkServiceConnectionState": {
+      "status": "Approved"
+    }
+  }
+}

@@ -508,6 +508,61 @@ describe('connections', () => {
   })
 })
 
+describe('acme account key', () => {
+  async function acmeConnection(secrets: Record<string, string> = {}) {
+    const { acmeAdapter } = await import('../../../services/hub/providers/acme/index.js')
+    registry.registerProvider(acmeAdapter)
+    const [row] = await db('nivaro_hub_connections')
+      .insert({
+        provider: 'acme',
+        name: 'LE',
+        config: JSON.stringify({ contact_email: 'a@example.test' }),
+        status: 'untested'
+      })
+      .returning('id')
+    const id = Number(typeof row === 'object' ? (row as { id: number }).id : row)
+    if (Object.keys(secrets).length) await store.updateConnection(id, { secrets })
+    return id
+  }
+  const url = (id: number) => `/connections/${id}/acme/generate-account-key`
+
+  it('is in the catalog as an admin write', () => {
+    const e = HUB_ROUTES.find((r) => r.path === '/connections/:id/acme/generate-account-key')
+    expect(e).toMatchObject({ method: 'POST', auth: 'admin', access: 'write' })
+  })
+
+  it('admin only; owners get 403', async () => {
+    const id = await acmeConnection()
+    expect((await inject('POST', url(id), {}, owner)).statusCode).toBe(403)
+  })
+
+  it('seals a new key, never answers it, and refuses to replace one unless told to', async () => {
+    const id = await acmeConnection()
+    const res = await inject('POST', url(id), {})
+    expect(res.statusCode).toBe(200)
+    expect(res.body).not.toMatch(/PRIVATE KEY/)
+    const opened = await store.openConnectionSecrets({ id } as never)
+    expect(opened.account_key).toMatch(/BEGIN PRIVATE KEY/)
+    expect(res.json().data.secret_keys).toContain('account_key')
+    const again = await inject('POST', url(id), {})
+    expect(again.statusCode).toBe(409)
+    expect(again.json().error?.code ?? again.json().code).toBe('ACCOUNT_KEY_EXISTS')
+    expect((await store.openConnectionSecrets({ id } as never)).account_key).toBe(
+      opened.account_key
+    )
+    const replaced = await inject('POST', url(id), { replace: true })
+    expect(replaced.statusCode).toBe(200)
+    expect((await store.openConnectionSecrets({ id } as never)).account_key).not.toBe(
+      opened.account_key
+    )
+  })
+
+  it('404 for a connection of another provider', async () => {
+    const c = await makeConnection()
+    expect((await inject('POST', url(c.id), {})).statusCode).toBe(404)
+  })
+})
+
 describe('adopt and unmanaged', () => {
   it('owners adopt only into their own app through an allowed connection', async () => {
     const c = await makeConnection()

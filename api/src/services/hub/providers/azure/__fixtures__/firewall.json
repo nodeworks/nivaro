@@ -1,0 +1,8 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Sql/servers/sql-test-hub/firewallRules/office",
+  "name": "office",
+  "properties": {
+    "startIpAddress": "203.0.113.10",
+    "endIpAddress": "203.0.113.20"
+  }
+}

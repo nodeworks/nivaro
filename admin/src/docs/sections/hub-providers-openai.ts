@@ -9,6 +9,10 @@ export const hubProvidersOpenaiDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-openai', text: 'Provider: OpenAI — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: a secret `adminKey` (an organization admin key: OpenAI platform, Settings, Organization, Admin keys) and an optional `organization` id (`org-…`, sent with every call). The only host is `api.openai.com`. Test checks that the key can list projects and, separately, that it can read organization costs; a key without the costs scope still works and Test says costs are missing.'
     },
@@ -51,7 +55,7 @@ export const hubProvidersOpenaiDocs: DocSection = {
         'Every child is judged through its project: a change whose provider id names another project than the one it points at is refused `PROJECT_MISMATCH` before any call. A child of an archived or missing project reads as gone.',
         'A create that finds a project or service account of the same name the Hub did not make stops with `ALREADY_EXISTS`: adopt it instead. A resumed run reuses what it made.',
         'Health: a project shows what it spent today (UTC) and this month, read from the organization costs feed (daily buckets, so "today" is the current UTC day). If the costs cannot be read the project stays ok and says why.',
-        'Run-rate: the adapter reports what each project used so far (one row per day and project, in cents) so usage counts in the live cost figures. The cost feed (`costs()`) comes with the Hub cost-feed task; it is not part of this adapter yet.',
+        'Run-rate: the adapter reports what each project used so far (one row per day and project, in cents) so usage counts in the live cost figures. The billed-cost feed is not part of this adapter yet, so Billed on the Costs tab stays empty for it.',
         'Needs a live check: the exact response of the service account create call, the costs filter parameters, and the project and rate-limit write paths, which were written from OpenAI’s published API reference and recorded answers, not a live organization.'
       ]
     }

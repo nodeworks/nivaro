@@ -69,6 +69,7 @@ export * from './sections/hub-providers-livekit.js'
 export * from './sections/hub-providers-redis.js'
 export * from './sections/hub-providers-teams.js'
 export * from './sections/hub-providers-twilio.js'
+export * from './sections/hub-providers-wave2.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
 export * from './sections/hub-security.js'
@@ -381,15 +382,20 @@ import {
   hubProvidersSentryDocs,
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
+import { hubProvidersAcmeDocs } from './sections/hub-providers-acme.js'
 import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
 import { hubProvidersAwsPart3Docs } from './sections/hub-providers-aws-part3.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
+import { hubProvidersFirebaseDocs } from './sections/hub-providers-firebase.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
+import { hubProvidersJiraDocs } from './sections/hub-providers-jira.js'
 import { hubProvidersLivekitDocs } from './sections/hub-providers-livekit.js'
+import { hubProvidersMailgunDocs } from './sections/hub-providers-mailgun.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
+import { hubProvidersAzureDocs } from './sections/hub-providers-azure.js'
 import { hubProvidersPortainerDocs } from './sections/hub-providers-portainer.js'
 import {
   hubProvidersRedisCloudDocs,
@@ -401,6 +407,7 @@ import { hubProvidersSnykDocs } from './sections/hub-providers-snyk.js'
 import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
+import { hubProvidersOutputsDocs, hubProvidersRulesDocs } from './sections/hub-providers-wave2.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1264,6 +1271,8 @@ export const navSections: NavGroup[] = [
       hubPeopleDocs,
       hubSecurityDocs,
       hubProvidersDocs,
+      hubProvidersOutputsDocs,
+      hubProvidersRulesDocs,
       hubProvidersGithubDocs,
       hubProvidersGitlabDocs,
       hubProvidersLivekitDocs,
@@ -1286,9 +1295,14 @@ export const navSections: NavGroup[] = [
       hubProvidersPagerdutyDocs,
       hubProvidersSnykDocs,
       hubProvidersPortainerDocs,
+      hubProvidersAzureDocs,
       hubProvidersSendgridDocs,
+      hubProvidersMailgunDocs,
+      hubProvidersFirebaseDocs,
       hubProvidersTeamsDocs,
+      hubProvidersJiraDocs,
       hubProvidersAnthropicDocs,
+      hubProvidersAcmeDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]

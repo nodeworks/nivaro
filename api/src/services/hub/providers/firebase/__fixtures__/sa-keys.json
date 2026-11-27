@@ -1,0 +1,9 @@
+{
+  "keys": [
+    {
+      "name": "projects/demo-app-12345/serviceAccounts/fcm-send@demo-app-12345.iam.gserviceaccount.com/keys/aaaaaaaaaaaaaaaaaaaaaaaa11111111",
+      "validAfterTime": "2026-11-01T00:00:00Z",
+      "validBeforeTime": "9999-12-31T23:59:59Z"
+    }
+  ]
+}

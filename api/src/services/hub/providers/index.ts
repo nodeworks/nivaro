@@ -1,13 +1,18 @@
+import { acmeAdapter } from './acme/index.js'
 import { anthropicAdapter } from './anthropic/index.js'
 import { auth0Provider } from './auth0/index.js'
 import { awsProvider } from './aws/adapter.js'
+import { azureAdapter } from './azure/index.js'
 import { cloudflareProvider } from './cloudflare/index.js'
 import { dockerhubAdapter } from './dockerhub/index.js'
 import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
+import { firebaseAdapter } from './firebase/index.js'
 import { githubAdapter } from './github/index.js'
 import { gitlabAdapter } from './gitlab/index.js'
+import { jiraAdapter } from './jira/index.js'
 import { livekitAdapter } from './livekit/index.js'
+import { mailgunAdapter } from './mailgun/index.js'
 import { neonAdapter } from './neon/index.js'
 import { openaiAdapter } from './openai/index.js'
 import { pagerdutyAdapter } from './pagerduty/index.js'
@@ -34,15 +39,20 @@ import { vercelAdapter } from './vercel/index.js'
 
 export const CORE_PROVIDERS: ProviderAdapter[] = [
   // github, aws, vercel, auth0, expo adapters are appended here.
+  acmeAdapter,
   anthropicAdapter,
   auth0Provider,
+  azureAdapter,
   awsProvider,
   cloudflareProvider,
   dockerhubAdapter,
   entraAdapter,
   expoAdapter,
   githubAdapter,
+  jiraAdapter,
   livekitAdapter,
+  firebaseAdapter,
+  mailgunAdapter,
   sendgridAdapter,
   sentryAdapter,
   snykAdapter,

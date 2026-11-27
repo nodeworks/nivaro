@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "AuthorizationFailed",
+    "message": "The client does not have authorization to perform action."
+  }
+}
