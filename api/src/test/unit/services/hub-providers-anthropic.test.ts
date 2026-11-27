@@ -907,3 +907,16 @@ describe('anthropic adapter: estimates', () => {
     expect(anthropicAdapter.types.filter((t) => t.costClass).map((t) => t.key)).toEqual([T_WS])
   })
 })
+
+describe('spend limit cost gate (security review)', () => {
+  it('removing or raising a spend limit is a cost; lowering it is not', () => {
+    const t = anthropicAdapter.types.find((x) => x.key === 'anthropic.spend_limit')!
+    const o = (kind: string, changes: unknown[] = []) => ({ kind, changes }) as any
+    expect(t.risk(o('delete'), null)).toEqual(['cost', 'destructive'])
+    expect(t.risk(o('update', [{ field: 'amount_cents', from: 1000, to: 5000 }]), null)).toEqual([
+      'cost'
+    ])
+    expect(t.risk(o('update', [{ field: 'amount_cents', from: 5000, to: 1000 }]), null)).toEqual([])
+    expect(t.risk(o('create', [{ field: 'amount_cents', to: 1000 }]), null)).toEqual(['cost'])
+  })
+})

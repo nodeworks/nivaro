@@ -1107,7 +1107,16 @@ const TYPES: ResourceTypeSpec[] = [
     },
     reversible: true,
     refs: [{ field: 'workspace', type: T_WS, required: true }],
-    risk: () => []
+    // A spend limit is a ceiling: removing it or raising it lets more be spent, so an owner's change
+    // waits for a Hub administrator like any other cost (security review). Setting one is not.
+    risk(op) {
+      if (op.kind === 'delete') return ['cost', 'destructive']
+      return op.changes.some(
+        (c) => c.field === 'amount_cents' && (typeof c.from !== 'number' || Number(c.to) > c.from)
+      )
+        ? ['cost']
+        : []
+    }
   },
   {
     key: T_RATE,
