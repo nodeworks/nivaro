@@ -77,7 +77,10 @@ export function hostAllowed(host: string, patterns: readonly string[]): boolean 
 export function hasDotSegment(raw: string): boolean {
   // The URL parser drops tab/CR/LF anywhere and reads `\\` as `/` in https URLs, so `.\t.` or
   // `\\..\\` would become `..` after this check. No legitimate provider URL holds either raw.
-  if (/[\u0000-\u0020\u007f\\]/.test(raw)) return true
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw.charCodeAt(i)
+    if (c <= 0x20 || c === 0x7f || c === 0x5c) return true
+  }
   const afterScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, '')
   const path = afterScheme.split(/[?#]/, 1)[0] ?? ''
   for (const seg of path.split('/')) {
