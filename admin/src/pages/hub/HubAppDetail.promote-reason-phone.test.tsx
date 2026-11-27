@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Design round 2 N-r2-6: on a phone (no hover) the reason an environment's Promote is off is a
@@ -85,7 +86,9 @@ function renderAsOwner() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <HubAppDetail appId={1} isAdmin={false} userId='u1' onDeleted={() => {}} />
+      <MemoryRouter>
+        <HubAppDetail appId={1} isAdmin={false} userId='u1' onDeleted={() => {}} />
+      </MemoryRouter>
     </QueryClientProvider>
   )
 }

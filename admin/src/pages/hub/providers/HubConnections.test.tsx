@@ -168,7 +168,9 @@ describe('HubConnections', () => {
     routeGets({ '/hub/connections': [] })
     h.post.mockResolvedValue({ data: { data: { ...conn, id: 8 } } })
     mount()
-    const add = (await screen.findByRole('button', { name: /New connection/ })) as HTMLButtonElement
+    const add = (await screen.findByRole('button', {
+      name: /Connect an account/
+    })) as HTMLButtonElement
     await waitFor(() => expect(add.disabled).toBe(false))
     fireEvent.click(add)
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'GH' } })

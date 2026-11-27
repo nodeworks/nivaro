@@ -2,6 +2,7 @@ import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Download, ExternalLink, RefreshCw, ScanSearch } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { HubEnvTag } from '@/components/hub-brand/HubBits'
 import { HubToolbar } from '@/components/hub-page'
@@ -13,7 +14,7 @@ import { useAuth } from '@/lib/auth'
 import { cn, formatDate, formatRelative } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
 import { Field, ghostButton, SecretInput, SectionCard, smallButton } from '../hub-parts'
-import HubDomainsCard from './HubDomainsCard'
+import { ProviderHome } from '../providers/ProviderHome'
 import HubSnykFindings from './HubSnykFindings'
 import HubSourceFindingsCard from './HubSourceFindingsCard'
 import {
@@ -37,8 +38,7 @@ import {
 import { Chip, codeWords } from './security-parts'
 
 /**
- * Security (Apps hub tab): certificate expiry + DNS of every environment name (warned at 30, 14
- * and 3 days), known vulnerabilities of every pinned Nivaro and extension image (from the
+ * Security (Apps hub tab): known vulnerabilities of every pinned Nivaro and extension image (from the
  * operator's scanner endpoint — nothing is sent anywhere until one is set), the per-app
  * compliance pack, and the settings. Owners see their own apps; only administrators change
  * anything.
@@ -51,21 +51,33 @@ export default function HubSecurity() {
       <h2 id='hub-security-title' className='sr-only'>
         Security
       </h2>
-      <HubToolbar description='Certificate expiry and DNS of every environment name, known vulnerabilities of every pinned image (from your scanner), and the compliance pack per app.' />
+      <HubToolbar
+        description={
+          <>
+            Known vulnerabilities of every pinned image and of your code, error tracking, and the
+            compliance pack per app. Certificates and names are on{' '}
+            <Link to='/hub/domains' className='text-nvr-navy underline dark:text-nvr-cyan'>
+              Domains & certificates
+            </Link>
+            .
+          </>
+        }
+      />
       <div className='relative flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <div className='space-y-4'>
-          <CertificatesCard isAdmin={isAdmin} />
-          <HubDomainsCard />
           <VulnerabilitiesCard isAdmin={isAdmin} />
           {isAdmin && <HubSnykFindings />}
           <HubSourceFindingsCard />
           <ComplianceCard />
+          <ProviderHome groups={MONITORING} isAdmin={isAdmin} idPrefix='hub-home-monitoring' />
           {isAdmin && <SettingsCard />}
         </div>
       </div>
     </section>
   )
 }
+
+const MONITORING = ['monitoring']
 
 const primary = cn(smallButton, 'bg-nvr-cyan text-white hover:bg-nvr-cyan/90 disabled:opacity-50')
 const th = 'px-3 py-2 text-left text-[11px] font-medium text-slate-500 dark:text-muted-foreground'
@@ -92,7 +104,7 @@ function certWords(c: CertRow): { tone: 'good' | 'warn' | 'bad' | 'neutral'; tex
   return { tone: 'good', text: `${c.days_left} days left` }
 }
 
-function CertificatesCard({ isAdmin }: { isAdmin: boolean }) {
+export function CertificatesCard({ isAdmin }: { isAdmin: boolean }) {
   const qc = useQueryClient()
   const q = useQuery({
     queryKey: securityKeys.certs(),

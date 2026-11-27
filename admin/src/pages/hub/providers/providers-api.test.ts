@@ -17,7 +17,7 @@ const {
   fieldLabel,
   isResumable,
   fieldsPayload,
-  groupByProvider,
+  groupByCategory,
   healthTone,
   PROVIDER_CODE_COPY,
   providerError,
@@ -25,6 +25,7 @@ const {
   providerOptions,
   resourceState,
   shortValue,
+  typeIndex,
   usedBy,
   valuesOf
 } = await import('./providers-api')
@@ -227,17 +228,59 @@ describe('resource state', () => {
     expect(healthTone(null)).toBe('neutral')
   })
 
-  it('groups by provider label and counts who uses a shared resource', () => {
+  it('groups by what things are for, a type by its own job, and counts who uses a shared one', () => {
     const rows = [
-      resource({ id: 1, provider: 'vercel', name: 'site' }),
-      resource({ id: 2, provider: 'aws', name: 'b' }),
-      resource({ id: 3, provider: 'aws', name: 'a', refs: [{ field: 'vpc', resourceId: 9 }] })
+      resource({ id: 1, provider: 'vercel', type: 'vercel.project', name: 'site' }),
+      resource({ id: 2, provider: 'aws', type: 'aws.s3_bucket', name: 'b' }),
+      resource({ id: 4, provider: 'aws', type: 'aws.rds_instance', name: 'orders-db' }),
+      resource({ id: 5, provider: 'erp', type: 'erp.ledger', name: 'ledger' }),
+      resource({
+        id: 3,
+        provider: 'aws',
+        type: 'aws.vpc',
+        name: 'a',
+        refs: [{ field: 'vpc', resourceId: 9 }]
+      })
     ]
-    const g = groupByProvider(rows, (p) => ({ aws: 'AWS', vercel: 'Vercel' })[p] ?? p)
+    const ty = (key: string, category?: string) => ({ key, label: key, category }) as never
+    const t = {
+      risk_flags: [],
+      categories: [
+        { key: 'code', label: 'Code and deploys' },
+        { key: 'hosting', label: 'Hosting and servers' },
+        { key: 'data', label: 'Databases and caches' },
+        { key: 'other', label: 'Other' }
+      ],
+      providers: [
+        {
+          key: 'aws',
+          label: 'AWS',
+          category: 'hosting',
+          connection: { fields: [] },
+          // An older Hub sends no category on a type: it follows its provider.
+          types: [ty('aws.s3_bucket'), ty('aws.vpc', 'hosting'), ty('aws.rds_instance', 'data')]
+        },
+        {
+          key: 'vercel',
+          label: 'Vercel',
+          category: 'code',
+          connection: { fields: [] },
+          types: [ty('vercel.project', 'code')]
+        }
+      ]
+    }
+    const g = groupByCategory(rows, t)
     expect(g.map((x) => [x.label, x.rows.map((r) => r.name)])).toEqual([
-      ['AWS', ['a', 'b']],
-      ['Vercel', ['site']]
+      ['Code and deploys', ['site']],
+      ['Hosting and servers', ['a', 'b']],
+      ['Databases and caches', ['orders-db']],
+      // A provider this Hub no longer has: never dropped, shown last.
+      ['Other', ['ledger']]
     ])
+    const idx = typeIndex(t)
+    expect(idx.categoryOf('aws.rds_instance', 'aws')).toBe('data')
+    expect(idx.categoryOf('aws.unknown_new_type', 'aws')).toBe('hosting')
+    expect(idx.categoryOf('nope.thing')).toBe('other')
     expect(usedBy(9, rows).map((r) => r.id)).toEqual([3])
   })
 
@@ -419,7 +462,7 @@ describe('Task 3b words', () => {
 
 describe('providerOptions (grouped provider picker)', () => {
   const cats = [
-    { key: 'code', label: 'Code and builds' },
+    { key: 'code', label: 'Code and deploys' },
     { key: 'ai', label: 'AI' },
     { key: 'other', label: 'Other' }
   ]
@@ -439,8 +482,8 @@ describe('providerOptions (grouped provider picker)', () => {
       cats
     )
     expect(out.map((o) => `${o.group}:${o.label}`)).toEqual([
-      'Code and builds:GitHub',
-      'Code and builds:GitLab',
+      'Code and deploys:GitHub',
+      'Code and deploys:GitLab',
       'AI:Anthropic',
       'AI:OpenAI',
       'Erp:Acme ERP',

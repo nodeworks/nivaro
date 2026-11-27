@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub (phase 6, Task 18): an environment's Hub deploys name moves and shared upgrades,
@@ -187,7 +188,11 @@ describe('Environment row (Hub admin)', () => {
       if (/\/promotable$/.test(url)) return { data: { data: { promote: [], rollback: [] } } }
       throw { response: { status: 404, data: { code: 'NOT_FOUND' } } }
     })
-    wrap(<HubAppDetail appId={1} isAdmin userId='u1' onDeleted={() => {}} />)
+    wrap(
+      <MemoryRouter>
+        <HubAppDetail appId={1} isAdmin userId='u1' onDeleted={() => {}} />
+      </MemoryRouter>
+    )
     const table = await screen.findByRole('table')
     expect(await within(table).findByText('Shared · east')).toBeInTheDocument()
     expect(await within(table).findByText('Dedicated · Docker east')).toBeInTheDocument()
@@ -296,7 +301,11 @@ describe('A move on the environment row (design B4)', () => {
       if (/\/promotable$/.test(url)) return { data: { data: { promote: [], rollback: [] } } }
       throw { response: { status: 404, data: { code: 'NOT_FOUND' } } }
     })
-    wrap(<HubAppDetail appId={1} isAdmin userId='u1' onDeleted={() => {}} />)
+    wrap(
+      <MemoryRouter>
+        <HubAppDetail appId={1} isAdmin userId='u1' onDeleted={() => {}} />
+      </MemoryRouter>
+    )
     const table = await screen.findByRole('table')
     const chip = await within(table).findByRole('button', {
       name: 'Move of staging: Waiting for you. Open it'

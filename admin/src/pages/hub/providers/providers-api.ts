@@ -94,6 +94,12 @@ export interface ResourceTypeInfo {
   sends?: boolean
   /** Task 33: 'email' = a send mails the route's audience (owners, else Hub administrators). */
   audience?: 'email' | null
+  /**
+   * What this kind of thing is for (a key of ProviderTypes.categories): its own job where that
+   * differs from its provider's (an RDS instance is 'data' on a 'hosting' account). Absent on an
+   * older Hub = the provider's group.
+   */
+  category?: string
 }
 
 export interface ProviderInfo {
@@ -1274,24 +1280,33 @@ export function resourceName(r: HubResource): string {
   return r.name ?? r.observed?.name ?? r.external_id ?? `#${r.id}`
 }
 
-/** Resources grouped by provider, providers in label order, resources by name within. */
-export function groupByProvider(
+/**
+ * Resources grouped by what they are for (ProviderTypes.categories order, unknown groups after,
+ * "Other" last), by name within. The one grouping an app's page and every home use.
+ */
+export function groupByCategory(
   rows: HubResource[],
-  labelOf: (provider: string) => string
-): Array<{ provider: string; label: string; rows: HubResource[] }> {
+  t: ProviderTypes | undefined
+): Array<{ key: string; label: string; rows: HubResource[] }> {
+  const idx = typeIndex(t)
+  const cats = t?.categories ?? []
+  const rank = (k: string) => {
+    if (k === 'other') return Number.MAX_SAFE_INTEGER
+    const i = cats.findIndex((c) => c.key === k)
+    return i < 0 ? cats.length : i
+  }
   const map = new Map<string, HubResource[]>()
   for (const r of rows) {
-    const list = map.get(r.provider) ?? []
-    list.push(r)
-    map.set(r.provider, list)
+    const k = idx.categoryOf(r.type, r.provider)
+    map.set(k, [...(map.get(k) ?? []), r])
   }
   return [...map.entries()]
-    .map(([provider, list]) => ({
-      provider,
-      label: labelOf(provider),
+    .map(([key, list]) => ({
+      key,
+      label: cats.find((c) => c.key === key)?.label ?? (key === 'other' ? 'Other' : titleCase(key)),
       rows: [...list].sort((a, b) => resourceName(a).localeCompare(resourceName(b)))
     }))
-    .sort((a, b) => a.label.localeCompare(b.label))
+    .sort((a, b) => rank(a.key) - rank(b.key) || a.label.localeCompare(b.label))
 }
 
 /** Lookups over a provider-types answer. */
@@ -1302,7 +1317,13 @@ export function typeIndex(t: ProviderTypes | undefined) {
     providers.set(p.key, p)
     for (const ty of p.types) types.set(ty.key, ty)
   }
+  const categoryOf = (typeKey: string, provider?: string) =>
+    types.get(typeKey)?.category ??
+    providers.get(provider ?? typeKey.split('.')[0] ?? '')?.category ??
+    'other'
   return {
+    /** The group a resource type belongs to (its own, else its provider's, else 'other'). */
+    categoryOf,
     type: (key: string) => types.get(key) ?? null,
     provider: (key: string) => providers.get(key) ?? null,
     providerLabel: (key: string) => providers.get(key)?.label ?? key,

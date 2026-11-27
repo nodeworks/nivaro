@@ -23,7 +23,6 @@ import {
   ToneChip
 } from '../hub-parts'
 import { LinkedChange, OpenChanges } from './ChangeView'
-import { NotifyRoutesCard } from './NotifyRoutes'
 import {
   adoptResource,
   CONNECTION_STATUS_COPY,
@@ -50,6 +49,7 @@ import {
   statusWords,
   testConnection
 } from './providers-api'
+import { SharedInfra } from './SharedInfra'
 
 /**
  * Connections (Hub tab, administrators): one authenticated account per provider — a GitHub
@@ -65,8 +65,8 @@ export default function HubConnectionsTab() {
     return (
       <div className='flex flex-1 flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center dark:bg-background'>
         <p className='m-0 max-w-[48ch] text-[13px] text-slate-600 dark:text-muted-foreground'>
-          Only administrators manage provider connections. Your app’s outside resources are on its
-          page, under each environment.
+          Only administrators manage outside accounts. Your app’s outside resources are on its page,
+          under each environment.
         </p>
         <div className='w-full max-w-3xl text-left'>
           <LinkedChange isAdmin={false} />
@@ -96,12 +96,13 @@ export function HubConnections() {
       <HubToolbar
         description={
           <>
-            A connection is one account at a provider the Hub may change things in for your apps.
-            Each app is allowed the connections its owners may use, on the app’s page.
+            Every account at an outside provider the Hub may change things in, in one list. Each
+            kind also shows on its own page (DNS providers on Domains, database providers on
+            Databases…), and each app is allowed the accounts its owners may use on the app’s page.
             {connections.data && (
               <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
                 {' '}
-                {full.length} {full.length === 1 ? 'connection' : 'connections'}.
+                {full.length} {full.length === 1 ? 'account' : 'accounts'}.
               </span>
             )}
           </>
@@ -114,7 +115,7 @@ export function HubConnections() {
             disabled={!types.data || noProviders}
             onClick={() => setPicked('new')}
           >
-            <Plus className='h-3.5 w-3.5' aria-hidden /> New connection
+            <Plus className='h-3.5 w-3.5' aria-hidden /> Connect an account
           </button>
         }
       />
@@ -200,14 +201,14 @@ export function HubConnections() {
             />
           ) : null}
 
-          <NotifyRoutesCard />
+          <SharedInfra embedded />
         </div>
       </div>
     </section>
   )
 }
 
-function ConnectionCard({
+export function ConnectionCard({
   connection: c,
   active,
   onSelect
@@ -701,7 +702,7 @@ function TestResult({
  * What the connection's account holds that the Hub does not manage, one kind at a time. Adopt
  * binds one to an app's environment (or to shared infrastructure) without changing it.
  */
-function UnmanagedCard({
+export function UnmanagedCard({
   connection,
   provider
 }: {

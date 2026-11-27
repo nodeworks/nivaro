@@ -13,6 +13,7 @@ import { cn, formatDateTime } from '@/lib/utils'
 import { HubCostsNow } from '../costs/HubCostsNow'
 import { hubToast } from '../hub-api'
 import { Field, ghostButton, SectionCard, segmentButton, segmentGroup } from '../hub-parts'
+import { ProviderHome } from '../providers/ProviderHome'
 import HubOutsideSpend from './HubOutsideSpend'
 import {
   type AppCost,
@@ -34,6 +35,8 @@ import {
  * against budgets and Billed) for app owners and Hub administrators; Chargeback (the rate-card
  * showback per department and owner) for administrators.
  */
+const COSTS = ['costs']
+
 export default function HubCosts() {
   const { user } = useAuth()
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
@@ -83,6 +86,8 @@ export default function HubCosts() {
           <HubCostsNow isAdmin={isAdmin} />
           {/* Task 43: what the providers billed, beside the live figures (admins, as Chargeback). */}
           {isAdmin ? <HubOutsideSpend /> : null}
+          {/* Budgets and spend limits held at providers: the same kind, so the same page. */}
+          <ProviderHome groups={COSTS} isAdmin={isAdmin} idPrefix='hub-home-costs' />
         </div>
       </div>
     </div>

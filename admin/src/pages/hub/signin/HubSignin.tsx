@@ -8,6 +8,8 @@ import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime } from '@/lib/utils'
 import { hubToast } from '../hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard } from '../hub-parts'
+import { LinkedChange } from '../providers/ChangeView'
+import { ProviderHome } from '../providers/ProviderHome'
 import {
   removeSigningKey,
   rotateSigningKey,
@@ -52,6 +54,8 @@ function CopyValue({ label, value }: { label: string; value: string }) {
  * Sign-in (Apps hub tab): the Hub's issuer, the value every app sets as HUB_IDP_AUDIENCE, the
  * signing keys (administrators rotate them) and, per app, its mode and clients.
  */
+const IDENTITY = ['identity']
+
 export default function HubSignin() {
   const { user } = useAuth()
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
@@ -60,6 +64,7 @@ export default function HubSignin() {
 
   return (
     <div className='relative flex-1 space-y-5 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
+      <LinkedChange isAdmin={isAdmin} />
       <SectionCard
         title='Sign in through the Hub'
         description='Apps in Via the Hub mode send people here; the Hub signs them in with Microsoft and hands them back.'
@@ -165,6 +170,8 @@ export default function HubSignin() {
           Open an app under Apps to switch its mode or create its sign-in clients.
         </p>
       </SectionCard>
+
+      <ProviderHome groups={IDENTITY} isAdmin={isAdmin} idPrefix='hub-home-identity' />
     </div>
   )
 }

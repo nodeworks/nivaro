@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Nivaro Hub phase 7: the Sign-in tab. Hub administrators rotate signing keys; owners do not
@@ -89,6 +90,11 @@ function wire(admin: boolean, withNext = false) {
           ]
         }
       }
+    // The identity-provider half of the page (ProviderHome): nothing connected here.
+    if (url === '/hub/provider-types')
+      return { data: { data: { risk_flags: [], categories: [], providers: [] } } }
+    if (url === '/hub/connections' || url === '/hub/resources' || url === '/hub/apps')
+      return { data: { data: [] } }
     throw new Error(`unexpected GET ${url}`)
   })
   h.post.mockResolvedValue({ data: { data: { kid: 'k3', signs_from: '2026-11-21T10:06:00Z' } } })
@@ -98,9 +104,11 @@ function wire(admin: boolean, withNext = false) {
 function mount() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <QueryClientProvider client={qc}>
-      <HubSignin />
-    </QueryClientProvider>
+    <MemoryRouter>
+      <QueryClientProvider client={qc}>
+        <HubSignin />
+      </QueryClientProvider>
+    </MemoryRouter>
   )
 }
 

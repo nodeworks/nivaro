@@ -7,7 +7,6 @@ import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useAuth } from '@/lib/auth'
 import { fetchHubApp, fetchHubApps, hubKeys } from '../hub-api'
 import { ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import { LinkedChange, OpenChanges } from './ChangeView'
@@ -29,32 +28,19 @@ import { ResourceForm } from './ResourceForm'
 import { PlanNow, ResourceRow, type RowAction, sameAction } from './ResourcesPanel'
 
 /**
- * Shared infrastructure (Hub tab, administrators): what belongs to a connection rather than to one
- * app — a VPC and its subnets, a Route 53 hosted zone, an organisation setting. Each shows which
- * app resources use it; deleting one that is still used is refused (SHARED_IN_USE, never
+ * Shared resources (administrators): what belongs to a provider account rather than to one app —
+ * a VPC and its subnets, a Route 53 hosted zone, an organisation setting. Each shows which app
+ * resources use it; deleting one that is still used is refused (SHARED_IN_USE, never
  * overridable), and the "used by" count says so before anyone plans it.
+ *
+ * It has no page of its own any more: each kind shows in its home (ProviderHome: zones on
+ * Domains, networks on Cloud accounts…), and the whole list, account by account, is the second
+ * half of Outside accounts (`embedded`). /hub/shared-infra redirects there.
  */
-export default function SharedInfraTab() {
-  const { user } = useAuth()
-  const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
-  if (!isAdmin)
-    return (
-      <div className='flex flex-1 flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center dark:bg-background'>
-        <p className='m-0 max-w-[48ch] text-[13px] text-slate-600 dark:text-muted-foreground'>
-          Shared infrastructure is managed by Hub administrators.
-        </p>
-        <div className='w-full max-w-3xl text-left'>
-          <LinkedChange isAdmin={false} />
-        </div>
-      </div>
-    )
-  return <SharedInfra />
-}
-
 const SHARED = { scope: 'shared' as const }
 const ALL = {}
 
-export function SharedInfra() {
+export function SharedInfra({ embedded = false }: { embedded?: boolean } = {}) {
   const connections = useQuery({ queryKey: providerKeys.connections(), queryFn: fetchConnections })
   const types = useQuery({ queryKey: providerKeys.types(), queryFn: fetchProviderTypes })
   const shared = useQuery({
@@ -77,6 +63,54 @@ export function SharedInfra() {
   const pending = connections.isPending || shared.isPending || types.isPending
   const error = connections.error ?? shared.error ?? types.error
 
+  const groups = pending ? (
+    <div className='space-y-3'>
+      <Skeleton className='h-24 w-full' />
+      <Skeleton className='h-24 w-full' />
+    </div>
+  ) : error ? (
+    <QueryErrorState
+      error={error}
+      what='the shared resources'
+      onRetry={() => {
+        void connections.refetch()
+        void shared.refetch()
+        void types.refetch()
+      }}
+    />
+  ) : (
+    relevant.map((c) => (
+      <ConnectionGroup
+        key={c.id}
+        connection={c}
+        rows={(shared.data ?? []).filter((r) => r.connection_id === c.id)}
+        all={all.data ?? []}
+        types={(idx.provider(c.provider)?.types ?? []).filter((t) => t.scope === 'shared')}
+        typeOf={idx.type}
+      />
+    ))
+  )
+  if (embedded)
+    return (
+      <section aria-labelledby='hub-shared-resources-title' className='space-y-4'>
+        <div>
+          <h3
+            id='hub-shared-resources-title'
+            className='m-0 text-[13px] font-semibold text-slate-900 dark:text-foreground'
+          >
+            Shared between apps
+          </h3>
+          <p className='m-0 mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
+            Networks, zones and settings that belong to an account, not to one app. App resources
+            point at them; one in use cannot be deleted.
+            {!pending && !error && relevant.length === 0
+              ? ' None yet: they come with an account whose provider has them.'
+              : ''}
+          </p>
+        </div>
+        {groups}
+      </section>
+    )
   return (
     <section aria-label='Shared infrastructure' className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar
@@ -148,7 +182,7 @@ export function SharedInfra() {
   )
 }
 
-function ConnectionGroup({
+export function ConnectionGroup({
   connection,
   rows,
   all,

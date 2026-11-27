@@ -103,16 +103,22 @@ const t = (key: string, label: string) => ({
 })
 const types = {
   risk_flags: [],
+  categories: [
+    { key: 'code', label: 'Code and deploys' },
+    { key: 'hosting', label: 'Hosting and servers' }
+  ],
   providers: [
     {
       key: 'aws',
       label: 'AWS',
+      category: 'hosting',
       connection: { fields: [] },
       types: [t('aws.s3_bucket', 'S3 bucket'), t('aws.security_group', 'Security group')]
     },
     {
       key: 'github',
       label: 'GitHub',
+      category: 'code',
       connection: { fields: [] },
       types: [t('github.repository', 'Repository')]
     }
@@ -171,7 +177,7 @@ function mount(canDeploy = true, node: React.ReactNode = null) {
 afterEach(() => vi.clearAllMocks())
 
 describe('ResourcesPanel', () => {
-  it('groups by provider with drift and health chips', async () => {
+  it('groups by what things are for, with drift and health chips', async () => {
     routes(resources, [conn])
     mount()
     const toggle = await screen.findByRole('button', { name: /Outside resources/ })
@@ -179,17 +185,19 @@ describe('ResourcesPanel', () => {
     expect(toggle.textContent).toContain('1 drifted')
     expect(toggle.textContent).toContain('1 gone')
     fireEvent.click(toggle)
-    const aws = await screen.findByRole('region', { name: 'AWS' })
-    const gh = screen.getByRole('region', { name: 'GitHub' })
+    const aws = await screen.findByRole('region', { name: 'Hosting and servers' })
+    const gh = screen.getByRole('region', { name: 'Code and deploys' })
+    // The row names its provider now that the heading names the kind.
+    expect(within(aws).getAllByText(/· AWS$/).length).toBeGreaterThan(0)
     expect(within(aws).getByText('shop-uploads')).toBeTruthy()
     expect(within(aws).getByText('Drifted')).toBeTruthy()
     expect(within(aws).getByText('available')).toBeTruthy()
     expect(within(aws).getByText('Gone')).toBeTruthy()
     expect(within(gh).getByText('In sync')).toBeTruthy()
     expect(within(gh).getByText('active')).toBeTruthy()
-    // AWS before GitHub (label order).
+    // Code before Hosting (the Hub's own order of homes).
     const groups = screen.getAllByRole('region').map((r) => r.getAttribute('aria-label'))
-    expect(groups).toEqual(['AWS', 'GitHub'])
+    expect(groups).toEqual(['Code and deploys', 'Hosting and servers'])
   })
 
   it('hides itself with no resources and nothing the person may add', async () => {
@@ -256,7 +264,7 @@ describe('ResourcesPanel', () => {
     h.post.mockResolvedValue({ data: { data: { resourceId: 9, changeId: 61 } } })
     mount()
     fireEvent.click(await screen.findByRole('button', { name: /Outside resources/ }))
-    const aws = await screen.findByRole('region', { name: 'AWS' })
+    const aws = await screen.findByRole('region', { name: 'Hosting and servers' })
     expect(within(aws).getAllByText('Create failed').length).toBe(2)
     expect(within(aws).queryByText('Not checked yet')).toBeNull()
     // A row that was never made has no change or delete of its own.
@@ -279,7 +287,7 @@ describe('ResourcesPanel', () => {
     routes(resources, [conn])
     mount(false)
     fireEvent.click(await screen.findByRole('button', { name: /Outside resources/ }))
-    await screen.findByRole('region', { name: 'AWS' })
+    await screen.findByRole('region', { name: 'Hosting and servers' })
     expect(screen.queryByRole('button', { name: /Re-apply/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /Delete/ })).toBeNull()
     expect(screen.queryByRole('button', { name: /Add resource/ })).toBeNull()

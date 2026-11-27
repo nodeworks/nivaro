@@ -1,6 +1,6 @@
 import { type ErrorDescription, ErrorNotice, QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, Database, Plus, Server } from 'lucide-react'
+import { ChevronLeft, Cloud, Database, Plus, Server } from 'lucide-react'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { Button } from '@/components/ui/button'
@@ -8,6 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { countLabel, ghostButton, ListPaneHeader, listPaneClass } from '../hub-parts'
+import { LinkedChange } from '../providers/ChangeView'
+import { ProviderHome } from '../providers/ProviderHome'
 import { fetchResources, providerKeys } from '../providers/providers-api'
 import { resourceLabel } from '../providers/ResourcePickers'
 import { AdoptDatabaseForm, DatabaseDetail, DbStatusChip, environmentWords } from './DatabaseDetail'
@@ -28,6 +30,8 @@ import {
  * recorded on them and which app environment uses each. Owners reach their own database only
  * from the app's creation panel, never from here.
  */
+const DATA = ['data']
+
 export default function HubDatabases() {
   const { user } = useAuth()
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
@@ -64,16 +68,22 @@ function DatabasesAdmin() {
   const serverId = Number(params.get('server')) || null
   const dbId = Number(params.get('db')) || null
   const creating = params.get('new') // 'server' | 'adopt' | 'sqlite'
+  // The provider half (Neon, RDS, Azure SQL…): the right side while nothing is picked; on a
+  // phone, where the two sides take turns, its own row opens it.
+  const atProviders = params.get('at') === 'providers'
   const show = (next: {
     server?: number | null
     db?: number | null
     create?: 'server' | 'adopt' | 'sqlite'
+    providers?: boolean
   }) =>
     setParams((p) => {
       const out = new URLSearchParams(p)
       out.delete('server')
       out.delete('db')
       out.delete('new')
+      out.delete('at')
+      if (next.providers) out.set('at', 'providers')
       if (next.server) out.set('server', String(next.server))
       if (next.db) out.set('db', String(next.db))
       if (next.create) out.set('new', next.create)
@@ -82,11 +92,26 @@ function DatabasesAdmin() {
   if (status(servers.error) === 403 || status(dbs.error) === 403) return <AdminsOnly />
 
   const currentServer = servers.data?.find((s) => s.id === serverId) ?? null
-  const detailOpen = !!creating || currentServer != null || dbId != null
+  const picked = !!creating || currentServer != null || dbId != null
+  const detailOpen = picked || atProviders
 
   return (
     <div className='flex flex-1 min-h-0 overflow-hidden'>
       <aside className={cn(listPaneClass, detailOpen ? 'hidden' : 'flex')}>
+        <div className='border-b border-slate-200 p-2 md:hidden dark:border-border'>
+          <Row active={false} onClick={() => show({ providers: true })}>
+            <span className='flex items-center gap-1.5 text-[13px] font-medium text-slate-900 dark:text-foreground'>
+              <Cloud
+                className='h-3.5 w-3.5 shrink-0 text-slate-400 dark:text-muted-foreground'
+                aria-hidden
+              />
+              At providers
+            </span>
+            <span className='mt-0.5 block text-[11px] text-slate-500 dark:text-muted-foreground'>
+              Neon, RDS, Azure SQL and caches, with their accounts
+            </span>
+          </Row>
+        </div>
         <ListHeader
           label={countLabel(servers.data?.length, 'server', 'servers')}
           action='New server'
@@ -216,17 +241,14 @@ function DatabasesAdmin() {
         ) : dbId ? (
           <DatabaseDetail key={dbId} id={dbId} onDeleted={() => show({})} />
         ) : (
-          <div className='flex h-full flex-col items-center justify-center p-8 text-center'>
-            <div className='flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 dark:bg-muted'>
-              <Database className='h-5 w-5 text-slate-400 dark:text-muted-foreground' aria-hidden />
-            </div>
-            <p className='mt-3 mb-0 text-[13px] font-medium text-slate-700 dark:text-foreground'>
-              Pick a server or a database
+          <div className='space-y-4 p-4 sm:p-6'>
+            <LinkedChange isAdmin />
+            <p className='m-0 max-w-[72ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
+              Pick a server or a database on the left: servers are where new apps get their
+              database, and a database shows its last check. Databases and caches held at a provider
+              are below, with the accounts they are in.
             </p>
-            <p className='m-0 mt-1 max-w-[44ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
-              Servers are where new apps get their database. A database shows its last check and,
-              while a DBA is making it, the checklist to hand over.
-            </p>
+            <ProviderHome groups={DATA} isAdmin idPrefix='hub-home-data' />
           </div>
         )}
       </div>

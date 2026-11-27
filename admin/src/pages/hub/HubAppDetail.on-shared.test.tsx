@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Phase 6 (parked C3): an app owner cannot read placements, so the app read says which
@@ -86,7 +87,9 @@ function renderAsOwner() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <HubAppDetail appId={1} isAdmin={false} userId='u1' onDeleted={() => {}} />
+      <MemoryRouter>
+        <HubAppDetail appId={1} isAdmin={false} userId='u1' onDeleted={() => {}} />
+      </MemoryRouter>
     </QueryClientProvider>
   )
 }

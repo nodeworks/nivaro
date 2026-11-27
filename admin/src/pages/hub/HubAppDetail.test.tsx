@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { toast } from 'sonner'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -122,7 +123,9 @@ function renderDetail(isAdmin = false, userId?: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <HubAppDetail appId={1} isAdmin={isAdmin} userId={userId} onDeleted={() => {}} />
+      <MemoryRouter>
+        <HubAppDetail appId={1} isAdmin={isAdmin} userId={userId} onDeleted={() => {}} />
+      </MemoryRouter>
     </QueryClientProvider>
   )
 }
@@ -205,7 +208,9 @@ describe('P29: the environment editor', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     render(
       <QueryClientProvider client={qc}>
-        <HubAppDetail appId={1} isAdmin onDeleted={() => {}} />
+        <MemoryRouter>
+          <HubAppDetail appId={1} isAdmin onDeleted={() => {}} />
+        </MemoryRouter>
       </QueryClientProvider>
     )
     fireEvent.click((await screen.findAllByRole('button', { name: 'Edit production' }))[0])

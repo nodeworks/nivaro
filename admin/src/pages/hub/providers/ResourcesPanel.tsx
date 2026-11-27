@@ -1,7 +1,8 @@
 import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, ExternalLink, KeyRound, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { ProductionGuard } from '@/components/hub-brand/HubBits'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -22,7 +23,7 @@ import {
   fetchConnections,
   fetchProviderTypes,
   fetchResources,
-  groupByProvider,
+  groupByCategory,
   type HubResource,
   healthTone,
   type PlanAction,
@@ -42,7 +43,8 @@ import { ResourceForm } from './ResourceForm'
 
 /**
  * Resources (one per environment row of an app): what this environment owns outside Nivaro —
- * a GitHub repository, an S3 bucket, a Vercel project — grouped by provider, each with whether
+ * a GitHub repository, an S3 bucket, a Vercel project — grouped by what it is for (the Hub's
+ * homes: Code and deploys, Databases, Domains…), each with whether
  * the provider still has it as the Hub set it (drift) and the provider's own state (health).
  * Owners act through the connections an administrator allowed for their app; nothing changes
  * at the provider without a plan they read and start in the change view.
@@ -76,7 +78,20 @@ export function ResourcesPanel({
     queryFn: () => fetchAppConnections(app.id),
     retry: false
   })
-  const [open, setOpen] = useState(false)
+  // `?resources=<environment id>` opens this environment's panel and brings it into view: the
+  // link every Hub home and the app's own summary use to get to where a change is planned.
+  const [params] = useSearchParams()
+  const wanted = params.get('resources') === String(env.id)
+  const [open, setOpen] = useState(wanted)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const ready = !resources.isPending && !allowed.isPending
+  useEffect(() => {
+    if (!wanted || !ready) return
+    setOpen(true)
+    const box = boxRef.current
+    // Only the copy this screen size shows (the table row, or the phone card).
+    if (box && box.offsetParent !== null) box.scrollIntoView?.({ block: 'nearest' })
+  }, [wanted, ready])
 
   if (resources.isPending || allowed.isPending) return null
   const rows = (resources.data ?? []).filter((r) => r.environment_id === env.id && !r.deleted_at)
@@ -91,7 +106,10 @@ export function ResourcesPanel({
   const gone = rows.filter((r) => resourceState(r) === 'gone').length
   const panelId = `hub-res-${env.id}${idPrefix}`
   const body = (
-    <div className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
+    <div
+      ref={boxRef}
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+    >
       <button
         type='button'
         aria-expanded={open}
@@ -190,7 +208,7 @@ function PanelBody({
   const idx = typeIndex(types.data)
   const [action, setAction] = useState<RowAction>(null)
   const [showChanges, setShowChanges] = useState(false)
-  const groups = groupByProvider(rows, idx.providerLabel)
+  const groups = groupByCategory(rows, types.data)
   const guard = (child: ReactNode) => (
     <ProductionGuard envKey={env.key} what='change'>
       {child}
@@ -209,7 +227,7 @@ function PanelBody({
         </p>
       ) : (
         groups.map((g) => (
-          <section key={g.provider} aria-label={g.label} className='space-y-1'>
+          <section key={g.key} aria-label={g.label} className='space-y-1'>
             <h6 className='m-0 text-[11px] font-semibold text-slate-600 dark:text-muted-foreground'>
               {g.label}
               <span className='ml-1.5 font-normal tabular-nums'>{g.rows.length}</span>
@@ -224,6 +242,7 @@ function PanelBody({
                     active={isOpen(r) ? action : null}
                     onAction={(a) => setAction(isOpen(r) && sameAction(action, a) ? null : a)}
                     showOutputs
+                    providerLabel={idx.providerLabel(r.provider)}
                   />
                   {isOpen(r) && action?.kind === 'edit' && idx.type(r.type) && (
                     <div className='mt-2'>
@@ -338,7 +357,8 @@ export function ResourceRow({
   onAction,
   extra,
   deleteBlocked,
-  showOutputs
+  showOutputs,
+  providerLabel
 }: {
   resource: HubResource
   type: ResourceTypeInfo | null
@@ -351,6 +371,8 @@ export function ResourceRow({
   deleteBlocked?: string
   /** Offer the Outputs button when the type hands out values (Task 13). */
   showOutputs?: boolean
+  /** Named after the kind where the list is not grouped by provider ("Bucket · AWS"). */
+  providerLabel?: string
 }) {
   const state = resourceState(r)
   const copy = RESOURCE_STATE_COPY[state]
@@ -397,6 +419,7 @@ export function ResourceRow({
           </span>
           <span className='shrink-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
             {type?.label ?? r.type}
+            {providerLabel ? ` · ${providerLabel}` : ''}
           </span>
         </p>
         {r.external_id && r.external_id !== name && (
