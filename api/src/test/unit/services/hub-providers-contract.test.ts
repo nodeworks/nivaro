@@ -549,6 +549,10 @@ describe('providerFetch refuses dot segments (path traversal by id)', () => {
     expect(hasDotSegment('https://api.github.com/repos/a/b/environments/%2E')).toBe(true)
     expect(hasDotSegment('https://api.github.com/repos/a/b/x/..%2f..')).toBe(true)
     expect(hasDotSegment('https://api.github.com/repos/a/b/x/%zz')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/environments/.\t.')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/environments/%2e\n%2e')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/environments\\..\\')).toBe(true)
+    expect(hasDotSegment('https://api.github.com/repos/a/b/x y')).toBe(true)
     expect(hasDotSegment('https://gitlab.example.com/api/v4/projects/group%2Fproject')).toBe(false)
     expect(hasDotSegment('https://api.github.com/repos/a/b/environments/prod?x=..')).toBe(false)
     expect(hasDotSegment('https://api.github.com/repos/a/b/contents/.github/CODEOWNERS')).toBe(

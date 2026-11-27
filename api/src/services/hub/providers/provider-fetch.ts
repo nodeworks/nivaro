@@ -75,6 +75,9 @@ export function hostAllowed(host: string, patterns: readonly string[]): boolean 
  * raw string, before any parsing, so no adapter can be talked into another path by an id.
  */
 export function hasDotSegment(raw: string): boolean {
+  // The URL parser drops tab/CR/LF anywhere and reads `\\` as `/` in https URLs, so `.\t.` or
+  // `\\..\\` would become `..` after this check. No legitimate provider URL holds either raw.
+  if (/[\u0000-\u0020\u007f\\]/.test(raw)) return true
   const afterScheme = raw.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, '')
   const path = afterScheme.split(/[?#]/, 1)[0] ?? ''
   for (const seg of path.split('/')) {
@@ -94,7 +97,7 @@ function checkTarget(raw: string, patterns: readonly string[]): URL {
   if (hasDotSegment(raw))
     throw new ProviderFetchError(
       'HOST_NOT_ALLOWED',
-      'Provider addresses may not hold . or .. path parts.'
+      'Provider addresses may not hold whitespace, control characters, backslashes, or . / .. path parts.'
     )
   try {
     url = new URL(raw)
