@@ -1,0 +1,15 @@
+{
+  "id": 1001,
+  "name": "web-app",
+  "path": "web-app",
+  "path_with_namespace": "acme/web-app",
+  "namespace": {
+    "id": 100,
+    "full_path": "acme"
+  },
+  "description": "The web app",
+  "visibility": "private",
+  "default_branch": "main",
+  "archived": true,
+  "import_status": "none"
+}

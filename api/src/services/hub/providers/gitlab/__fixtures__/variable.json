@@ -1,0 +1,9 @@
+{
+  "key": "API_BASE",
+  "value": "test-secret-value-seen-by-api",
+  "variable_type": "env_var",
+  "protected": true,
+  "masked": true,
+  "raw": false,
+  "environment_scope": "*"
+}

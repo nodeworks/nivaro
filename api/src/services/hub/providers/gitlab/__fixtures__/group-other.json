@@ -1,0 +1,8 @@
+{
+  "id": 200,
+  "name": "Elsewhere",
+  "path": "elsewhere",
+  "full_path": "elsewhere",
+  "visibility": "private",
+  "web_url": "https://gitlab.test.example/groups/elsewhere"
+}

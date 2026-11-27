@@ -1,0 +1,8 @@
+[
+  {
+    "id": 61,
+    "title": "ci key",
+    "key": "ssh-ed25519 AAAATESTKEYAAAA comment",
+    "can_push": false
+  }
+]

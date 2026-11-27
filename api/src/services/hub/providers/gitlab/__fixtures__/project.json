@@ -1,0 +1,16 @@
+{
+  "id": 1001,
+  "name": "web-app",
+  "path": "web-app",
+  "path_with_namespace": "acme/web-app",
+  "namespace": {
+    "id": 100,
+    "full_path": "acme"
+  },
+  "description": "The web app",
+  "visibility": "private",
+  "default_branch": "main",
+  "archived": false,
+  "import_status": "none",
+  "web_url": "https://gitlab.test.example/acme/web-app"
+}

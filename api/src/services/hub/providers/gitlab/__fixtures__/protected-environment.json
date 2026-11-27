@@ -1,0 +1,16 @@
+{
+  "name": "production",
+  "deploy_access_levels": [
+    {
+      "id": 41,
+      "access_level": 40
+    }
+  ],
+  "approval_rules": [
+    {
+      "id": 42,
+      "access_level": 40,
+      "required_approvals": 2
+    }
+  ]
+}
