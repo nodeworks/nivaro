@@ -209,6 +209,7 @@ export const KNOWN_ROUTE_SEGMENTS: readonly string[] = [
   'setup',
   'setup-checklist',
   'shared',
+  'shared-infra',
   'signin',
   'sla-rules',
   'smoke',
