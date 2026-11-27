@@ -1410,10 +1410,10 @@ describe('github full: anything not provably a tightening is admin-only (securit
     expect(flagged(k, { field: 'required_reviews', from: 1, to: 2 })).toEqual([])
   })
 
-  it('repo files: only README*, docs/** and *.md outside .github/ skip the admin gate', () => {
+  it('repo files: only root README/CHANGELOG and doc files under docs/ skip the admin gate', () => {
     const k = spec('github.repo_file')
     const risk = (path: string) => k.risk(kind('create'), desired('x', { path }))
-    for (const p of ['README', 'README.md', 'docs/guide.md', 'docs/img/a.txt', 'notes/todo.md'])
+    for (const p of ['README', 'README.md', 'docs/guide.md', 'docs/img/a.txt'])
       expect(risk(p), p).toEqual([])
     for (const p of [
       '.github/workflows/ci.yml',
@@ -1429,9 +1429,34 @@ describe('github full: anything not provably a tightening is admin-only (securit
       'package.json',
       'CODEOWNERS',
       'src/index.ts',
-      'Makefile'
+      'Makefile',
+      'notes/todo.md'
     ])
       expect(risk(p), p).toEqual(ADMIN)
     expect(k.risk(kind('delete'), null)).toContain('public_exposure')
+  })
+})
+
+describe('repo file allow-list (security review)', () => {
+  it('lets only documentation through without an administrator', async () => {
+    const { isAllowListedPath } = await import(
+      '../../../services/hub/providers/github/weakening.js'
+    )
+    for (const ok of ['README.md', 'README', 'CHANGELOG.md', 'docs/guide.md', 'docs/img/a.png'])
+      expect(isAllowListedPath(ok), ok).toBe(true)
+    for (const no of [
+      '.github/workflows/ci.yml',
+      '.vscode/tasks.json',
+      '.husky/pre-commit.md',
+      'docs/run.sh',
+      'docs/setup.yml',
+      'docs/build.js',
+      'CLAUDE.md',
+      'docs/AGENTS.md',
+      'src/notes.md',
+      'docs/../package.json',
+      'package.json'
+    ])
+      expect(isAllowListedPath(no), no).toBe(false)
   })
 })

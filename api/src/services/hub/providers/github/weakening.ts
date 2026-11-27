@@ -93,12 +93,13 @@ export function branchProtectionChangeIsTightening(c: FieldChange): boolean {
 /** Paths a repository file may be written to by an owner without a Hub administrator. */
 export function isAllowListedPath(path: string): boolean {
   const p = path.replace(/^\/+/, '')
-  if (/(^|\/)\.github(\/|$)/i.test(p) || /(^|\/)\.\.(\/|$)/.test(p)) return false
-  if (/^README[^/]*$/i.test(p)) return true
-  // A file that runs or decides reviews is never allow-listed, wherever it sits.
+  // Any dot directory (.github, .vscode, .husky, .cursor…) or a step up is never allow-listed.
+  if (/(^|\/)\.[^/]+\//.test(p) || /(^|\/)\.\.(\/|$)/.test(p)) return false
   const base = p.split('/').pop() ?? ''
-  if (/^(CODEOWNERS|Dockerfile.*|action\.ya?ml|package\.json)$/i.test(base)) return false
-  if (/\.(sh|ya?ml)$/i.test(base)) return false
-  if (/^docs\//i.test(p)) return true
-  return /\.md$/i.test(p)
+  // Instruction files coding agents read are code by another name.
+  if (/^(CLAUDE|AGENTS|GEMINI)\.md$/i.test(base) || /^copilot-instructions\.md$/i.test(base))
+    return false
+  // Documentation only, by extension: README/CHANGELOG at the root, and doc files under docs/.
+  if (/^(README|CHANGELOG)(\.(md|txt|rst))?$/i.test(p)) return true
+  return /^docs\/.+\.(md|mdx|txt|rst|png|jpe?g|gif|svg|webp)$/i.test(p)
 }

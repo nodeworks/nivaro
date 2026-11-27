@@ -222,7 +222,8 @@ const BASE_TYPES: ResourceTypeSpec[] = [
     reversible: true,
     refs: repoRefs,
     risk(op) {
-      if (op.kind === 'delete') return ['destructive']
+      // Removing protection is the widest weakening there is.
+      if (op.kind === 'delete') return ['destructive', 'public_exposure']
       // A change that is not provably a tightening needs a Hub administrator.
       if (op.kind !== 'update' && op.kind !== 'replace') return []
       return op.changes.every(branchProtectionChangeIsTightening) ? [] : ['public_exposure']

@@ -1218,7 +1218,10 @@ describe('github adapter: risk flags per type', () => {
       'data_loss'
     ])
     expect(spec('github.actions_variable').risk(op('delete'), null)).toEqual(['destructive'])
-    expect(spec('github.branch_protection').risk(op('delete'), null)).toEqual(['destructive'])
+    expect(spec('github.branch_protection').risk(op('delete'), null)).toEqual([
+      'destructive',
+      'public_exposure'
+    ])
   })
 
   it('a writable deploy key and a plain-http webhook are public exposure', () => {
