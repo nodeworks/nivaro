@@ -359,7 +359,7 @@ const same = (a: unknown, b: unknown): boolean => {
 
 const READ_ONLY_TYPES = new Set([PE])
 
-export function planAzure(desired: DesiredResource | null, observed: Observed | null): PlannedOp[] {
+function planInner(desired: DesiredResource | null, observed: Observed | null): PlannedOp[] {
   const type = desired?.type ?? observed?.type ?? ''
   const spec = AZURE_SPECS.find((s) => s.key === type)
   if (!spec) return []
@@ -395,7 +395,10 @@ export function planAzure(desired: DesiredResource | null, observed: Observed | 
       }
     ]
   }
-  const want = desired.fields
+  const want =
+    type === BUDGET
+      ? { ...desired.fields, app_tag: ownerTag(desired) ?? desired.fields.app_tag }
+      : desired.fields
   if (!observed) {
     return [
       {
@@ -445,6 +448,89 @@ export function planAzure(desired: DesiredResource | null, observed: Observed | 
       ...readOnlyData('This cannot be changed here.')
     }
   ]
+}
+
+const RESERVED_LOGINS = new Set([
+  'admin',
+  'administrator',
+  'sa',
+  'root',
+  'guest',
+  'dbo',
+  'public',
+  'sys',
+  'information_schema',
+  'azure_superuser',
+  'azuresu'
+])
+
+/** Why a SQL admin login is not acceptable (Azure's rule), or null. */
+export function loginProblem(login: unknown): string | null {
+  const s = typeof login === 'string' ? login : ''
+  if (!/^[A-Za-z][A-Za-z0-9_]{0,127}$/.test(s))
+    return 'The SQL admin login uses letters, digits and _, starts with a letter and has at most 128 characters.'
+  if (RESERVED_LOGINS.has(s.toLowerCase()))
+    return `${s} is a reserved name: choose another SQL admin login.`
+  return null
+}
+
+/** Why the database name a connection string names is not acceptable, or null. */
+export function databaseProblem(name: unknown): string | null {
+  try {
+    nameSeg(name, 'database', 'database name')
+  } catch {
+    return 'The database the connection string names is not a valid database name.'
+  }
+  return /[;="'\s]/.test(String(name)) ? 'The database name cannot hold ; = " \' or spaces.' : null
+}
+
+/** The app tag value a budget counts: always the owning app's own. */
+export function ownerTag(desired: {
+  tags?: Record<string, string>
+  appId?: number | null
+}): string | null {
+  const t = str(desired.tags?.['nivaro-hub:app'])
+  if (t) return t
+  return desired.appId != null ? String(desired.appId) : null
+}
+
+/** What is wrong with the wanted values that no other check catches (INVALID_FIELDS), or null. */
+export function fieldProblem(desired: DesiredResource): string | null {
+  const f = desired.fields
+  if (desired.type === BUDGET) {
+    const tag = ownerTag(desired)
+    if (!tag) return 'A budget belongs to an app: name the app it is for.'
+    const given = str(f.app_tag)
+    if (given && given !== tag)
+      return 'A budget counts only its own app’s spend: the app tag must be this app’s.'
+  }
+  if (desired.type === SRV) {
+    const db = str(f.app_database)
+    if (db) {
+      const p = databaseProblem(db)
+      if (p) return p
+    }
+    const login = str(f.sql_admin_login)
+    if (login && f.entra_only_auth === false) {
+      const p = loginProblem(login)
+      if (p) return p
+    }
+  }
+  return null
+}
+
+export function planAzure(desired: DesiredResource | null, observed: Observed | null): PlannedOp[] {
+  const ops = planInner(desired, observed)
+  const problem = desired ? fieldProblem(desired) : null
+  if (!problem) return ops
+  return ops.map((o) =>
+    o.kind === 'noop' || o.kind === 'delete'
+      ? o
+      : {
+          ...o,
+          data: { ...(o.data ?? {}), $blocker: { code: 'INVALID_FIELDS', message: problem } }
+        }
+  )
 }
 
 // ── Apply ──
@@ -615,13 +701,20 @@ async function applyGroup(
 
 const sqlPassword = () => `${randomBytes(18).toString('base64url')}aA1`
 
+/** ADO.NET value quoting: braces, with any `}` doubled. */
+const adoQuote = (v: string) => `{${v.replace(/}/g, '}}')}}`
+
 function connectionString(
   server: string,
   database: string,
   login: string,
   password: string
 ): string {
-  const pw = /[;"'=\s]/.test(password) ? `"${password.replace(/"/g, '""')}"` : password
+  const bad = databaseProblem(database) ?? loginProblem(login)
+  if (bad) throw new ProviderError('INVALID_FIELDS', bad)
+  if (!/^[a-z0-9.-]+$/i.test(server))
+    throw new ProviderError('INVALID_FIELDS', 'Azure answered a server address the Hub cannot use.')
+  const pw = /[;{}="'\s]/.test(password) ? adoQuote(password) : password
   return `Server=tcp:${server},1433;Initial Catalog=${database};Persist Security Info=False;User ID=${login};Password=${pw};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;`
 }
 
@@ -666,6 +759,8 @@ async function applyServer(
   }
   if (!desired) throw bad('INVALID', 'A change needs the wanted values.')
   const f = desired.fields
+  const wrong = fieldProblem(desired)
+  if (wrong) throw bad('INVALID_FIELDS', wrong)
 
   if (op.kind === 'create') {
     const group = parentRef(ctx, desired, 'resource_group', 'group')
@@ -732,6 +827,10 @@ async function applyServer(
         'ENTRA_ONLY',
         'This server signs in through Entra only: there is no SQL admin password to rotate.'
       )
+    // Refuse before the password changes: a string that cannot be built would lose the new one.
+    const unusable =
+      loginProblem(cur.fields.sql_admin_login) ?? databaseProblem(str(f.app_database) ?? 'master')
+    if (unusable) throw bad('INVALID_FIELDS', unusable)
     const next = sqlPassword()
     await armCall(withScrub(ctx, [next]), 'PATCH', id, {
       query: armVersion(API.sql),
@@ -1008,7 +1107,9 @@ async function applyBudget(
   }
   if (!desired) throw bad('INVALID', 'A change needs the wanted values.')
   const f = desired.fields
-  const appTag = str(f.app_tag) ?? str(desired.tags?.['nivaro-hub:app'])
+  const wrongBudget = fieldProblem(desired)
+  if (wrongBudget) throw bad('INVALID_FIELDS', wrongBudget)
+  const appTag = ownerTag(desired)
   const amount = num(f.amount)
   const emails = Array.isArray(f.contact_emails) ? f.contact_emails.map(String).filter(Boolean) : []
   if (!appTag) throw bad('INVALID', 'A budget names the app tag value it counts (nivaro-hub-app).')
@@ -1118,7 +1219,8 @@ export async function readOutputsAzure(
 /** The budget alert: crossing a threshold of the amount sends `cost.over_budget` through the Hub's routes. */
 export async function healthBudget(
   ctx: ProviderContext,
-  externalId: string
+  externalId: string,
+  appId: number | null = null
 ): Promise<HealthAnswer> {
   const checkedAt = ctx.now().toISOString()
   const b = pinnedBudget(ctx, externalId)
@@ -1140,13 +1242,12 @@ export async function healthBudget(
   const crossed = [...thresholds].sort((x, y) => y - x).find((t) => pct >= t) ?? null
   const details = { spend, amount, percent: pct }
   if (crossed === null) return { status: 'ok', checkedAt, details }
-  const tag = str(seen.fields.app_tag) ?? ''
   const month = checkedAt.slice(0, 7)
   const { notifyHub } = await import('../notify.js')
   void notifyHub('cost.over_budget', {
-    ...(/^\d+$/.test(tag) ? { appId: Number(tag) } : {}),
+    ...(appId != null ? { appId } : {}),
     title: `Azure budget ${str(seen.name)} at ${pct}% (${crossed}% alert)`,
-    body: `Azure counts ${spend.toFixed(2)} ${unit} against a budget of ${amount.toFixed(2)} ${unit} this month${tag ? ` for ${tag}` : ''}.`,
+    body: `Azure counts ${spend.toFixed(2)} ${unit} against a budget of ${amount.toFixed(2)} ${unit} this month.`,
     severity: crossed >= 100 ? 'critical' : 'warning',
     dedupKey: `azure-budget:${externalId.toLowerCase()}:${month}:${crossed}`
   })
@@ -1161,9 +1262,10 @@ export async function healthBudget(
 export async function healthAzure(
   ctx: ProviderContext,
   type: string,
-  externalId: string
+  externalId: string,
+  resource?: { appId: number | null }
 ): Promise<HealthAnswer> {
-  if (type === BUDGET) return healthBudget(ctx, externalId)
+  if (type === BUDGET) return healthBudget(ctx, externalId, resource?.appId ?? null)
   const checkedAt = ctx.now().toISOString()
   const seen = await observeAzure(ctx, type, externalId)
   if (!seen) return { status: 'down', message: 'It is gone at Azure.', checkedAt }

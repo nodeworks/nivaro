@@ -391,7 +391,16 @@ export interface ProviderAdapter {
   apply(ctx: ProviderContext, op: PlannedOp, desired: DesiredResource | null): Promise<OpResult>
   /** Before a delete / replace when the type's `capabilities.snapshot` is true. */
   snapshot?(ctx: ProviderContext, type: string, externalId: string): Promise<SnapshotRef>
-  health?(ctx: ProviderContext, type: string, externalId: string): Promise<HealthAnswer>
+  /**
+   * `resource` (additive): the Hub row's own app, from the engine, for an adapter that notifies
+   * (never read an app id back from the provider).
+   */
+  health?(
+    ctx: ProviderContext,
+    type: string,
+    externalId: string,
+    resource?: { appId: number | null }
+  ): Promise<HealthAnswer>
   /**
    * Optional: the resource a create would collide with (same name / key at the provider), read
    * while planning a create. A hit makes the plan's blocker ALREADY_EXISTS ("adopt it instead");

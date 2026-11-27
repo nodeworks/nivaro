@@ -1242,7 +1242,7 @@ describe('azure adapter: declares outputs and none leak into observed/desired', 
         { resource_group: RG }
       )
     )
-    expect(r.outputs?.connection_string).toContain(`Password="test-secret;pass=with""chars-5566"`)
+    expect(r.outputs?.connection_string).toContain(`Password={test-secret;pass=with"chars-5566}`)
   })
 
   it('a resumed create that finds the server makes no write and has no connection string (rotate gets a new one)', async () => {
@@ -1343,7 +1343,7 @@ describe('azure adapter: snapshot and health', () => {
 
   it('a budget past a threshold sends cost.over_budget through the Hub’s routes, with a stable dedup key', async () => {
     const { ctx } = harness([GET(/\/budgets\/budget-test-app7$/, fx('budget'))])
-    const h = await azureAdapter.health?.(ctx, 'azure.budget', BUD)
+    const h = await azureAdapter.health?.(ctx, 'azure.budget', BUD, { appId: 7 })
     expect(h?.status).toBe('warn')
     await vi.waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1))
     const [event, payload] = notifySpy.mock.calls[0] as unknown as [string, any]
@@ -1564,5 +1564,140 @@ describe('azure adapter: estimates', () => {
     expect(await azureAdapter.priceApi?.(ctx, "sql:dtu:S0' or 1 eq 1", 'eastus')).toBeNull()
     expect(await azureAdapter.priceApi?.(ctx, 'sql:dtu:S0', "eastus' or 1 eq 1")).toBeNull()
     expect(calls).toHaveLength(0)
+  })
+})
+
+describe('azure adapter: cross-app budgets and connection-string injection', () => {
+  const budget = (over: Record<string, unknown> = {}, tags = { 'nivaro-hub:app': '7' }) => {
+    const d = desired(
+      'azure.budget',
+      {
+        subscription_id: SUB,
+        name: 'budget-test-app7',
+        amount: 200,
+        contact_emails: ['ops@example.test'],
+        ...over
+      },
+      {},
+      null,
+      tags
+    )
+    return { ...d, scope: 'app' as const }
+  }
+
+  it('a foreign app_tag is INVALID_FIELDS at plan time and at apply, with nothing sent', async () => {
+    const d = budget({ app_tag: '99' })
+    const planned = azureAdapter.plan(noCalls().ctx, d, null)
+    expect((planned[0].data as any).$blocker.code).toBe('INVALID_FIELDS')
+    const { ctx, calls } = noCalls()
+    await expect(azureAdapter.apply(ctx, op({ type: 'azure.budget' }), d)).rejects.toMatchObject({
+      code: 'INVALID_FIELDS'
+    })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('the budget filter always uses the owning app, from the tag or the row appId; an equal app_tag is fine', async () => {
+    const h = harness([
+      GET(/\/budgets\/budget-test-app7$/, {}, 404),
+      { method: 'PUT', path: /\/budgets\/budget-test-app7$/, status: 201, body: fx('budget') }
+    ])
+    await azureAdapter.apply(h.ctx, op({ type: 'azure.budget' }), budget({ app_tag: '7' }))
+    expect(writes(h.calls)[0].body.properties.filter.tags.values).toEqual(['7'])
+    const noTag = budget({}, {} as any)
+    const h2 = harness([
+      GET(/\/budgets\/budget-test-app7$/, {}, 404),
+      { method: 'PUT', path: /\/budgets\/budget-test-app7$/, status: 201, body: fx('budget') }
+    ])
+    await azureAdapter.apply(h2.ctx, op({ type: 'azure.budget' }), noTag)
+    expect(writes(h2.calls)[0].body.properties.filter.tags.values).toEqual(['1'])
+  })
+
+  it('an existing budget whose Azure filter names another app plans a change back to the owner’s', () => {
+    const seen: Observed = {
+      type: 'azure.budget',
+      externalId: BUD,
+      name: 'budget-test-app7',
+      fields: {
+        amount: 200,
+        app_tag: '99',
+        thresholds: [80, 100],
+        contact_emails: ['ops@example.test']
+      },
+      tags: {}
+    }
+    const p = azureAdapter.plan(noCalls().ctx, budget({}), seen)
+    expect(p[0].changes).toEqual([{ field: 'app_tag', from: '99', to: '7' }])
+  })
+
+  it('the over-budget alert goes to the row’s own app, never to the app named by Azure’s tag', async () => {
+    const foreign = fx('budget')
+    foreign.properties.filter.tags.values = ['99']
+    const { ctx } = harness([GET(/\/budgets\/budget-test-app7$/, foreign)])
+    await azureAdapter.health?.(ctx, 'azure.budget', BUD, { appId: 4 })
+    await vi.waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1))
+    expect((notifySpy.mock.calls[0] as unknown as [string, any])[1].appId).toBe(4)
+    notifySpy.mockClear()
+    await azureAdapter.health?.(ctx, 'azure.budget', BUD)
+    await vi.waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1))
+    expect('appId' in (notifySpy.mock.calls[0] as unknown as [string, any])[1]).toBe(false)
+  })
+
+  const sqlServer = (fields: Record<string, unknown>) =>
+    desired(
+      'azure.sql_server',
+      { name: 'sql-test-hub', location: 'eastus', entra_only_auth: false, ...fields },
+      { resource_group: RG }
+    )
+
+  it('a database name with ; = quote or space in the connection string is refused with nothing sent', async () => {
+    for (const bad of ['app;Server=evil', 'a=b', 'a"b', "a'b", 'a b']) {
+      const d = sqlServer({ app_database: bad })
+      expect((azureAdapter.plan(noCalls().ctx, d, null)[0].data as any).$blocker.code).toBe(
+        'INVALID_FIELDS'
+      )
+      const { ctx, calls } = noCalls()
+      await expect(azureAdapter.apply(ctx, op({}), d)).rejects.toMatchObject({
+        code: 'INVALID_FIELDS'
+      })
+      expect(calls).toHaveLength(0)
+    }
+  })
+
+  it('a SQL admin login must follow Azure’s rule and not be a reserved name', async () => {
+    for (const bad of ['admin', 'SA', 'root', '1abc', 'a;b', 'a b', 'a"b', 'x'.repeat(129)]) {
+      const { ctx, calls } = noCalls()
+      await expect(
+        azureAdapter.apply(ctx, op({}), sqlServer({ sql_admin_login: bad }))
+      ).rejects.toMatchObject({ code: 'INVALID_FIELDS' })
+      expect(calls).toHaveLength(0)
+    }
+  })
+
+  it('a rotate on a server whose login cannot go in a string is refused before the password changes', async () => {
+    const weird = fx('server')
+    weird.properties.administratorLogin = 'a;b'
+    const { ctx, calls } = harness([GET(/\/servers\/sql-test-hub$/, weird)])
+    await expect(
+      azureAdapter.apply(
+        ctx,
+        op({ kind: 'update', action: 'rotate_outputs', externalId: SRV }),
+        desired('azure.sql_server', { rotate_outputs: true }, {}, SRV)
+      )
+    ).rejects.toMatchObject({ code: 'INVALID_FIELDS' })
+    expect(writes(calls)).toHaveLength(0)
+  })
+
+  it('a password with ; and } is wrapped in braces with } doubled', async () => {
+    const pw = 'test-secret;a}b{c-9988'
+    const { ctx } = harness([
+      GET(/\/servers\/sql-test-hub$/, fx('server'), 200, { statuses: [404, 200] }),
+      { method: 'PUT', path: /\/servers\/sql-test-hub$/, status: 201, body: fx('server') }
+    ])
+    const r = await azureAdapter.apply(
+      ctx,
+      op({}),
+      sqlServer({ admin_password: { fingerprint: 'f', changed: true, plain: pw } })
+    )
+    expect(r.outputs?.connection_string).toContain('Password={test-secret;a}}b{c-9988};')
   })
 })
