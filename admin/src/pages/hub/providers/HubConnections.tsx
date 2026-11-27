@@ -23,6 +23,7 @@ import {
   ToneChip
 } from '../hub-parts'
 import { LinkedChange, OpenChanges } from './ChangeView'
+import { NotifyRoutesCard } from './NotifyRoutes'
 import {
   adoptResource,
   CONNECTION_STATUS_COPY,
@@ -195,6 +196,8 @@ export function HubConnections() {
               onRetry={() => void types.refetch()}
             />
           ) : null}
+
+          <NotifyRoutesCard />
         </div>
       </div>
     </section>
