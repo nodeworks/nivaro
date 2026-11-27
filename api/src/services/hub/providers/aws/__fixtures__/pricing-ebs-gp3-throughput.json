@@ -1,0 +1,6 @@
+{
+  "FormatVersion": "aws_v1",
+  "PriceList": [
+    "{\"product\":{\"productFamily\":\"Provisioned Throughput\",\"attributes\":{\"servicecode\":\"AmazonEC2\",\"location\":\"US East (N. Virginia)\",\"locationType\":\"AWS Region\",\"regionCode\":\"us-east-1\",\"volumeApiName\":\"gp3\",\"group\":\"EBS Throughput\"},\"sku\":\"HG7T0005\"},\"serviceCode\":\"AmazonEC2\",\"terms\":{\"OnDemand\":{\"HG7T0005.JRTCKXETXF\":{\"priceDimensions\":{\"HG7T0005.JRTCKXETXF.6YS6EN2CT7\":{\"unit\":\"GiBps-mo\",\"endRange\":\"Inf\",\"description\":\"$0.04 per MiBps-month over 125 MiBps\",\"appliesTo\":[],\"rateCode\":\"HG7T0005.JRTCKXETXF.6YS6EN2CT7\",\"beginRange\":\"0\",\"pricePerUnit\":{\"USD\":\"40.9600000000\"}}},\"sku\":\"HG7T0005\",\"effectiveDate\":\"2026-11-20T00:00:00Z\",\"offerTermCode\":\"JRTCKXETXF\",\"termAttributes\":{}}}},\"version\":\"20261120000000\",\"publicationDate\":\"2026-11-20T00:00:00Z\"}"
+  ]
+}

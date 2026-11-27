@@ -380,6 +380,18 @@ export interface AwsAdapterParts {
   connection: ProviderAdapter['connection']
   defs: AwsTypeDef[]
   identity(ctx: ProviderContext): Promise<string | null>
+  /** The adapter's bundled, dated price table (the price book's fallback). */
+  bundledPrices?: ProviderAdapter['bundledPrices']
+  /**
+   * Optional permissions beyond the types' own (price estimates, measured data out): each gets a
+   * row in the connection test, but a missing one never fails the connection.
+   */
+  optionalProbes?: Array<{
+    type: string
+    need: string
+    why: string
+    run(ctx: ProviderContext, region: string): Promise<unknown>
+  }>
 }
 
 export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
@@ -410,6 +422,7 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
     label: parts.label,
     connection: parts.connection,
     types: parts.defs.map((d) => d.spec),
+    ...(parts.bundledPrices ? { bundledPrices: parts.bundledPrices } : {}),
 
     async testConnection(ctx): Promise<ConnectionTest> {
       let identity: string | null = null
@@ -443,13 +456,31 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
         }
         permissions.push({ type: d.spec.key, need: d.probe.need, has })
       }
+      const required = permissions.filter((p) => !p.has).map((p) => p.need)
+      // Optional permissions (price estimates, measured data out) get a row but never fail the test.
+      const optional: Array<{ need: string; why: string }> = []
+      for (const o of parts.optionalProbes ?? []) {
+        let has = true
+        try {
+          await o.run(ctx, region)
+        } catch (err) {
+          const code = err instanceof ProviderError ? err.code : ''
+          if (!(code === 'DryRunOperation')) has = false
+        }
+        permissions.push({ type: o.type, need: o.need, has })
+        if (!has) optional.push({ need: o.need, why: o.why })
+      }
       const missing = permissions.filter((p) => !p.has).map((p) => p.need)
       return {
-        ok: missing.length === 0,
+        ok: required.length === 0,
         identity,
         permissions,
         missing,
-        message: missing.length ? `Missing permissions: ${missing.join(', ')}` : undefined
+        message: required.length
+          ? `Missing permissions: ${required.join(', ')}`
+          : optional.length
+            ? `Optional, not granted: ${optional.map((o) => `${o.need} (${o.why})`).join('; ')}.`
+            : undefined
       }
     },
 

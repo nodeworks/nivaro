@@ -22,6 +22,7 @@ import {
   ownerOf,
   seg
 } from './api.js'
+import { GITHUB_BUNDLED } from './pricing.js'
 import {
   approvePendingDeployment,
   archiveRepository,
@@ -550,6 +551,7 @@ async function health(ctx: ProviderContext, type: string, ext: string): Promise<
 }
 
 export const githubAdapter: ProviderAdapter = {
+  bundledPrices: GITHUB_BUNDLED,
   key: 'github',
   label: 'GitHub',
   connection,

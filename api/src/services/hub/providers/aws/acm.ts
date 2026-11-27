@@ -1,6 +1,7 @@
 import { type Observed, type ProviderContext, ProviderError } from '../types.js'
 import { awsJson, hubTags, keyValueTags, orNull, waitFor } from './client.js'
 import { type AwsListPage, type AwsTypeDef, cap, observed, regionField, riskOf } from './kit.js'
+import { acmEstimate } from './pricing.js'
 import { changeRecords, normName, type RecordSet } from './route53.js'
 
 /**
@@ -114,6 +115,7 @@ export const acmCertificateDef: AwsTypeDef = {
         items: { key: 'record', label: 'Record', kind: 'object' }
       }
     ],
+    estimate: acmEstimate,
     capabilities: cap(),
     reversible: false,
     refs: [{ field: 'zone', type: 'aws.route53_zone', required: false }],

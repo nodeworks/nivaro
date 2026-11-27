@@ -16,6 +16,7 @@ import {
   type SecretValue
 } from '../types.js'
 import { teamIdOf, vercelCall } from './client.js'
+import { VERCEL_BUNDLED, vercelEstimate } from './pricing.js'
 
 /**
  * Vercel (`vercel`): team access token + pinned team id. Types: project, environment variable
@@ -294,7 +295,8 @@ const TYPES: ResourceTypeSpec[] = [
       if (op.kind === 'delete') out.push('destructive', 'data_loss')
       return out
     },
-    costClass: () => 'none'
+    costClass: () => 'none',
+    estimate: vercelEstimate('project')
   },
   {
     key: TYPE_ENV,
@@ -364,7 +366,8 @@ const TYPES: ResourceTypeSpec[] = [
       if (op.kind === 'delete' || op.kind === 'replace') out.push('destructive')
       return out
     },
-    costClass: () => 'none'
+    costClass: () => 'none',
+    estimate: vercelEstimate('env_var')
   },
   {
     key: TYPE_DOMAIN,
@@ -405,7 +408,8 @@ const TYPES: ResourceTypeSpec[] = [
       if (op.kind === 'delete' || op.kind === 'replace') out.push('destructive', 'downtime')
       return out
     },
-    costClass: () => 'none'
+    costClass: () => 'none',
+    estimate: vercelEstimate('domain')
   },
   {
     key: TYPE_DEPLOYMENT,
@@ -455,7 +459,8 @@ const TYPES: ResourceTypeSpec[] = [
     risk(op) {
       return deploymentDowntime(op) ? ['downtime'] : []
     },
-    costClass: () => 'none'
+    costClass: () => 'none',
+    estimate: vercelEstimate('deployment')
   }
 ]
 
@@ -1019,6 +1024,7 @@ async function listProjects(ctx: ProviderContext, cursor?: string | null) {
 // ── The adapter ──
 
 export const vercelAdapter: ProviderAdapter = {
+  bundledPrices: VERCEL_BUNDLED,
   key: 'vercel',
   label: 'Vercel',
   connection: {

@@ -15,6 +15,7 @@ import {
   regionField,
   riskOf
 } from './kit.js'
+import { lbEstimate } from './pricing.js'
 import { type XmlValue, xmlChild, xmlList, xmlText } from './xml.js'
 
 /**
@@ -156,6 +157,7 @@ export const loadBalancerDef: AwsTypeDef = {
       { key: 'zone_id', label: 'Alias zone id', kind: 'string', readOnly: true },
       { key: 'vpc', label: 'VPC', kind: 'string', readOnly: true }
     ],
+    estimate: lbEstimate,
     capabilities: cap(),
     reversible: (f) => f === 'security_groups',
     refs: [

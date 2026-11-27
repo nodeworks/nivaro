@@ -67,7 +67,16 @@ export function regionsOf(config: Record<string, unknown>): string[] {
   ]
 }
 
-export type AwsService = 'ec2' | 'rds' | 'elbv2' | 'sts' | 'acm' | 's3' | 'route53' | 'pricing'
+export type AwsService =
+  | 'ec2'
+  | 'rds'
+  | 'elbv2'
+  | 'sts'
+  | 'acm'
+  | 's3'
+  | 'route53'
+  | 'pricing'
+  | 'monitoring'
 
 const SIGN_NAME: Record<AwsService, string> = {
   ec2: 'ec2',
@@ -77,14 +86,16 @@ const SIGN_NAME: Record<AwsService, string> = {
   acm: 'acm',
   s3: 's3',
   route53: 'route53',
-  pricing: 'pricing'
+  pricing: 'pricing',
+  monitoring: 'monitoring'
 }
 const HOST_PREFIX: Record<AwsService, string> = { ...SIGN_NAME }
 const QUERY_VERSION: Record<string, string> = {
   ec2: '2016-11-15',
   rds: '2014-10-31',
   elbv2: '2015-12-01',
-  sts: '2011-06-15'
+  sts: '2011-06-15',
+  monitoring: '2010-08-01'
 }
 
 /**
@@ -150,7 +161,7 @@ export const awsConnection: ConnectionSpec = {
   hosts(config) {
     const out = new Set<string>(['route53.amazonaws.com', AWS_PRICING_HOST])
     for (const r of regionsOf(config))
-      for (const s of ['ec2', 'rds', 'elbv2', 'sts', 'acm', 's3'] as AwsService[])
+      for (const s of ['ec2', 'rds', 'elbv2', 'sts', 'acm', 's3', 'monitoring'] as AwsService[])
         out.add(awsHost(s, r))
     return [...out]
   },
@@ -432,7 +443,7 @@ export interface QueryOptions {
 /** One Query API action; answers the action's result object. */
 export async function awsQuery(
   ctx: ProviderContext,
-  service: 'ec2' | 'rds' | 'elbv2' | 'sts',
+  service: 'ec2' | 'rds' | 'elbv2' | 'sts' | 'monitoring',
   action: string,
   params: Record<string, unknown> = {},
   opts: QueryOptions = {}

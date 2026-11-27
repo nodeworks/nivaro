@@ -80,7 +80,7 @@ const isObj = (v: unknown): v is Record<string, any> =>
   !!v && typeof v === 'object' && !Array.isArray(v)
 
 /** The unit and USD price of one price-list item (a JSON string or object); null = none. */
-export function parseAwsPriceItem(item: unknown): PriceAnswer | null {
+export function parseAwsPriceItem(item: unknown, tierIndex?: number): PriceAnswer | null {
   let doc: unknown = item
   if (typeof item === 'string') {
     try {
@@ -96,9 +96,15 @@ export function parseAwsPriceItem(item: unknown): PriceAnswer | null {
   for (const term of Object.values(onDemand))
     if (isObj(term) && isObj(term.priceDimensions))
       for (const d of Object.values(term.priceDimensions)) if (isObj(d)) dims.push(d)
+  // A tier index picks the nth price dimension by its start range (data transfer out has tiers).
+  const byRange = dims
+    .filter((d) => isObj(d.pricePerUnit))
+    .sort((a, b) => Number(a.beginRange ?? 0) - Number(b.beginRange ?? 0))
   const first =
-    dims.find((d) => String(d.beginRange ?? '0') === '0' && isObj(d.pricePerUnit)) ??
-    dims.find((d) => isObj(d.pricePerUnit))
+    tierIndex !== undefined
+      ? byRange[tierIndex]
+      : (dims.find((d) => String(d.beginRange ?? '0') === '0' && isObj(d.pricePerUnit)) ??
+        dims.find((d) => isObj(d.pricePerUnit)))
   const usd = first ? Number(first.pricePerUnit.USD) : Number.NaN
   if (!first || !Number.isFinite(usd) || usd < 0) return null
   const pub = typeof doc.publicationDate === 'string' ? doc.publicationDate.slice(0, 10) : null
@@ -118,10 +124,17 @@ export async function awsPriceListLookup(
 ): Promise<PriceAnswer | null> {
   const sku = parseAwsSkuKey(skuKey)
   if (!sku) return null
-  const answer = await awsPriceList(ctx, 'GetProducts', getProductsBody(sku, region || null))
+  // `tierIndex` is not a filter: it picks the nth price tier of the answer (0 = the first).
+  const { tierIndex: tier, ...filters } = sku.filters
+  const tierIndex = tier !== undefined && /^\d{1,2}$/.test(tier) ? Number(tier) : undefined
+  const answer = await awsPriceList(
+    ctx,
+    'GetProducts',
+    getProductsBody({ serviceCode: sku.serviceCode, filters }, region || null)
+  )
   const list = Array.isArray(answer.PriceList) ? answer.PriceList : []
   for (const item of list) {
-    const p = parseAwsPriceItem(item)
+    const p = parseAwsPriceItem(item, tierIndex)
     if (p) return p
   }
   return null

@@ -703,6 +703,11 @@ export async function resourceRunRate(now: Date): Promise<RunRateRow[]> {
         confidence = prev.confidence
       } else {
         const ctx = contextFor(conn, regionFor(conn.row.config, null, r.observed))
+        // Measured data out of this very resource (CloudWatch, cached an hour) is its traffic.
+        const own = r.external_id
+          ? costsLiveDeps().resourceEgress(connectionId, r.type, r.external_id)
+          : null
+        if (own != null && own > 0) ctx.traffic = { egressGbMonth: own, source: 'measured' }
         const est = await estimateResource(ctx, hit.type, null, r.observed, {
           connectionId,
           config: conn.row.config,

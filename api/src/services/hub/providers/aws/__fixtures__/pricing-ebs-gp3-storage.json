@@ -1,0 +1,6 @@
+{
+  "FormatVersion": "aws_v1",
+  "PriceList": [
+    "{\"product\":{\"productFamily\":\"Storage\",\"attributes\":{\"servicecode\":\"AmazonEC2\",\"location\":\"US East (N. Virginia)\",\"locationType\":\"AWS Region\",\"regionCode\":\"us-east-1\",\"volumeApiName\":\"gp3\",\"volumeType\":\"General Purpose\"},\"sku\":\"HG7T0003\"},\"serviceCode\":\"AmazonEC2\",\"terms\":{\"OnDemand\":{\"HG7T0003.JRTCKXETXF\":{\"priceDimensions\":{\"HG7T0003.JRTCKXETXF.6YS6EN2CT7\":{\"unit\":\"GB-Mo\",\"endRange\":\"Inf\",\"description\":\"$0.08 per GB-month of General Purpose SSD (gp3) provisioned storage\",\"appliesTo\":[],\"rateCode\":\"HG7T0003.JRTCKXETXF.6YS6EN2CT7\",\"beginRange\":\"0\",\"pricePerUnit\":{\"USD\":\"0.0800000000\"}}},\"sku\":\"HG7T0003\",\"effectiveDate\":\"2026-11-20T00:00:00Z\",\"offerTermCode\":\"JRTCKXETXF\",\"termAttributes\":{}}}},\"version\":\"20261120000000\",\"publicationDate\":\"2026-11-20T00:00:00Z\"}"
+  ]
+}

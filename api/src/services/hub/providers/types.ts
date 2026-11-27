@@ -568,7 +568,14 @@ export interface BundledPriceTable {
   currency: string
   items: Record<
     string,
-    { unit: string; unitCents: number; regions?: Record<string, number>; label?: string }
+    {
+      unit: string
+      unitCents: number
+      regions?: Record<string, number>
+      /** true = the price holds only in the regions listed (no default for other regions). */
+      regionsOnly?: boolean
+      label?: string
+    }
   >
 }
 

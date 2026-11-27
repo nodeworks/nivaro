@@ -87,7 +87,9 @@ describe('aws data+edge testConnection', () => {
       'acm:ListCertificates': {
         status: 400,
         body: '{"__type":"AccessDeniedException","message":"no"}'
-      }
+      },
+      'pricing:GetProducts': 'pricing-empty.json',
+      'monitoring:GetMetricData': 'cloudwatch-metric-data-empty.xml'
     })
     const h = harness(handlers as never)
     const t = await awsProvider.testConnection(h.ctx)

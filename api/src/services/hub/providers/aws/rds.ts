@@ -16,6 +16,7 @@ import {
   regionField,
   riskOf
 } from './kit.js'
+import { rdsEstimate } from './pricing.js'
 import { type XmlValue, xmlChild, xmlList, xmlText } from './xml.js'
 
 /**
@@ -250,6 +251,7 @@ export const rdsInstanceDef: AwsTypeDef = {
       { key: 'endpoint', label: 'Endpoint', kind: 'string', readOnly: true },
       { key: 'port', label: 'Port', kind: 'number', readOnly: true }
     ],
+    estimate: rdsEstimate,
     capabilities: cap({ snapshot: true }),
     reversible: (f) => f === 'backup_retention_days' || f === 'deletion_protection',
     refs: [

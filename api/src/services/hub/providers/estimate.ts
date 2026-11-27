@@ -1,4 +1,5 @@
 import { db } from '../../../db/index.js'
+import { awsMeasuredEgress, awsResourceEgress } from './aws/egress.js'
 import type { PlanCostTotal } from './engine/contract.js'
 import { applyRates, effectiveRates, unknownEstimate } from './pricing/index.js'
 import type {
@@ -38,10 +39,15 @@ export interface CostsLiveDeps {
   now: () => Date
   /**
    * What the Hub measured going out of each environment of an app, GB a month (environment id →
-   * GB). Nothing in the Hub samples egress yet: the default answers none, and Task 44b feeds
-   * CloudWatch figures here.
+   * GB). The default is the AWS CloudWatch reader (aws/egress.ts: one batched read per connection,
+   * at most hourly, cached); other providers add nothing.
    */
   measuredEgress: (appId: number) => Promise<Map<number, number>>
+  /**
+   * What one resource sent out, GB a month, from the measured cache (null = none): the run-rate
+   * puts it on that resource's estimate as its traffic. Default: the AWS CloudWatch reader.
+   */
+  resourceEgress: (connectionId: number, type: string, externalId: string) => number | null
   /** Over-budget alerts (Task 13's notifyHub('cost.over_budget') when it lands). */
   notifyOverBudget: ((p: OverBudgetNotice) => Promise<void>) | null
   estimateTimeoutMs: number
@@ -59,7 +65,9 @@ export interface OverBudgetNotice {
 
 const defaults = (): CostsLiveDeps => ({
   now: () => new Date(),
-  measuredEgress: async () => new Map(),
+  measuredEgress: (appId) => awsMeasuredEgress(appId),
+  resourceEgress: (connectionId, type, externalId) =>
+    awsResourceEgress(connectionId, type, externalId),
   notifyOverBudget: null,
   estimateTimeoutMs: ESTIMATE_TIMEOUT_MS
 })

@@ -15,6 +15,7 @@ import {
   text
 } from './ec2.js'
 import { type AwsTypeDef, cap, nameField, observed, regionField, riskOf } from './kit.js'
+import { eipEstimate, natEstimate } from './pricing.js'
 import type { XmlValue } from './xml.js'
 
 /**
@@ -422,6 +423,7 @@ export const elasticIpDef: AwsTypeDef = {
       { key: 'public_ip', label: 'Address', kind: 'string', readOnly: true },
       { key: 'association_id', label: 'Association', kind: 'string', readOnly: true }
     ],
+    estimate: eipEstimate,
     capabilities: cap(),
     reversible: (f) => f === 'instance' || f === 'name',
     refs: [{ field: 'instance', type: 'aws.ec2_instance', required: false }],
@@ -539,6 +541,7 @@ export const natGatewayDef: AwsTypeDef = {
       },
       { key: 'public_ip', label: 'Address', kind: 'string', readOnly: true }
     ],
+    estimate: natEstimate,
     capabilities: cap(),
     reversible: (f) => f === 'name',
     refs: [

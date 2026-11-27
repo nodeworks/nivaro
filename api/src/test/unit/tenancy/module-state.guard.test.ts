@@ -694,6 +694,8 @@ const SHARED: Record<string, string> = {
   'services/hub/providers/engine/deps.ts :: current': HUB_ONLY,
   'services/hub/providers/estimate.ts :: current': HUB_ONLY,
   'services/hub/providers/pricing/index.ts :: COST_CONNECTION_KEYS': FIXED,
+  'services/hub/providers/aws/egress.ts :: snapshots': HUB_ONLY,
+  'services/hub/providers/aws/egress.ts :: inflight': HUB_ONLY,
   'services/hub/providers/engine/locks.ts :: memResourceLocks': HUB_ONLY,
   'services/hub/providers/notify.ts :: seams': HUB_ONLY,
   'services/hub/providers/registry.ts :: providers': REGISTRY,

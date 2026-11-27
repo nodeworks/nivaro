@@ -22,6 +22,7 @@ export function bundledLookup(
   if (!item) return null
   const regional =
     region && item.regions && Object.hasOwn(item.regions, region) ? item.regions[region] : undefined
+  if (item.regionsOnly && typeof regional !== 'number') return null
   const unitCents = typeof regional === 'number' ? regional : item.unitCents
   if (typeof unitCents !== 'number' || !Number.isFinite(unitCents) || unitCents < 0) return null
   return {
