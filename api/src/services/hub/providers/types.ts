@@ -387,8 +387,8 @@ export interface ProviderAdapter {
   label: string
   /**
    * What the provider is for, so pickers group it: a key of PROVIDER_CATEGORIES ('code',
-   * 'hosting', 'data', 'domains', 'identity', 'messaging', 'chat', 'monitoring', 'payments', 'ai',
-   * 'media') or the adapter's own group key. Unset = the core placement, else 'other'.
+   * 'hosting', 'data', 'domains', 'identity', 'messaging', 'monitoring', 'costs', 'payments',
+   * 'ai', 'media') or the adapter's own group key. Unset = the core placement, else 'other'.
    */
   category?: string
   connection: ConnectionSpec

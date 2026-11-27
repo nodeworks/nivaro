@@ -12,7 +12,11 @@ import {
 } from '../services/hub/create/connection-targets.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { generateAccountKeyPem } from '../services/hub/providers/acme/client.js'
-import { PROVIDER_CATEGORIES, providerCategoryOf } from '../services/hub/providers/categories.js'
+import {
+  PROVIDER_CATEGORIES,
+  providerCategoryOf,
+  resourceTypeCategory
+} from '../services/hub/providers/categories.js'
 import { registerProviderCostsCron } from '../services/hub/providers/costs.js'
 import { estimateProvider } from '../services/hub/providers/costs-live.js'
 import {
@@ -592,7 +596,11 @@ export async function hubProviderRoutes(app: FastifyInstance) {
           },
           // Task 13: its resources can send Hub events out (notify routes).
           notify: typeof p.notify === 'function',
-          types: p.types.map(typeOut)
+          // Each type's own group (an RDS instance is a database, whatever its account is for).
+          types: p.types.map((t) => ({
+            ...typeOut(t),
+            category: resourceTypeCategory(t.key, providerCategoryOf(p))
+          }))
         }))
       }
     }
