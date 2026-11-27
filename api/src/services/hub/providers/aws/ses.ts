@@ -559,7 +559,8 @@ interface HubUser {
 async function hubUser(
   ctx: ProviderContext,
   name: string,
-  region: string
+  region: string,
+  resourceId?: number | null
 ): Promise<HubUser | null> {
   if (!USER_RE.test(name)) throw new ProviderError('BAD_ID', 'That is not an IAM user name.')
   const r = await orNull(() => iam(ctx, region, 'GetUser', { UserName: name }))
@@ -571,6 +572,12 @@ async function hubUser(
     throw new ProviderError(
       'NOT_HUB_USER',
       `IAM user ${name} was not made by the Hub (it is outside ${IAM_PATH} or not tagged nivaro-hub:managed). The Hub never reads or changes it.`
+    )
+  // A write names the resource row: another row's Hub user is refused too.
+  if (resourceId != null && tags['nivaro-hub:resource'] !== String(resourceId))
+    throw new ProviderError(
+      'NOT_HUB_USER',
+      `IAM user ${name} belongs to a different Hub resource. The Hub does not change it from this one.`
     )
   return { arn: t(c(u, 'Arn')), tags }
 }
@@ -820,7 +827,7 @@ export const sesSmtpUserDef: AwsTypeDef = {
     }
   },
   async update(ctx, id, region, desired, _o, changed) {
-    await hubUser(ctx, id, region) // proves the user is the Hub's before any write
+    await hubUser(ctx, id, region, desired.resourceId ?? -1) // this row's own user, before any write
     if (changed.has('identity'))
       await putPolicy(ctx, id, region, await identityDomain(ctx, desired, region))
     if (changed.has(ROTATE_OUTPUTS_FIELD)) {
@@ -848,8 +855,8 @@ export const sesSmtpUserDef: AwsTypeDef = {
     const sandbox = await sandboxNote(ctx, region)
     return sandbox ? { status: 'warn', message: sandbox } : { status: 'ok', message: 'Active' }
   },
-  async remove(ctx, id, region) {
-    if (!(await hubUser(ctx, id, region))) return
+  async remove(ctx, id, region, op) {
+    if (!(await hubUser(ctx, id, region, op.resourceId ?? -1))) return
     for (const k of await listKeys(ctx, id, region))
       await iam(ctx, region, 'DeleteAccessKey', { UserName: id, AccessKeyId: k.id })
     await orNull(() =>

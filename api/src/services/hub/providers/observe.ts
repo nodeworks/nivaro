@@ -695,6 +695,19 @@ export async function adoptResource(
     throw providerFailure(ctx, e)
   }
   if (!seen) throw new ResourceChangeError('NOT_FOUND', 'The provider does not have that resource.')
+  // The canonical id (a name or short form may spell an ARN another way) decides "already managed".
+  if (
+    seen.externalId !== externalId &&
+    (await listResources({
+      provider: connRow.provider,
+      type: input.type,
+      externalId: seen.externalId
+    }).then((r) => r.length))
+  )
+    throw new ResourceChangeError(
+      'RESOURCE_ALREADY_MANAGED',
+      'The Hub already manages this resource.'
+    )
 
   const stored = scrubObserved(t.type, seen)
   // Provider ids of other managed resources → rows, so ref fields become real refs.

@@ -104,9 +104,19 @@ const fingerprintOf = (desired: DesiredResource): string => {
 
 const hubTagged = (tags: Record<string, string>) => tags['nivaro-hub:managed'] === 'true'
 
-const tagList = (desired: DesiredResource) =>
+/** True only for a secret whose `nivaro-hub:resource` tag is THIS resource row. */
+const ownedBy = (tags: Record<string, string>, resourceId: number | null | undefined) =>
+  hubTagged(tags) && resourceId != null && tags['nivaro-hub:resource'] === String(resourceId)
+
+const tagList = (desired: DesiredResource, own = true) =>
   keyValueTags({
-    ...hubTags(desired.tags),
+    ...(own
+      ? hubTags(desired.tags)
+      : Object.fromEntries(
+          Object.entries(hubTags(desired.tags)).filter(
+            ([k]) => k !== 'nivaro-hub:managed' && k !== 'nivaro-hub:resource'
+          )
+        )),
     [DAYS_TAG]: String(
       Number.isInteger(desired.fields.recovery_window_days)
         ? desired.fields.recovery_window_days
@@ -267,6 +277,9 @@ export const secretDef: AwsTypeDef = {
     return { id: arn, outputs: { arn, ...(value !== null ? { value } : {}) } }
   },
   async update(ctx, id, region, desired, obs, changed) {
+    // Only a secret the Hub created (its own resource tag, set at CreateSecret) keeps the managed
+    // and resource tags; an adopted secret is never tagged into the readable set.
+    const own = ownedBy(obs.tags, desired.resourceId)
     await assertArnInAccount(ctx, id)
     const f = desired.fields
     if (obs.status === 'pending_deletion')
@@ -286,7 +299,7 @@ export const secretDef: AwsTypeDef = {
         region
       )
     // Tags (including the recovery window) follow every change.
-    await sm(ctx, 'TagResource', { SecretId: id, Tags: tagList(desired) }, region)
+    await sm(ctx, 'TagResource', { SecretId: id, Tags: tagList(desired, own) }, region)
     const value = plainValue(desired)
     if (changed.has('value') && value !== null) {
       await sm(
@@ -302,12 +315,13 @@ export const secretDef: AwsTypeDef = {
       return { outputs: { value } }
     }
   },
-  async readOutputs(ctx, id, region) {
+  async readOutputs(ctx, id, region, resourceId) {
     const s = await describe(ctx, id, region)
     const o = s ? secretObserved(s, region) : null
     if (!s || !o || o.status !== 'active') return s?.ARN ? { arn: s.ARN } : {}
-    // The value is read only for a secret the Hub manages (tagged), never an adopted bystander.
-    if (!hubTagged(o.tags)) return { arn: id }
+    // The value is read only for the secret THIS row created (its resource tag is this row's id):
+    // never an adopted secret, and never another app's or environment's Hub-tagged secret.
+    if (!ownedBy(o.tags, resourceId)) return { arn: id }
     const r = await sm(ctx, 'GetSecretValue', { SecretId: id }, region)
     return {
       arn: id,
