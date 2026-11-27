@@ -326,8 +326,11 @@ export interface PromotionStep {
     resourceId: number
     ref: string
     refLabel: string
-    /** Task 11c, github_actions environment approval: the GitHub environment it approves. */
+    /** Task 11c, github_actions environment approval: the GitHub environment it approves… */
     approveEnvironment?: string
+    /** …the one waiting run read while planning, and its head commit (bound in the hash). */
+    approveRunId?: string
+    approveSha?: string
   }
   /** Task 11a, provider steps: the resource change that made it live (written by the runner). */
   deployedChangeId?: number | null

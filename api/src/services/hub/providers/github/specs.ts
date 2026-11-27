@@ -355,10 +355,22 @@ export const TYPES: ResourceTypeSpec[] = [
         help: 'The GitHub environment whose waiting deployment Approve now approves.'
       },
       {
+        key: 'approve_run_id',
+        label: 'Run to approve',
+        kind: 'string',
+        help: 'The id of the waiting workflow run a promotion approves (set by the promotion).'
+      },
+      {
+        key: 'approve_sha',
+        label: 'Commit of that run',
+        kind: 'string',
+        help: 'The head commit the run must be at; any other commit is not approved.'
+      },
+      {
         key: 'approve',
         label: 'Approve now',
         kind: 'boolean',
-        help: 'Approves the newest run of this workflow that waits for review on that environment.',
+        help: 'Approves that run on that environment. Only a Hub promotion does this.',
         trigger: true
       }
     ],

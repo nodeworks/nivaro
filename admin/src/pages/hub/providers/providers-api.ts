@@ -337,6 +337,8 @@ export interface HubResourceChange {
   created_at: string | null
   updated_at: string | null
   finished_at: string | null
+  /** The server's resume rule (it alone knows whether the connection's keys changed since). */
+  resumable?: boolean
 }
 
 /** One shape for a fresh plan (camelCase) and a stored change (a row): what the change view shows. */
@@ -358,6 +360,8 @@ export interface ChangeModel {
   appId: number | null
   environmentId: number | null
   createdAt: string | null
+  /** The server's answer to "would resume run it" (a stored change); undefined for a fresh plan. */
+  resumable?: boolean
 }
 
 export function changeFromPlan(p: ChangePlan): ChangeModel {
@@ -400,7 +404,8 @@ export function changeFromRow(r: HubResourceChange): ChangeModel {
     scope: r.scope,
     appId: r.app_id,
     environmentId: r.environment_id,
-    createdAt: r.created_at
+    createdAt: r.created_at,
+    ...(typeof r.resumable === 'boolean' ? { resumable: r.resumable } : {})
   }
 }
 
@@ -676,8 +681,12 @@ export const OPEN_CHANGE_STATUSES: ChangeStatus[] = [
   'interrupted'
 ]
 
-/** Resume can run it: interrupted, or failed on something a retry may fix (the engine's rule). */
-export function isResumable(status: ChangeStatus, steps: ChangeStep[]): boolean {
+/**
+ * Resume can run it: interrupted, or failed on something a retry may fix (the engine's rule), or
+ * — only the server can tell — failed on the connection's keys after they changed (`server`).
+ */
+export function isResumable(status: ChangeStatus, steps: ChangeStep[], server?: boolean): boolean {
+  if (typeof server === 'boolean') return server
   if (status === 'interrupted') return true
   if (status !== 'failed') return false
   const last = [...steps].reverse().find((s) => s.status === 'failed')
@@ -840,6 +849,10 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
   PROVIDER_ERROR: {
     title: 'The provider refused or did not answer',
     hint: 'Try again in a minute. Details for support has what it said.'
+  },
+  TARGET_MISMATCH: {
+    title: 'Not what this change may act on',
+    hint: 'The workflow, environment, run or commit differs from the plan. Nothing was sent; plan it again.'
   },
   AUTH_FAILED: {
     title: 'The provider refused this connection’s keys',

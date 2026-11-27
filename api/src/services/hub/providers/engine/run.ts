@@ -910,6 +910,16 @@ async function execute(changeId: number, runKey: string, hold: ResourceHold): Pr
               refExternal: (id) => extOf.get(id) ?? null,
               plainOf: (f) => plains[f] ?? null
             })
+      // Task 11c: approving a GitHub deployment runs only in a promotion of that environment.
+      if (op.action === 'approve_deployment') {
+        const { approvalRefusal } = await import('../hooks/approval-guard.js')
+        const why = await approvalRefusal(
+          plan.origin,
+          res?.id ?? null,
+          desired?.fields.approve_environment
+        )
+        if (why) return failStep(i, { ...why, retryable: false })
+      }
       await ensure()
       let result: OpResult
       try {

@@ -162,6 +162,8 @@ export const FAKE_TYPES: Record<string, ResourceTypeSpec[]> = {
         f('inputs'),
         f('dispatch', { kind: 'boolean', trigger: true }),
         f('approve_environment'),
+        f('approve_run_id'),
+        f('approve_sha'),
         f('approve', { kind: 'boolean', trigger: true })
       ],
       [{ field: 'repository', type: 'github.repository' }],

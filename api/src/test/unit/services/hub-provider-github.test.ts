@@ -953,7 +953,11 @@ describe('github adapter: apply is idempotent (read-before-write)', () => {
 
 describe('github adapter: environment approval (Task 11c)', () => {
   const RUNS = 'GET /repos/acme/web/actions/workflows/deploy.yml/runs'
+  const RUN = 'GET /repos/acme/web/actions/runs/30433642'
   const PENDING = '/repos/acme/web/actions/runs/30433642/pending_deployments'
+  const SHA = 'acb5820ced9479c074f688cc328bf03f341a511d'
+  const runs = fx('workflow_runs_waiting') as { workflow_runs: any[] }
+  const theRun = runs.workflow_runs[0]
   const o = observedOf(
     'github.workflow',
     'acme/web#deploy.yml',
@@ -966,82 +970,137 @@ describe('github adapter: environment approval (Task 11c)', () => {
       enabled: true,
       ref: 'main',
       approve_environment: 'staging',
+      approve_run_id: '30433642',
+      approve_sha: SHA,
       approve: true,
       ...over
     })
+  const routes = (run: unknown = theRun) => ({
+    [RUN]: { body: run },
+    [`GET ${PENDING}`]: { body: fx('pending_deployments') },
+    [`POST ${PENDING}`]: { body: fx('approved_deployments') },
+    'GET /repos/acme/web/actions/workflows/deploy.yml': { body: fx('workflow') }
+  })
+  const planned = () => githubAdapter.plan(null as any, d(), o)[0]
 
-  it('plans a named op naming the environment and branch; a re-plan without the trigger is a noop', () => {
+  it('plans a named op naming environment, branch, run and commit; without the trigger a noop', () => {
     const p = githubAdapter.plan(null as any, d(), o)
     expect(p).toHaveLength(1)
     expect(p[0]).toMatchObject({
       kind: 'update',
       action: 'approve_deployment',
-      data: { environment: 'staging', ref: 'main' },
+      data: { environment: 'staging', ref: 'main', run_id: '30433642', head_sha: SHA },
       changes: [{ field: 'approve', from: false, to: true }]
     })
     expect(githubAdapter.plan(null as any, d({ approve: false }), o)[0].kind).toBe('noop')
   })
 
-  it('approves the matching environment of the newest waiting run, with variables from desired', async () => {
-    const f = fake({
-      [RUNS]: { body: fx('workflow_runs_waiting') },
-      [`GET ${PENDING}`]: { body: fx('pending_deployments') },
-      [`POST ${PENDING}`]: { body: fx('approved_deployments') },
-      'GET /repos/acme/web/actions/workflows/deploy.yml': { body: fx('workflow') }
+  it('approves exactly the planned run on the planned environment, with variables from desired', async () => {
+    const f = fake(routes())
+    const r = await githubAdapter.apply(ctxFor(f.impl), planned(), d())
+    expect(r.answer).toMatchObject({
+      approved: true,
+      run_id: 30433642,
+      head_sha: SHA,
+      environment: 'staging'
     })
-    const op = githubAdapter.plan(null as any, d(), o)[0]
-    const r = await githubAdapter.apply(ctxFor(f.impl), op, d())
-    expect(r.answer).toMatchObject({ approved: true, run_id: 30433642, environment: 'staging' })
-    const runs = f.calls.find((c) => `${c.method} ${c.path}` === RUNS)
-    expect(runs).toBeTruthy()
     const post = f.calls.find((c) => c.method === 'POST')
     expect(post?.path).toBe(PENDING)
     expect(post?.body).toMatchObject({ environment_ids: [161088068], state: 'approved' })
+    // Never a list of runs at apply: only the one run named.
+    expect(f.calls.some((c) => `${c.method} ${c.path}` === RUNS)).toBe(false)
   })
 
-  it('refuses another workflow, another environment than planned, and changed op data', async () => {
-    const f = fake({})
-    const op = githubAdapter.plan(null as any, d(), o)[0]
+  it('findWaitingRun reads the newest dispatch or push run of this repository on the branch', async () => {
+    const f = fake({
+      [RUNS]: {
+        body: {
+          workflow_runs: [
+            { ...theRun, id: 1, head_repository: { full_name: 'evil/web' } },
+            { ...theRun, id: 2, event: 'pull_request_target' },
+            theRun
+          ]
+        }
+      },
+      [`GET ${PENDING}`]: { body: fx('pending_deployments') }
+    })
+    const { findWaitingRun } = await import('../../../services/hub/providers/github/resources.js')
+    const run = await findWaitingRun(ctxFor(f.impl), 'acme/web#deploy.yml', 'staging', 'main')
+    expect(run).toMatchObject({ runId: 30433642, headSha: SHA, event: 'workflow_dispatch' })
+    const none = fake({ [RUNS]: { body: { workflow_runs: [] } } })
+    expect(
+      await findWaitingRun(ctxFor(none.impl), 'acme/web#deploy.yml', 'staging', 'main')
+    ).toBeNull()
+    await expect(
+      findWaitingRun(ctxFor(none.impl), 'acme/web#deploy.yml', 'staging', '')
+    ).rejects.toMatchObject({ code: 'BAD_ID' })
+  })
+
+  it('refuses another workflow, environment, run or commit than planned, and an empty branch', async () => {
+    const f = fake(routes())
+    const op = planned()
     const other = desired(
       'github.workflow',
-      { workflow: 'deploy.yml', approve: true, approve_environment: 'staging', ref: 'main' },
+      { ...d().fields },
       { refs: { repository: 'acme/other' } }
     )
-    await expect(githubAdapter.apply(ctxFor(f.impl), op, other)).rejects.toMatchObject({
-      code: 'TARGET_MISMATCH'
-    })
+    for (const bad of [
+      other,
+      d({ approve_environment: 'production' }),
+      d({ approve_run_id: '30433600' }),
+      d({ approve_sha: '0b2a1c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b' }),
+      d({ ref: '' }),
+      null
+    ])
+      await expect(githubAdapter.apply(ctxFor(f.impl), op, bad as any)).rejects.toMatchObject({
+        code: 'TARGET_MISMATCH'
+      })
     await expect(
-      githubAdapter.apply(ctxFor(f.impl), op, d({ approve_environment: 'production' }))
+      githubAdapter.apply(ctxFor(f.impl), { ...op, data: { ...op.data, environment: 'production' } }, d())
     ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
-    await expect(
-      githubAdapter.apply(
-        ctxFor(f.impl),
-        { ...op, data: { environment: 'production', ref: 'main' } },
-        d()
-      )
-    ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
-    await expect(githubAdapter.apply(ctxFor(f.impl), op, null)).rejects.toMatchObject({
-      code: 'TARGET_MISMATCH'
-    })
     expect(f.calls).toEqual([])
   })
 
-  it('nothing waiting is retryable; an account that may not approve is refused, nothing posted', async () => {
-    const op = githubAdapter.plan(null as any, d(), o)[0]
-    const none = fake({ [RUNS]: { body: { total_count: 0, workflow_runs: [] } } })
-    await expect(githubAdapter.apply(ctxFor(none.impl), op, d())).rejects.toMatchObject({
-      code: 'NOTHING_WAITING',
-      retryable: true
+  it('a run whose commit moved, from a fork, by another event or on another branch is not approved', async () => {
+    for (const run of [
+      { ...theRun, head_sha: '0b2a1c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b' },
+      { ...theRun, head_repository: { full_name: 'evil/web' } },
+      { ...theRun, event: 'pull_request_target' },
+      { ...theRun, head_branch: 'feature' }
+    ]) {
+      const f = fake(routes(run))
+      await expect(githubAdapter.apply(ctxFor(f.impl), planned(), d())).rejects.toMatchObject({
+        code: 'TARGET_MISMATCH'
+      })
+      expect(f.calls.some((c) => c.method === 'POST')).toBe(false)
+    }
+  })
+
+  it('a run no longer waiting is refused without retry; an account that may not approve is refused', async () => {
+    const done = fake(routes({ ...theRun, status: 'completed' }))
+    await expect(githubAdapter.apply(ctxFor(done.impl), planned(), d())).rejects.toMatchObject({
+      code: 'RUN_NOT_WAITING',
+      retryable: false
+    })
+    const gone = fake({ [RUN]: { status: 404, body: { message: 'Not Found' } } })
+    await expect(githubAdapter.apply(ctxFor(gone.impl), planned(), d())).rejects.toMatchObject({
+      code: 'RUN_NOT_WAITING',
+      retryable: false
+    })
+    const otherEnv = fake({ ...routes(), [`GET ${PENDING}`]: { body: [] } })
+    await expect(githubAdapter.apply(ctxFor(otherEnv.impl), planned(), d())).rejects.toMatchObject({
+      code: 'RUN_NOT_WAITING'
     })
     const pending = fx('pending_deployments') as any[]
     const cannot = fake({
-      [RUNS]: { body: fx('workflow_runs_waiting') },
+      ...routes(),
       [`GET ${PENDING}`]: { body: [{ ...pending[0], current_user_can_approve: false }] }
     })
-    await expect(githubAdapter.apply(ctxFor(cannot.impl), op, d())).rejects.toMatchObject({
+    await expect(githubAdapter.apply(ctxFor(cannot.impl), planned(), d())).rejects.toMatchObject({
       code: 'FORBIDDEN'
     })
-    expect(cannot.calls.some((c) => c.method === 'POST')).toBe(false)
+    for (const f of [done, gone, otherEnv, cannot])
+      expect(f.calls.some((c) => c.method === 'POST')).toBe(false)
   })
 })
 

@@ -242,29 +242,45 @@ export function planGithub(
     })
   }
 
-  // Task 11c: environment approval — approve the run that waits for review on an environment.
+  // Task 11c: environment approval — approve ONE waiting run (id + commit named by the
+  // promotion that planned it; bound in the plan hash through op.data).
   if (type === 'github.workflow' && desired.fields.approve === true) {
-    const environment =
-      typeof desired.fields.approve_environment === 'string'
-        ? desired.fields.approve_environment
-        : ''
+    const w = approvalWant(desired)
     ops.push({
       ...base,
       kind: 'update',
       externalId: observed.externalId,
       action: 'approve_deployment',
-      reason: `Approve the waiting ${observed.externalId.split('#')[1]} deployment to ${environment || 'its environment'}.`,
+      reason: `Approve run ${w.runId || '?'} (commit ${w.headSha.slice(0, 12) || '?'}) of ${observed.externalId.split('#')[1]} on ${w.branch || '?'} for ${w.environment || '?'}.`,
       changes: [{ field: 'approve', from: false, to: true }],
       preconditions: { status: observed.status ?? null },
       risk: [],
       data: {
-        environment,
-        ref: typeof desired.fields.ref === 'string' ? desired.fields.ref : ''
+        environment: w.environment,
+        ref: w.branch,
+        run_id: w.runId,
+        head_sha: w.headSha
       }
     })
   }
 
   return ops.length ? ops : [noop(type, observed, 'Already as desired.')]
+}
+
+/** What an approval names, from the desired resource only (strings; empty when missing). */
+function approvalWant(desired: DesiredResource): {
+  environment: string
+  branch: string
+  runId: string
+  headSha: string
+} {
+  const t = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
+  return {
+    environment: t(desired.fields.approve_environment),
+    branch: t(desired.fields.ref),
+    runId: t(desired.fields.approve_run_id),
+    headSha: t(desired.fields.approve_sha).toLowerCase()
+  }
 }
 
 // ── Apply ──
@@ -337,18 +353,23 @@ async function applyOp(
         'The workflow this approval targets is not the one the resource points at.'
       )
     // What is sent comes from the desired resource only; the planned data is compared, never sent.
-    const environment =
-      typeof desired.fields.approve_environment === 'string'
-        ? desired.fields.approve_environment
-        : ''
-    const ref = typeof desired.fields.ref === 'string' ? desired.fields.ref : ''
-    const data = (op.data ?? {}) as { environment?: unknown; ref?: unknown }
-    if (!environment || data.environment !== environment || (data.ref ?? '') !== ref)
+    const w = approvalWant(desired)
+    const data = (op.data ?? {}) as Record<string, unknown>
+    if (
+      !w.environment ||
+      !w.branch ||
+      !w.runId ||
+      !w.headSha ||
+      data.environment !== w.environment ||
+      data.ref !== w.branch ||
+      data.run_id !== w.runId ||
+      data.head_sha !== w.headSha
+    )
       throw new ProviderError(
         'TARGET_MISMATCH',
-        'The environment or branch to approve is not the one the plan named — plan again.'
+        'The environment, branch, run or commit to approve is not the one the plan named — plan again.'
       )
-    const done = await approvePendingDeployment(ctx, ext, environment, ref)
+    const done = await approvePendingDeployment(ctx, ext, w)
     return {
       ok: true,
       externalId: ext,
@@ -356,8 +377,9 @@ async function applyOp(
       answer: {
         approved: true,
         run_id: done.runId,
+        head_sha: done.headSha,
         environment: done.environment,
-        ref: ref || 'any branch'
+        ref: w.branch
       }
     }
   }

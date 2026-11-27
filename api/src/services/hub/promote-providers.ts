@@ -92,6 +92,9 @@ export interface ProviderFact {
   problem: string | null
   /** Task 11c, github_actions in approval mode: the GitHub environment the step approves. */
   approveEnvironment?: string
+  /** …and the one waiting run (id + head commit) read while planning — the only one approved. */
+  approveRunId?: string
+  approveSha?: string
 }
 
 type ResourceLite = {
@@ -206,6 +209,8 @@ export async function gatherProviderFacts(o: {
   components: HubComponent[]
   previousComponents: HubComponent[]
   recorded: (c: HubComponent) => string | null
+  /** Task 11c: reads the GitHub run an approval step would approve (tests pass a fake). */
+  readWaitingRun?: import('./providers/hooks/approval-read.js').WaitingRunReader
 }): Promise<Record<number, ProviderFact>> {
   const out: Record<number, ProviderFact> = {}
   for (const c of o.components) {
@@ -235,8 +240,35 @@ export async function gatherProviderFacts(o: {
         const env = mode.environment ?? o.target.key
         fact.approveEnvironment = env
         fact.refLabel = `the waiting run on ${branch}, environment ${env}`
-        if (o.kind === 'rollback')
+        if (o.kind === 'rollback') {
           fact.problem = `${c.name}: approves a waiting GitHub deployment, which cannot roll back — start the older run in GitHub, then promote to approve it.`
+          continue
+        }
+        if (!branch) continue
+        if (!own.external_id) {
+          fact.problem = `${c.name}: its workflow has no GitHub id yet.`
+          continue
+        }
+        // The one run the step will approve: read now, named in the plan, bound in its hash.
+        const read =
+          o.readWaitingRun ?? (await import('./providers/hooks/approval-read.js')).readWaitingRun
+        try {
+          const run = await read({
+            connectionId: own.connection_id,
+            workflow: own.external_id,
+            environment: env,
+            branch
+          })
+          if (!run) {
+            fact.problem = `${c.name}: no run of ${own.external_id.split('#')[1] ?? 'the workflow'} on ${branch} waits for approval to ${env} — start it in GitHub, then plan the promotion again.`
+            continue
+          }
+          fact.approveRunId = String(run.runId)
+          fact.approveSha = run.headSha
+          fact.refLabel = `run ${run.runId} (commit ${run.headSha.slice(0, 12)}) on ${branch}, environment ${env}`
+        } catch (e) {
+          fact.problem = `${c.name}: could not read the waiting runs from GitHub (${e instanceof Error ? e.message.slice(0, 200) : 'no answer'}).`
+        }
       }
       continue
     }
@@ -323,7 +355,9 @@ export function providerStepFor(
       resourceId: f.resourceId ?? 0,
       ref: f.ref ?? '',
       refLabel: f.refLabel ?? '',
-      ...(f.approveEnvironment ? { approveEnvironment: f.approveEnvironment } : {})
+      ...(f.approveEnvironment ? { approveEnvironment: f.approveEnvironment } : {}),
+      ...(f.approveRunId ? { approveRunId: f.approveRunId } : {}),
+      ...(f.approveSha ? { approveSha: f.approveSha } : {})
     }
   }
 }
@@ -359,7 +393,13 @@ export function providerChangeRequest(
         {
           action: 'update',
           resourceId: p.resourceId,
-          fields: { ref: p.ref, approve_environment: p.approveEnvironment, approve: true }
+          fields: {
+            ref: p.ref,
+            approve_environment: p.approveEnvironment,
+            approve_run_id: p.approveRunId ?? '',
+            approve_sha: p.approveSha ?? '',
+            approve: true
+          }
         }
       ]
     }

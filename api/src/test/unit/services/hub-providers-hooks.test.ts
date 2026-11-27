@@ -523,6 +523,8 @@ describe('database servers and RDS', () => {
 
 // ── Promote ──
 
+const SHA = 'acb5820ced9479c074f688cc328bf03f341a511d'
+
 const component = (over: Partial<HubComponent>): HubComponent => ({
   id: 1,
   placement_id: 1,
@@ -770,14 +772,24 @@ describe('promote through provider components', () => {
     world.seed('github.workflow', 'acme/shop#release.yml', { workflow: 'release.yml' })
     const wf = await adopt('github', 'github.workflow', 'acme/shop#release.yml', null)
     const target = { id: production, key: 'production' } as never
-    const fact = async (c: HubComponent, kind: 'promote' | 'rollback' = 'promote') =>
+    const reads: unknown[] = []
+    const reader = async (q: unknown) => {
+      reads.push(q)
+      return { runId: 4242, headSha: SHA, event: 'push', createdAt: null, url: null }
+    }
+    const fact = async (
+      c: HubComponent,
+      kind: 'promote' | 'rollback' = 'promote',
+      readWaitingRun: typeof reader | (() => Promise<null>) = reader
+    ) =>
       (
         await promoteProviders.gatherProviderFacts({
           kind,
           target,
           components: [c],
           previousComponents: [],
-          recorded: () => null
+          recorded: () => null,
+          readWaitingRun
         })
       )[c.position]
     const named = component({
@@ -789,33 +801,49 @@ describe('promote through provider components', () => {
     expect(await fact(named)).toMatchObject({
       ref: 'main',
       approveEnvironment: 'prod-gh',
+      approveRunId: '4242',
+      approveSha: SHA,
       problem: null
+    })
+    expect(reads.at(-1)).toEqual({
+      connectionId: conn.github,
+      workflow: 'acme/shop#release.yml',
+      environment: 'prod-gh',
+      branch: 'main'
     })
     // No name: the GitHub environment named like the Hub environment.
     expect(
       await fact(component({ kind: 'github_actions', resource_id: wf.id, deploy_job: 'approve' }))
     ).toMatchObject({ approveEnvironment: 'production' })
     expect((await fact(named, 'rollback')).problem).toMatch(/cannot roll back/)
+    expect((await fact(named, 'promote', async () => null)).problem).toMatch(/waits for approval/)
 
     const f = await fact(named)
     const step = promoteProviders.providerStepFor(named, f, '1.3.0')
-    expect(step.provider).toMatchObject({ approveEnvironment: 'prod-gh', ref: 'main' })
-    const dispatchStep = promoteProviders.providerStepFor(
-      component({ kind: 'github_actions', resource_id: wf.id, source_branch: 'main' }),
-      { ...f, approveEnvironment: undefined },
-      '1.3.0'
-    )
-    const req = promoteProviders.providerChangeRequest(step, {
+    expect(step.provider).toMatchObject({
+      approveEnvironment: 'prod-gh',
+      approveRunId: '4242',
+      approveSha: SHA,
+      ref: 'main'
+    })
+    const asked = promoteProviders.providerChangeRequest(step, {
       appId,
       envId: null,
       kind: 'promote',
       version: '1.3.0'
     })
-    expect(req.ops[0].fields).toEqual({
+    expect(asked.ops[0].fields).toEqual({
       ref: 'main',
       approve_environment: 'prod-gh',
+      approve_run_id: '4242',
+      approve_sha: SHA,
       approve: true
     })
+    const dispatchStep = promoteProviders.providerStepFor(
+      component({ kind: 'github_actions', resource_id: wf.id, source_branch: 'main' }),
+      { ...f, approveEnvironment: undefined, approveRunId: undefined, approveSha: undefined },
+      '1.3.0'
+    )
     expect(
       promoteProviders.providerChangeRequest(dispatchStep, {
         appId,
@@ -825,6 +853,27 @@ describe('promote through provider components', () => {
       }).ops[0].fields
     ).toMatchObject({ dispatch: true })
 
+    // The engine runs the approval only for the GitHub environment the promoted environment's
+    // component maps to.
+    const placement = await insertId('nivaro_hub_placements', {
+      kind: 'dedicated',
+      driver_id: 0,
+      target: '{}'
+    })
+    await db('nivaro_hub_environments')
+      .where({ id: production })
+      .update({ placement_id: placement })
+    await insertId('nivaro_hub_components', {
+      placement_id: placement,
+      position: 1,
+      name: 'deploy',
+      kind: 'github_actions',
+      driver_id: 0,
+      source_branch: 'main',
+      deploy_job: 'approve:prod-gh',
+      verify_field: 'version',
+      resource_id: wf.id
+    })
     const deployId = await insertId('nivaro_hub_deploys', {
       app_id: appId,
       environment_id: production,
@@ -833,17 +882,15 @@ describe('promote through provider components', () => {
       status: 'running',
       started_by: ADMIN_ID
     })
-    const r = await promoteRun.providerStepRun(
-      step,
-      {
-        deployId,
-        version: '1.3.0',
-        kind: 'promote',
-        targetKey: 'production',
-        gitCtx: async () => ({}) as never
-      },
-      { signal: new AbortController().signal, log: () => undefined }
-    )
+    const ctx = {
+      deployId,
+      version: '1.3.0',
+      kind: 'promote' as const,
+      targetKey: 'production',
+      gitCtx: async () => ({}) as never
+    }
+    const opts = { signal: new AbortController().signal, log: () => undefined }
+    const r = await promoteRun.providerStepRun(step, ctx, opts)
     expect(r.changeId).toBeGreaterThan(0)
     expect(world.calls.at(-1)).toMatchObject({
       type: 'github.workflow',
@@ -851,6 +898,56 @@ describe('promote through provider components', () => {
       ext: 'acme/shop#release.yml',
       data: { environment: 'prod-gh', ref: 'main' }
     })
+
+    // Wrong environment: a step naming another GitHub environment than the mapping is refused
+    // before any provider call.
+    const before = world.calls.length
+    const wrong = {
+      ...step,
+      provider: {
+        ...(step.provider as NonNullable<typeof step.provider>),
+        approveEnvironment: 'production'
+      }
+    }
+    await expect(promoteRun.providerStepRun(wrong, ctx, opts)).rejects.toThrow()
+    expect(world.calls.length).toBe(before)
+    const failed = (await store.listChanges({})).find(
+      (c) => c.status === 'failed' && c.steps.some((s) => s.error?.code === 'TARGET_MISMATCH')
+    )
+    expect(failed).toBeTruthy()
+
+    // No origin: the same approval planned by hand (not carried by a promotion) never runs.
+    const plain = await engine.planResourceChange(
+      req(
+        'github',
+        [
+          {
+            action: 'update',
+            resourceId: wf.id,
+            fields: {
+              ref: 'main',
+              approve_environment: 'prod-gh',
+              approve_run_id: '4242',
+              approve_sha: SHA,
+              approve: true
+            }
+          }
+        ],
+        null
+      ),
+      ADMIN
+    )
+    const out = await engine.startResourceChange(
+      plain.changeId,
+      { planHash: plain.planHash },
+      ADMIN
+    )
+    expect(out.status).toBe('failed')
+    expect((await store.readChange(plain.changeId))?.steps.at(-1)?.error?.code).toBe(
+      'ORIGIN_INVALID'
+    )
+    expect(world.calls.length).toBe(before)
+    await db('nivaro_hub_environments').where({ id: production }).update({ placement_id: null })
   })
 
   it('the approval environment is part of the plan hash and the plan lines (Task 11c)', () => {

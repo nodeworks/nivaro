@@ -352,7 +352,13 @@ export function planHash(input: PlanInput, steps: PromotionStep[]): string {
                 s.provider.resourceId,
                 s.provider.ref,
                 // Task 11c: only an approval step adds its environment (dispatch hashes unchanged).
-                ...(s.provider.approveEnvironment ? [s.provider.approveEnvironment] : [])
+                ...(s.provider.approveEnvironment
+                  ? [
+                      s.provider.approveEnvironment,
+                      s.provider.approveRunId ?? null,
+                      s.provider.approveSha ?? null
+                    ]
+                  : [])
               ]
             ]
           : [])

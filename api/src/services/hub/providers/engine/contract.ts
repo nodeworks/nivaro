@@ -217,7 +217,10 @@ export const RESOURCE_CHANGE_CODES = {
   ORIGIN_INVALID: 409,
   NOT_IMPLEMENTED: 501,
   // Task 3b: the provider refused the connection's credentials (never retryable — fix the keys).
-  AUTH_FAILED: 502
+  AUTH_FAILED: 502,
+  // Task 11c: a named op whose target is not the one its change may act on (another workflow,
+  // GitHub environment, run or commit than planned) — nothing was sent.
+  TARGET_MISMATCH: 409
 } as const
 
 export type ResourceChangeCode = keyof typeof RESOURCE_CHANGE_CODES
