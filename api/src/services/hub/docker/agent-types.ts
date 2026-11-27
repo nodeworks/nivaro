@@ -55,6 +55,13 @@ export interface StackSpec {
   files_subfolder?: string
   /** Agent 0.2.3: the app services run as uid 1000 from the start (ContainerSpec.User). */
   run_as?: 'app'
+  /**
+   * Agent 0.2.5 (gap G-D): the certificate Traefik serves for this stack's names — the PEM chain
+   * and its unencrypted key (an ACME certificate bound to EDGE_TLS_CERT / EDGE_TLS_KEY). The agent
+   * writes it to the stack's file in HUB_AGENT_TRAEFIK_DYNAMIC_DIR; the routers carry `tls=true`
+   * and no cert resolver. App owners, traefik edge; the leaf covers every hostname.
+   */
+  edge_tls?: { cert: string; key: string }
 }
 
 /** `GET /v1/health` */
@@ -94,6 +101,8 @@ export interface AgentHealth {
   redis_pin_label?: string | null
   /** Agent 0.2.4: POST /v1/stacks/:name/scale and the bounds it holds every role to. */
   scale?: AgentScaleCaps
+  /** Agent 0.2.5: HUB_AGENT_TRAEFIK_DYNAMIC_DIR is set, so a stack may carry `edge_tls`. */
+  edge_tls?: boolean
 }
 
 /** Agent 0.2.4 (`GET /v1/health` `scale`). */
@@ -152,6 +161,8 @@ export interface StackApplyResult {
   spec_hash: string
   changed: string[]
   unchanged: string[]
+  /** Agent 0.2.5: what the apply did to the stack's certificate file (never its text). */
+  edge_tls?: 'written' | 'unchanged' | 'removed'
 }
 
 /** One role a scale changes (agent 0.2.4): only replicas and limits. */

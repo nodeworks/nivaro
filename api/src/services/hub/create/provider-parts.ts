@@ -1,5 +1,6 @@
 // Task 11a (Hub providers): the provider parts Create app makes per environment — shapes, checks
 // and plan words. Pure (the planner imports it); the step that makes them is provider-step.ts.
+import { EDGE_TLS_CERT_KEY, EDGE_TLS_KEY_KEY } from '../docker/edge-tls.js'
 import { redirectUriFor } from './app-config.js'
 
 /** The part types Create app offers per environment. */
@@ -79,6 +80,22 @@ export const PART_BINDINGS: Partial<
   ],
   'redis-cloud.database': [
     { resource: 'part', output_key: 'redis_url', target: 'stack_secret', target_key: 'REDIS_URL' }
+  ],
+  // Gap G-D: the certificate Traefik serves for the environment's name (agent 0.2.5): the stack
+  // secrets the renderer sends as the spec's `edge_tls` (docker/edge-tls.ts), never to the app.
+  'acme.certificate': [
+    {
+      resource: 'part',
+      output_key: 'fullchain',
+      target: 'stack_secret',
+      target_key: EDGE_TLS_CERT_KEY
+    },
+    {
+      resource: 'part',
+      output_key: 'private_key',
+      target: 'stack_secret',
+      target_key: EDGE_TLS_KEY_KEY
+    }
   ]
 }
 
@@ -166,7 +183,7 @@ export function partLine(envKey: string, p: CreateProviderPart): string {
     'livekit.api_key':
       'a LiveKit Cloud key (the huddle settings are filled from it once the app answers)',
     'acme.certificate':
-      'a TLS certificate from an ACME CA for the environment name (Traefik cannot get one on its own for a name made by hand)'
+      'a TLS certificate from an ACME CA for the environment name (Traefik cannot get one on its own for a name made by hand; the Hub agent serves it, EDGE_TLS_CERT / EDGE_TLS_KEY)'
   }
   return `${envKey}: ${what[p.type]}${name} through connection #${p.connection_id}`
 }
@@ -180,8 +197,8 @@ export function partName(p: CreateProviderPart): string | null {
 /**
  * Task 43: the bindings a made part gets by default (output → destination), so nobody copies a
  * key: a LiveKit key fills the app's huddle settings (allow-listed app settings, pushed over the
- * hub link once the app answers). An ACME certificate gets none: which stack secrets the edge
- * reads them from is the operator's (docs, hub-providers-acme).
+ * hub link once the app answers). An ACME certificate's are stack bindings (PART_BINDINGS: its
+ * chain and key → EDGE_TLS_CERT / EDGE_TLS_KEY, which the agent serves through Traefik).
  */
 export function partBindings(
   type: CreateProviderType

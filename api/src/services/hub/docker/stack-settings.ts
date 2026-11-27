@@ -8,6 +8,7 @@ import { hubTokenColumns } from '../link-token.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
 import { HUB_MASK, HubSecretError, nextSecret, openSecret, sealSecret } from '../secrets.js'
 import type { DockerDriverConfig } from './driver-config.js'
+import { isEdgeTlsKey } from './edge-tls.js'
 import { environmentNames } from './render-spec.js'
 import {
   type AgentEnvPrefixRead,
@@ -330,6 +331,14 @@ function settingKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail 
       named('setting', k)
     )
   }
+  // Gap G-D: the stack certificate's two keys are secrets the renderer sends as `edge_tls`.
+  if (isEdgeTlsKey(k)) {
+    return fail(
+      'SECRET_IN_SETTINGS',
+      `${k} is the stack certificate: it can only be a secret (bind an ACME certificate's output to it).`,
+      named('setting', k)
+    )
+  }
   // Ruling X-2: a credential that may only ever be a secret (the agent refuses it as env).
   if (secretOnlyEnvKey(k)) {
     return fail(
@@ -402,6 +411,9 @@ function secretKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail |
       named('secret', k)
     )
   }
+  // Gap G-D: not an app key — the renderer sends these two as the spec's `edge_tls` (Traefik's
+  // certificate for the stack), never to the app.
+  if (isEdgeTlsKey(k)) return null
   return notAllowed(k, 'secret', allow)
 }
 
@@ -429,7 +441,8 @@ async function envAllowFor(
     ...Object.keys(existing?.settings ?? {}),
     ...stored
   ]
-  if (!keys.some((k) => ENV_KEY_RE.test(k) && !knownEnvKey(k))) return NO_PREFIXES
+  if (!keys.some((k) => ENV_KEY_RE.test(k) && !knownEnvKey(k) && !isEdgeTlsKey(k)))
+    return NO_PREFIXES
   let read: AgentEnvPrefixRead | null = null
   try {
     read = load ? await load() : null

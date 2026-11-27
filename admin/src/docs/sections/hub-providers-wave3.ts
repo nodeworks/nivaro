@@ -56,7 +56,7 @@ export const hubProvidersWave3Docs: DocSection = {
       type: 'ul',
       items: [
         '`livekit.api_key`: paste a LiveKit Cloud key pair; the Hub checks it, seals it and binds it to the app’s huddle settings (`huddle_livekit_url`, `huddle_livekit_key`, `huddle_livekit_secret`). The settings reach the app over its hub link once it answers; a binding that could not push yet shows its error on the resource.',
-        '`acme.certificate`: a TLS certificate for the environment’s name (names default to its address), offered only on a Docker driver whose DNS names are made by hand — elsewhere the edge gets its own certificate (`BAD_PROVIDER_PART`). Bind its outputs to the stack secrets your edge reads; the Hub does not configure the edge.'
+        '`acme.certificate`: a TLS certificate for the environment’s name (names default to its address), offered only on a Docker driver whose DNS names are made by hand — elsewhere the edge gets its own certificate (`BAD_PROVIDER_PART`). Its chain and key are bound to the stack secrets `EDGE_TLS_CERT` / `EDGE_TLS_KEY`, and the Hub agent (0.2.5 or later, with `HUB_AGENT_TRAEFIK_DYNAMIC_DIR`) serves them through Traefik’s file provider; the plan refuses `AGENT_TOO_OLD` / `EDGE_TLS_NOT_CONFIGURED` before anything is made when the agent cannot (see Let’s Encrypt (ACME) → Serving it from Traefik).'
       ]
     }
   ]

@@ -445,7 +445,9 @@ export async function gatherStackFacts(
         hubPublicUrl: null,
         agentVersion: health.agent_version,
         agentVolumeNfs: health.volume_nfs,
-        agentExportMount: health.export_mount
+        agentExportMount: health.export_mount,
+        agentEdgeTls: health.edge_tls,
+        maskedSecrets: true
       })
     } catch (err) {
       if (!(err instanceof StackRenderError)) throw err

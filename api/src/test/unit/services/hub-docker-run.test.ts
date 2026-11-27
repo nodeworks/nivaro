@@ -936,6 +936,55 @@ describe('prepareStackSpec (restart, ruling P4-16)', () => {
     expect(await roles('0.2.2')).toEqual(['web', 'worker', 'realtime', 'importer', 'exporter'])
   })
 
+  it('gap G-D: a bound stack certificate goes as edge_tls to a 0.2.5 agent that serves one', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { join, resolve } = await import('node:path')
+    const dir = resolve(
+      import.meta.dirname,
+      '../../../../../packages/hub-agent/test/fixtures/edge-tls'
+    )
+    const cert = readFileSync(join(dir, 'a.crt'), 'utf8')
+    const key = readFileSync(join(dir, 'a.key'), 'utf8')
+    // Names made by hand (the ACME part's case): no wildcard rule on the name.
+    await useDriver(manual)
+    await db('nivaro_hub_environments')
+      .where({ id: 2 })
+      .update({ base_url: 'https://acme-staging.apps.corp' })
+    const env = environmentFromRow(
+      await db('nivaro_hub_environments').where({ id: 2 }).first()
+    ) as Env
+    const v = await S.validateStackSettings(
+      { secrets: { EDGE_TLS_CERT: cert, EDGE_TLS_KEY: key } },
+      await S.readStackSettings(2),
+      { driver: manual, env }
+    )
+    if (!v.ok) throw new Error(`${v.code}: ${v.message}`)
+    await S.saveStackSettings(2, v.row.fields, v.row.extension_pins)
+    const want = {
+      name: 'acme-prod',
+      driverId: 3,
+      version: '0.3.10',
+      image: IMAGE,
+      extensions: { 'efp-ops': STG_PIN }
+    }
+    const prepare = (over: Partial<AgentHealth>) => {
+      const a = fakeAgent(['converged'], () =>
+        health({ host_suffixes: ['apps.example.com', 'apps.corp'], ...over })
+      )
+      return RS.prepareStackSpec(2, want, { agent: a.agent as never })
+    }
+    const p = await prepare({ agent_version: '0.2.5', edge_tls: true })
+    expect(p.spec.edge_tls).toEqual({ cert, key })
+    expect(Object.keys(p.spec.secrets)).not.toContain('EDGE_TLS_CERT')
+    expect(Object.keys(p.spec.secrets)).not.toContain('EDGE_TLS_KEY')
+    await expect(prepare({ agent_version: '0.2.5' })).rejects.toMatchObject({
+      code: 'EDGE_TLS_NOT_CONFIGURED'
+    })
+    await expect(prepare({ agent_version: '0.2.4', edge_tls: true })).rejects.toMatchObject({
+      code: 'AGENT_TOO_OLD'
+    })
+  })
+
   it('refuses malformed pins (fails closed)', async () => {
     await expect(
       RS.prepareStackSpec(2, {

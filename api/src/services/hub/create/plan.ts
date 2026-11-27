@@ -23,6 +23,7 @@ import {
 } from '../db/names.js'
 import { isCollation, isUserHost } from '../db/provisioner.js'
 import { type HubDbServerRow, publicServer } from '../db/servers.js'
+import { edgeTlsAgentProblem } from '../docker/edge-tls.js'
 import { hostnameRefusals } from '../docker/render-spec.js'
 import { publishPortProblem } from '../docker/stack-gather.js'
 import { StackTemplateError, stackRoles } from '../docker/templates.js'
@@ -629,6 +630,17 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
         'An ACME certificate is offered only on a Docker driver whose DNS names are made by hand: elsewhere the edge gets its own certificate.',
         label
       )
+    // Gap G-D: the certificate reaches Traefik through the agent (agent 0.2.5 with
+    // HUB_AGENT_TRAEFIK_DYNAMIC_DIR): say so here, not when the first deploy is refused.
+    else if (
+      parts.ok &&
+      parts.parts.some((p) => p.type === 'acme.certificate') &&
+      kind === 'docker' &&
+      dk?.health
+    ) {
+      const why = edgeTlsAgentProblem(dk.health)
+      if (why) block(why.code, why.message, label)
+    }
     planned.push({
       key: envKey,
       position,
