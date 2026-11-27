@@ -89,6 +89,10 @@ export const COST_ROUTES: HubRoute[] = [
       auto_approve_under_cents: n('Owner changes under this skip approval (null = Hub-wide)')
     }
   }),
+  r('GET', '/costs/outside', 'admin', 'read', 'Outside spend billed by provider cost feeds', {
+    notes:
+      'Task 34: what provider connections with a cost feed billed, per app (by managed resource, then the nivaro-hub:app tag), shared resources and unassigned, per provider: month to date and each of the last 12 calendar months, in cents per currency. Also each feed’s newest billed day and its last read.'
+  }),
   r('GET', '/costs/settings', 'owner', 'read', 'The Hub-wide auto-approve limit'),
   r('PUT', '/costs/settings', 'admin', 'write', 'Set the Hub-wide auto-approve limit', {
     notes:

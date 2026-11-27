@@ -2564,7 +2564,8 @@ export const HUB_ROUTES: HubRoute[] = [
     'read',
     'The cost report as CSV (one line per environment)',
     {
-      notes: 'Every text cell is formula-safe. Logged.'
+      notes:
+        'Every text cell is formula-safe. Logged. Ends with an Outside spend section (billed by provider cost feeds, per app and provider) when any feed has rows.'
     }
   ),
   r('GET', '/chargeback/settings', 'Costs', 'admin', 'read', 'Rates, currency and window'),
@@ -2805,7 +2806,11 @@ export const HUB_ROUTES: HubRoute[] = [
     'Security',
     'owner',
     'read',
-    'Certificate expiry and DNS of every environment name'
+    'Certificate expiry and DNS of every environment name',
+    {
+      notes:
+        'Also answers `domains`: every registrar domain the Hub manages (expiry, auto-renew, transfer lock, state), warned 45 and 14 days ahead. Owners see their own apps.'
+    }
   ),
   r(
     'POST',

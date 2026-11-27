@@ -4,6 +4,7 @@ import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
 import { idParam, isAppOwner, listApps, readApp } from '../services/hub/apps.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
+import { registerProviderCostsCron } from '../services/hub/providers/costs.js'
 import { estimateProvider } from '../services/hub/providers/costs-live.js'
 import {
   approveResourceChange,
@@ -552,6 +553,8 @@ export async function hubProviderRoutes(app: FastifyInstance) {
 
   // The periodic read of managed resources (drift, gone); a no-op where crons do not tick.
   registerResourceObserveCron(app)
+  // Task 34: the daily provider cost feed (06:10 UTC).
+  registerProviderCostsCron(app)
 
   // ── Types ──
 

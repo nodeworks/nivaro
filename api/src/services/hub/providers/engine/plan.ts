@@ -1169,12 +1169,12 @@ export async function computePlan(
         }
         const desiredForRisk = desired
         const extra: RiskFlag[] = []
-        if (
-          (op.kind === 'create' || op.kind === 'replace') &&
-          desiredForRisk &&
-          w.type.costClass?.(desiredForRisk) === 'monthly'
-        )
-          extra.push('cost')
+        // Any billing class but `none` (monthly, yearly, one_time — Task 34) is a cost.
+        const costClass =
+          (op.kind === 'create' || op.kind === 'replace') && desiredForRisk
+            ? w.type.costClass?.(desiredForRisk)
+            : undefined
+        if (costClass && costClass !== 'none') extra.push('cost')
         op.risk = [
           ...new Set([...(op.risk ?? []), ...w.type.risk(op, desiredForRisk), ...extra])
         ].sort() as RiskFlag[]

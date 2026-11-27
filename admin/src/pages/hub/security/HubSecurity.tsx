@@ -13,6 +13,7 @@ import { useAuth } from '@/lib/auth'
 import { cn, formatDate, formatRelative } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
 import { Field, ghostButton, SecretInput, SectionCard, smallButton } from '../hub-parts'
+import HubDomainsCard from './HubDomainsCard'
 import {
   blobError,
   type CertRow,
@@ -52,6 +53,7 @@ export default function HubSecurity() {
       <div className='relative flex-1 overflow-y-auto bg-slate-50 p-4 sm:p-6 dark:bg-background'>
         <div className='space-y-4'>
           <CertificatesCard isAdmin={isAdmin} />
+          <HubDomainsCard />
           <VulnerabilitiesCard isAdmin={isAdmin} />
           <ComplianceCard />
           {isAdmin && <SettingsCard />}
