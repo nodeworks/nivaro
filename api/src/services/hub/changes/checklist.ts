@@ -36,13 +36,16 @@ export type ChecklistAction =
   | 'extension_promote'
   /** Hub enhancement 47: an app's retirement (items opt in; claimed when it starts). */
   | 'retire'
+  /** Hub providers: a resource change in a production environment (items opt in). */
+  | 'resource_change'
 export const ACTIONS: readonly ChecklistAction[] = [
   'promote',
   'move',
   'upgrade',
   'config_promote',
   'extension_promote',
-  'retire'
+  'retire',
+  'resource_change'
 ]
 /** The actions a new item covers when none are named (the later ones opt in). */
 export const DEFAULT_ACTIONS: readonly ChecklistAction[] = ['promote', 'move', 'upgrade']
@@ -509,7 +512,7 @@ export interface ChecklistClaim {
   runId: number
   /** The run the checklist started (`deploy`, `move`, `shared_deploy`, `extension` = nivaro_hub_extension_promotions, `retire` = nivaro_hub_retirements, `config` = nivaro_hub_config_promotions). */
   link(
-    kind: 'deploy' | 'move' | 'shared_deploy' | 'extension' | 'retire' | 'config',
+    kind: 'deploy' | 'move' | 'shared_deploy' | 'extension' | 'retire' | 'config' | 'resource',
     id: number
   ): Promise<void>
   /** The start failed: the checklist is open again (ticks kept). */
@@ -563,7 +566,9 @@ export async function checklistGate(o: GateInput): Promise<ChecklistClaim | null
         ? 'upgrade'
         : o.action === 'retire'
           ? 'retirement'
-          : 'promotion'
+          : o.action === 'resource_change'
+            ? 'resource change'
+            : 'promotion'
 
   let run: ChecklistRun | null = null
   const asked = o.runId == null || o.runId === '' ? null : Number(o.runId)
