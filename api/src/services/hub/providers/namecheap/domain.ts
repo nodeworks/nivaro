@@ -1,5 +1,6 @@
 import { fieldWords, typedName } from '../plan-words.js'
 import { registrarHealth } from '../registrar.js'
+import { renewDaysOf } from '../renewal-window.js'
 import {
   type DesiredResource,
   type FieldChange,
@@ -32,7 +33,11 @@ import { domainEstimate } from './pricing.js'
  *    There is no transfer-out operation: no EPP / auth code is ever read or shown.
  *  - Nameservers: changing them is `downtime` (names stop resolving until the new servers answer).
  *    An empty list means Namecheap's own DNS (`namecheap.dns_record` works only then).
- *  - Auto-renew is read only: Namecheap's API cannot change it (set it in the Namecheap dashboard).
+ *  - Auto-renew AT NAMECHEAP is read only: its API has no command to change it (set it in the
+ *    Namecheap dashboard). Instead the Hub can renew by itself (`hub_auto_renew`, Hub-side, off by
+ *    default; `renew_days_before` 7–60, default 30): the domain watch plans the `renew` trigger
+ *    through a change with origin `renewal` (hooks/domain-renewal.ts), a cost the Hub admin
+ *    approves unless the auto-approve limit covers it.
  *  - The Hub never deletes a registration (stop managing it instead).
  *  - Health carries `expiresAt`, `autoRenew`, `locked` (registrar: true) for the domain watch.
  */
@@ -186,11 +191,27 @@ export const domainSpec: ResourceTypeSpec = {
       help: 'Charges one more year now. A Hub administrator confirms it by typing “renew <domain>”.'
     },
     {
+      key: 'hub_auto_renew',
+      label: 'Renewed by the Hub',
+      kind: 'boolean',
+      default: false,
+      help: 'The Hub renews this domain for one year when it is inside the window below. The renewal costs money: it waits for a Hub administrator unless it is under the auto-approve limit.'
+    },
+    {
+      key: 'renew_days_before',
+      label: 'Hub renews this many days before it ends',
+      kind: 'number',
+      default: 30,
+      min: 7,
+      max: 60,
+      help: 'Only used when “Renewed by the Hub” is on. 7 to 60 days.'
+    },
+    {
       key: 'auto_renew',
-      label: 'Renews automatically',
+      label: 'Auto-renew at Namecheap (read only)',
       kind: 'boolean',
       readOnly: true,
-      help: 'Namecheap’s API cannot change this: set it in the Namecheap dashboard.'
+      help: 'Namecheap’s API cannot change this: set it in the Namecheap dashboard, or let the Hub renew it.'
     },
     { key: 'expires_at', label: 'Expires', kind: 'string', readOnly: true },
     { key: 'created_at', label: 'Registered', kind: 'string', readOnly: true },
@@ -387,6 +408,34 @@ export function planDomain(
         }
       )
     )
+  // The Hub-side renewal settings live in the Hub: echoed into observed so a later plan sees them.
+  const hubWant = desired.fields.hub_auto_renew === true
+  const hubHave = observed.fields.hub_auto_renew === true
+  const hubChanges: FieldChange[] = []
+  if (desired.fields.hub_auto_renew !== undefined && hubWant !== hubHave)
+    hubChanges.push({ field: 'hub_auto_renew', from: hubHave, to: hubWant })
+  if (
+    hubWant &&
+    desired.fields.renew_days_before !== undefined &&
+    renewDaysOf(desired.fields) !== renewDaysOf(observed.fields)
+  )
+    hubChanges.push({
+      field: 'renew_days_before',
+      from: renewDaysOf(observed.fields),
+      to: renewDaysOf(desired.fields)
+    })
+  if (hubChanges.length)
+    ops.push(
+      base(
+        'update',
+        desired,
+        observed.externalId,
+        hubWant
+          ? `The Hub renews ${name} by itself ${renewDaysOf(desired.fields)} days before it ends (one year at the renewal price; a Hub administrator approves each renewal unless it is under the auto-approve limit). Nothing changes at Namecheap now.`
+          : `The Hub stops renewing ${name} by itself. Nothing changes at Namecheap.`,
+        { changes: hubChanges, data: { $hubSetting: true } }
+      )
+    )
   if (desired.fields.renew === true)
     ops.push(
       base(
@@ -409,12 +458,28 @@ export function planDomain(
 
 // ── Apply ──
 
-const done = (observed: Observed | null, externalId: string | null): OpResult => ({
+const done = (
+  observed: Observed | null,
+  externalId: string | null,
+  desired: DesiredResource | null = null
+): OpResult => ({
   ok: true,
   externalId,
-  observed,
+  observed: observed && desired ? withHubEcho(observed, desired) : observed,
   answer: { status: 200 }
 })
+
+/** The Hub-side renewal settings mirrored into observed, so a later plan can tell they are unchanged. */
+function withHubEcho(o: Observed, desired: DesiredResource): Observed {
+  return {
+    ...o,
+    fields: {
+      ...o.fields,
+      hub_auto_renew: desired.fields.hub_auto_renew === true,
+      renew_days_before: renewDaysOf(desired.fields)
+    }
+  }
+}
 
 export async function applyDomain(
   ctx: ProviderContext,
@@ -423,7 +488,7 @@ export async function applyDomain(
 ): Promise<OpResult> {
   if (op.kind === 'noop') {
     const seen = op.externalId ? await readDomain(ctx, op.externalId) : null
-    return done(seen, op.externalId)
+    return done(seen, op.externalId, desired)
   }
   if (op.kind === 'delete' || op.kind === 'replace')
     throw new ProviderError(
@@ -488,11 +553,11 @@ export async function applyDomain(
   if (op.action === 'renew') {
     // Read before write: a renewal that already moved the expiry is not charged again.
     if (op.preconditions.expires_at && seen.fields.expires_at !== op.preconditions.expires_at)
-      return done(seen, name)
+      return done(seen, name, desired)
     const r = await ncCall(ctx, 'namecheap.domains.renew', { DomainName: name, Years: 1 })
     const ok = truthy(xmlAttr(xmlChild(r.response, 'DomainRenewResult'), 'Renew'))
     if (!ok) throw new ProviderError('DOMAIN_NOT_RENEWED', `Namecheap did not renew ${name}.`)
-    return done(await readDomain(ctx, name), name)
+    return done(await readDomain(ctx, name), name, desired)
   }
   const changed = new Set(op.changes.map((c) => c.field))
   if (changed.has('transfer_lock')) {
@@ -516,7 +581,7 @@ export async function applyDomain(
       else await ncCall(ctx, 'namecheap.domains.dns.setDefault', { SLD: sld, TLD: tld })
     }
   }
-  return done(await readDomain(ctx, name), name)
+  return done(await readDomain(ctx, name), name, desired)
 }
 
 export function domainHealth(ctx: ProviderContext, o: Observed): HealthAnswer {

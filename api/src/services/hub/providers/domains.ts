@@ -2,9 +2,11 @@ import { db } from '../../../db/index.js'
 import { deliverHubNotice, hubEventRecipients } from '../notify-events.js'
 import { dropCalendarEntry, putCalendarEntry } from '../security/seams.js'
 import { contextFor, type OpenConnection, openConnection, regionFor } from './engine/plan.js'
+import { type DomainRenewal, domainRenewalFor } from './hooks/domain-renewal.js'
 import { ensureCoreProviders } from './index.js'
 import { hubNotify } from './notify-hook.js'
 import { findType } from './registry.js'
+import { renewDaysOf } from './renewal-window.js'
 import { type HubResourceRow, listResources } from './store.js'
 import type { HealthAnswer } from './types.js'
 
@@ -78,6 +80,8 @@ export interface DomainDeps {
   recipients?: (appId: number) => Promise<string[]>
   /** The outbound notify (Task 13 routes); default hubNotify. */
   notify?: typeof hubNotify
+  /** Gap G-E: Hub auto-renew for a domain just read (tests); default hooks/domain-renewal.ts. */
+  renew?: (row: HubResourceRow, name: string, expiresAt: Date | null) => Promise<DomainRenewal>
 }
 
 /** The managed registrar domains (live rows with a provider id). */
@@ -196,6 +200,10 @@ async function record(
   }
   if (prev) await db(DOMAIN_CHECKS).where({ id: prev.id }).update(values)
   else await db(DOMAIN_CHECKS).insert({ resource_id: row.id, ...values })
+  // Gap G-E: a domain the Hub renews by itself (off by default) is renewed from this fresh read.
+  await (deps.renew ?? ((r, n, e) => domainRenewalFor(r, n, e)))(row, name, f.expiresAt).catch(
+    () => undefined
+  )
   if (f.expiresAt)
     await putCalendarEntry({
       source: 'domain',
@@ -253,6 +261,10 @@ export interface DomainRow {
   days_left: number | null
   auto_renew: boolean | null
   locked: boolean | null
+  /** Gap G-E: days before the end the Hub renews this domain by itself (null = it does not). */
+  hub_renew_days: number | null
+  /** Namecheap's own auto-renew cannot be changed through its API (shown read only). */
+  renew_read_only: boolean
   error_code: string | null
   checked_at: string | null
 }
@@ -277,7 +289,12 @@ export async function listDomains(appIds: number[] | null, now = new Date()): Pr
       q.whereIn('app_id', appIds.slice(0, 2000))
     }
     const rows = (await q.select()) as Array<Record<string, unknown>>
+    const res = new Map<number, HubResourceRow>()
+    const ids = rows.map((r) => Number(r.resource_id)).filter((x) => Number.isFinite(x))
+    if (ids.length)
+      for (const r of await listResources({ ids: ids.slice(0, 2000) })) res.set(r.id, r)
     return rows.map((r) => {
+      const hub = res.get(Number(r.resource_id))
       const exp = iso(r.expires_at)
       return {
         id: Number(r.id),
@@ -290,6 +307,8 @@ export async function listDomains(appIds: number[] | null, now = new Date()): Pr
         days_left: exp ? Math.floor((Date.parse(exp) - now.getTime()) / DAY) : null,
         auto_renew: flag(r.auto_renew),
         locked: flag(r.locked),
+        hub_renew_days: hub?.desired?.hub_auto_renew === true ? renewDaysOf(hub.desired) : null,
+        renew_read_only: hub?.type === 'namecheap.domain',
         error_code: r.error_code == null ? null : String(r.error_code),
         checked_at: iso(r.checked_at)
       }

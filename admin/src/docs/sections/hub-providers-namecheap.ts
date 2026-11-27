@@ -53,7 +53,8 @@ export const hubProvidersNamecheapDocs: DocSection = {
         '`Renew one year now` is a one-shot switch: one more year, charged now, typed confirm `renew <domain>`. A renewal that already moved the expiry date is not charged again.',
         'Transfer lock: turning it off is destructive (it lets the domain be transferred away). The Hub offers no transfer out and never reads an auth code.',
         'Nameservers: 2 to 12 host names, or empty for Namecheap’s own DNS. Changing them is a downtime change.',
-        'Auto-renew is shown but read only: Namecheap’s API cannot change it. Set it in the Namecheap dashboard.',
+        'Auto-renew at Namecheap is shown as “Auto-renew at Namecheap (read only)”: its API has no command to change it. Set it in the Namecheap dashboard, or let the Hub renew the domain instead.',
+        'Renewed by the Hub (`hub_auto_renew`, off by default; the Hub keeps this setting, Namecheap never sees it) with `renew_days_before` (7 to 60, default 30). When the domain watch reads the domain inside that window, the Hub plans a one-year `namecheap.domains.renew` as a change started by the Hub itself (origin `renewal`). It is a cost: it waits for a Hub administrator’s approval unless the Hub’s auto-approve limit covers the renewal price (increases only). The change may do nothing but renew that one domain. One renewal is made for each expiry date: a renewal that is open, done or declined for that date is never repeated, and a failed one is tried again after 6 hours. Administrators are told once when it waits or fails. The Security tab shows “Renewed by the Hub” for such a domain.',
         'The Hub never deletes a registration; stop managing it instead.',
         'Expiry, auto-renew and the transfer lock feed the domain watch on Security (warned 45 and 14 days ahead).'
       ]

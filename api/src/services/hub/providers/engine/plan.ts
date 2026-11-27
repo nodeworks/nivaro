@@ -833,7 +833,8 @@ export async function computePlan(
       appId: access.app?.id ?? null,
       environmentId: access.env?.id ?? null,
       actions: req.ops.map((o) => o.action),
-      resourceIds: req.ops.map((o) => o.resourceId ?? null)
+      resourceIds: req.ops.map((o) => o.resourceId ?? null),
+      fieldKeys: req.ops.map((o) => Object.keys(isRecord(o.fields) ? o.fields : {}))
     })
 
   // Managed rows of this connection, for provider id → row lookups (refs, adopt).
@@ -1184,6 +1185,12 @@ export async function computePlan(
       costFor = { desired }
     }
     const firstOp = ops.length
+    // Gap G-E: a Hub-only setting change (`data.$hubSetting`) is a person's; a renewal never
+    // carries it. A renewal left with nothing real plans a no-op (assertRenewalOps then refuses).
+    if (origin?.kind === 'renewal') {
+      planned = planned.filter((p) => !(isRecord(p.data) && p.data.$hubSetting === true))
+      if (!planned.length) planned = [engineOp('noop', w, 'Nothing to renew.', {})]
+    }
     for (const raw of planned) {
       const kind = raw.kind
       const cap = w.type.capabilities
@@ -1291,7 +1298,12 @@ export async function computePlan(
     const b = isRecord(op.data) ? op.data.$blocker : null
     if (isRecord(b) && typeof b.code === 'string')
       blockers.push({ code: b.code, message: typeof b.message === 'string' ? b.message : b.code })
-    if (op.risk.includes('public_exposure') || (isRecord(op.data) && op.data.$adminOnly === true))
+    // A renewal's consent is the stored Hub auto-renew switch (judged by judgeOrigin): the admin
+    // and typed-confirm rules for the person-started renew do not apply to it.
+    if (
+      op.risk.includes('public_exposure') ||
+      (origin?.kind !== 'renewal' && isRecord(op.data) && op.data.$adminOnly === true)
+    )
       adminNeeded = true
   }
   if (adminNeeded) {
@@ -1312,7 +1324,7 @@ export async function computePlan(
       op.risk.includes('destructive') ||
       op.risk.includes('data_loss') ||
       (production && op.risk.includes('downtime')) ||
-      (isRecord(op.data) && typeof op.data.$confirm === 'string')
+      (origin?.kind !== 'renewal' && isRecord(op.data) && typeof op.data.$confirm === 'string')
   )
   const explicit = confirmOps.filter(
     ({ op }) => isRecord(op.data) && typeof op.data.$confirm === 'string'
