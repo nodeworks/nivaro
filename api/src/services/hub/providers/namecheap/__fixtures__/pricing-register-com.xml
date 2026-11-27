@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+  <Errors />
+  <Warnings />
+  <RequestedCommand>namecheap.users.getPricing</RequestedCommand>
+  <CommandResponse Type="namecheap.users.getPricing">
+    <UserGetPricingResult>
+      <ProductType Name="domains">
+        <ProductCategory Name="register">
+          <Product Name="com">
+            <Price Duration="1" DurationType="YEAR" Price="10.98" PricingType="MULTIPLE" AdditionalCost="0.20" YourPrice="10.98" YourAdditonalCost="0.20" Currency="USD" />
+          </Product>
+        </ProductCategory>
+      </ProductType>
+    </UserGetPricingResult>
+  </CommandResponse>
+  <Server>SANDBOX-TEST</Server>
+  <GMTTimeDifference>--5:00</GMTTimeDifference>
+  <ExecutionTime>0.05</ExecutionTime>
+</ApiResponse>

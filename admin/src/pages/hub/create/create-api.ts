@@ -578,15 +578,14 @@ export const CREATE_COPY: Record<string, Copy> = {
     title: 'The DNS zone cannot be used',
     hint: 'Adopt the Route 53 or Cloudflare zone on Shared infrastructure and name it on the driver or target; names must be under it.'
   },
-  // Task 33: an Entra part's client id / secret or a managed Redis's URL, written to the stack.
-  BINDING_PUSH_FAILED: {
-    title: 'The made values could not be written to the stack',
-    hint: 'Nothing was deployed. Open the part’s resource, check Outputs → Where they go, then retry.',
-    detail: true
-  },
   PROVIDER_ACTOR: {
     title: 'The person who started this can no longer act',
     hint: 'Retry it yourself.'
+  },
+  BINDING_PUSH_FAILED: {
+    title: 'A provider value could not be written to the stack',
+    hint: 'Check the connection of the provider part named in Details, then resume the creation.',
+    detail: true
   },
   PROVIDER_CHANGE_FAILED: {
     title: 'A resource change did not apply',

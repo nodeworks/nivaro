@@ -81,6 +81,8 @@ export default function HubCosts() {
       <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
           <HubCostsNow isAdmin={isAdmin} />
+          {/* Task 43: what the providers billed, beside the live figures (admins, as Chargeback). */}
+          {isAdmin ? <HubOutsideSpend /> : null}
         </div>
       </div>
     </div>

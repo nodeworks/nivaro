@@ -142,7 +142,8 @@ describe('cloudflare adapter: registration', () => {
       'cloudflare.r2_bucket',
       'cloudflare.worker_route',
       'cloudflare.worker_secret',
-      'cloudflare.waf_custom_rule'
+      'cloudflare.waf_custom_rule',
+      'cloudflare.domain'
     ])
     expect(spec('cloudflare.zone').scope).toBe('shared')
     expect(spec('cloudflare.zone').capabilities).toMatchObject({

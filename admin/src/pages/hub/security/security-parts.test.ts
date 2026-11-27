@@ -74,44 +74,59 @@ describe('provider source rows', () => {
     expect(r.error).toBe('Access denied')
   })
 
-  it('takes any other source, with counts at the top level (Snyk)', () => {
-    const rows = sourceRows({
-      repositories: [ecr],
-      sources: [
-        {
-          source: 'snyk',
-          connection_id: 9,
-          name: 'Acme org',
+  it('reads every source in repositories, but leaves Task 43’s snyk list to its own card', () => {
+    // The real Task 43 answer: `snyk` per connection (totals + projects). HubSnykFindings
+    // renders it; turning it into rows here would show Snyk twice.
+    const snyk = [
+      {
+        connection_id: 9,
+        name: 'Acme engineering',
+        read_at: '2026-11-27T07:50:00Z',
+        ok: true,
+        error: null,
+        totals: {
           critical: 0,
-          high: 2,
-          medium: 0,
-          low: 4,
-          fixable: 3,
-          projects: 12,
+          high: 3,
+          medium: 8,
+          low: 12,
+          fixable: 6,
+          projects: 14,
           unmonitored: 1
         },
-        { source: 'trivy-cloud', name: 'Nightly', counts: { high: 1, exotic: 2 } },
+        projects: [
+          {
+            id: 'p1',
+            name: 'acme/web',
+            project_type: 'npm',
+            monitored: true,
+            critical: 0,
+            high: 3,
+            medium: 8,
+            low: 12,
+            fixable: 6
+          }
+        ]
+      }
+    ]
+    const rows = sourceRows({
+      repositories: [
+        ecr,
+        { source: 'gcr', name: 'web', counts: { high: 1, exotic: 2 } },
         { name: 'no source' },
         'junk'
-      ]
+      ],
+      snyk
     })
-    expect(rows.map((r) => r.source)).toEqual(['ecr', 'snyk', 'trivy-cloud'])
-    const snyk = rows[1]
-    expect(snyk.counts).toEqual([
-      { severity: 'high', n: 2 },
-      { severity: 'low', n: 4 }
-    ])
-    expect(snyk.fixable).toBe(3)
-    expect(snyk.detail).toBe('12 projects')
+    expect(rows.map((r) => r.source)).toEqual(['ecr', 'gcr'])
     // An unknown severity is kept, after the known ones.
-    expect(rows[2].counts).toEqual([
+    expect(rows[1].counts).toEqual([
       { severity: 'high', n: 1 },
       { severity: 'exotic', n: 2 }
     ])
+    expect(sourceRows({ snyk })).toEqual([])
     expect(sourceLabel('ecr')).toBe('Amazon ECR')
-    expect(sourceLabel('snyk')).toBe('Snyk')
-    expect(sourceLabel('trivy-cloud')).toBe('Trivy cloud')
-    expect(bySource(rows).map((g) => g.source)).toEqual(['ecr', 'snyk', 'trivy-cloud'])
+    expect(sourceLabel('artifact-registry')).toBe('Artifact registry')
+    expect(bySource(rows).map((g) => g.source)).toEqual(['ecr', 'gcr'])
   })
 
   it('sums up without calling an unread row clean', () => {
@@ -124,12 +139,12 @@ describe('provider source rows', () => {
     )
     const clean = { ...ecr, counts: { critical: 0, high: 0, medium: 1 } }
     expect(
-      scanSummary(sourceRows({ repositories: [clean], sources: [{ source: 'snyk', low: 1 }] }))
+      scanSummary(sourceRows({ repositories: [clean, { source: 'gcr', name: 'web', low: 1 }] }))
     ).toBe(
-      'Nothing critical or high in the 2 read. Read live from Amazon ECR and Snyk through their connections.'
+      'Nothing critical or high in the 2 read. Read live from Amazon ECR and Gcr through their connections.'
     )
-    // A repository name is shown as code; an organisation name is not.
-    const rows = sourceRows({ repositories: [ecr], sources: [{ source: 'snyk', name: 'Acme' }] })
+    // A repository or image name is shown as code; a plain label is not.
+    const rows = sourceRows({ repositories: [ecr, { source: 'gcr', name: 'Acme' }] })
     expect(rows.map((r) => r.mono)).toEqual([true, false])
   })
 

@@ -83,7 +83,7 @@ export const hubProvidersWave2HooksDocs: DocSection = {
     { type: 'h2', id: 'hub-providers-wave2-hooks-ecr', text: 'ECR scan findings' },
     {
       type: 'p',
-      text: '`GET /api/hub/security/vulnerabilities` answers `repositories`: for each managed `aws.ecr_repository` the reader may see (administrators: all; owners: their apps’), the latest pushed image, its scan status and its finding counts by severity (source `ecr`), read live through the repository’s connection — at most 25 repositories, 8 seconds each. A repository that cannot be read answers its reason (scrubbed) instead of counts. The Security tab shows them in **Provider scans**, grouped by source, beside the scanner’s pinned images: worst severities first, scan state, when the image was pushed, and the reason a repository could not be read. Any other source the answer carries (Snyk) is listed the same way.'
+      text: '`GET /api/hub/security/vulnerabilities` answers `repositories`: for each managed `aws.ecr_repository` the reader may see (administrators: all; owners: their apps’), the latest pushed image, its scan status and its finding counts by severity (source `ecr`), read live through the repository’s connection — at most 25 repositories, 8 seconds each. A repository that cannot be read answers its reason (scrubbed) instead of counts. The Security tab shows them in **Registry scans**, grouped by source, beside the scanner’s pinned images and the Snyk card: worst severities first, scan state, when the image was pushed, and the reason a repository could not be read.'
     },
     {
       type: 'note',

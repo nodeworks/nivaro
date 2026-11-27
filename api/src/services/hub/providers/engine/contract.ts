@@ -157,11 +157,17 @@ export interface StoredChangePlan {
  *               app may be archived (ENV_ARCHIVED is not judged) and the retirement's own freeze
  *               `retire:<id>` is left out — every other freeze and window (action `retire`) still
  *               stops it, as for the retirement's own steps.
+ *  - renewal    Task 43: the observe job renewing ONE resource of a renewable type
+ *               (`acme.certificate`) inside its renewal window: a re-apply of that resource only,
+ *               and every planned op must be the adapter's `renew` (or nothing to do). Freezes and
+ *               windows apply as to any change; no production checklist (a renewal changes no
+ *               names and no settings); the person it acts for is judged as usual.
  */
 export type ChangeOrigin =
   | { kind: 'promotion'; deployId: number }
   | { kind: 'creation'; creationId: number }
   | { kind: 'retirement'; retirementId: number }
+  | { kind: 'renewal'; resourceId: number }
 
 /** One entry of `nivaro_hub_resource_changes.steps`, one per op (same order as plan.ops). */
 export interface ChangeStep {

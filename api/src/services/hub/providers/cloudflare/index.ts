@@ -11,6 +11,7 @@ import {
 } from './client.js'
 import { arr, asObj, str, type TypeImpl } from './common.js'
 import { dnsImpl } from './dns.js'
+import { domainImpl } from './domain.js'
 import { CLOUDFLARE_BUNDLED } from './pricing.js'
 import { r2Impl } from './r2.js'
 import { tunnelImpl, tunnelRouteImpl } from './tunnel.js'
@@ -23,7 +24,8 @@ import { zoneImpl } from './zone.js'
  * account id is pinned; a token that sees more accounts is never followed into them). Types:
  * `cloudflare.zone` (shared, read / adopt), `.dns_record`, `.tunnel`, `.tunnel_route`,
  * `.access_application`, `.access_policy`, `.r2_bucket`, `.worker_route`, `.worker_secret` and
- * `.waf_custom_rule`. Worker script upload is not in scope.
+ * `.waf_custom_rule`, and `.domain` (Task 43: Cloudflare Registrar, read / adopt / auto-renew /
+ * lock / privacy). Worker script upload is not in scope.
  *
  * Reusable by later tasks: `client.ts` (`cfCall`, `readZone`, `requireZone`, id checks) and
  * `dns.ts` (`createDnsRecord`, `deleteDnsRecord`, `findDnsRecords`) — Task 38 (ACME DNS-01) and
@@ -40,7 +42,8 @@ const IMPLS: TypeImpl[] = [
   r2Impl,
   workerRouteImpl,
   workerSecretImpl,
-  wafImpl
+  wafImpl,
+  domainImpl
 ]
 const BY_TYPE = new Map<string, TypeImpl>(IMPLS.map((i) => [i.spec.key, i]))
 
@@ -156,16 +159,20 @@ export const cloudflareProvider: ProviderAdapter = {
       }
     }
     const missing = [...new Set(permissions.filter((p) => !p.has).map((p) => p.need))]
+    const said = groups
+      ? missing.length
+        ? 'Grant the missing permissions to this API token in the Cloudflare dashboard.'
+        : ''
+      : 'Cloudflare did not list this token’s permissions; only read access was checked. Write access shows up when a change is tried.'
+    // Task 43: what the Registrar API offers, said once on every test.
+    const registrar =
+      'Domain registration and transfers into Cloudflare are not offered through its API: register in the Cloudflare dashboard, then adopt the domain here.'
     return {
       ok: true,
       identity,
       permissions,
       missing,
-      message: groups
-        ? missing.length
-          ? 'Grant the missing permissions to this API token in the Cloudflare dashboard.'
-          : undefined
-        : 'Cloudflare did not list this token’s permissions; only read access was checked. Write access shows up when a change is tried.'
+      message: said ? `${said} ${registrar}` : registrar
     }
   },
 
@@ -179,6 +186,16 @@ export const cloudflareProvider: ProviderAdapter = {
   apply: (ctx, op, desired) => implOf(op.type).apply(ctx, op, desired),
   async readOutputs(ctx, type, externalId) {
     return (await implOf(type).readOutputs?.(ctx, externalId)) ?? {}
+  },
+  async health(ctx, type, externalId) {
+    const impl = implOf(type)
+    if (impl.health) return impl.health(ctx, externalId)
+    const seen = await impl.observe(ctx, externalId)
+    return {
+      status: seen ? 'ok' : 'down',
+      message: seen ? 'Present at Cloudflare.' : 'Gone at Cloudflare.',
+      checkedAt: ctx.now().toISOString()
+    }
   }
 }
 

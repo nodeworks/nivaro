@@ -14,6 +14,7 @@ import { cn, formatDate, formatRelative } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
 import { Field, ghostButton, SecretInput, SectionCard, smallButton } from '../hub-parts'
 import HubDomainsCard from './HubDomainsCard'
+import HubSnykFindings from './HubSnykFindings'
 import HubSourceFindingsCard from './HubSourceFindingsCard'
 import {
   blobError,
@@ -56,6 +57,7 @@ export default function HubSecurity() {
           <CertificatesCard isAdmin={isAdmin} />
           <HubDomainsCard />
           <VulnerabilitiesCard isAdmin={isAdmin} />
+          {isAdmin && <HubSnykFindings />}
           <HubSourceFindingsCard />
           <ComplianceCard />
           {isAdmin && <SettingsCard />}

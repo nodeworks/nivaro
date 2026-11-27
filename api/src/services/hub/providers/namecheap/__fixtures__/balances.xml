@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+  <Errors />
+  <Warnings />
+  <RequestedCommand>namecheap.users.getBalances</RequestedCommand>
+  <CommandResponse Type="namecheap.users.getBalances">
+    <UserGetBalancesResult Currency="USD" AvailableBalance="0.00" AccountBalance="0.00" EarnedAmount="0.00" WithdrawableAmount="0.00" FundsRequiredForAutoRenew="0.00" />
+  </CommandResponse>
+  <Server>SANDBOX-TEST</Server>
+  <GMTTimeDifference>--5:00</GMTTimeDifference>
+  <ExecutionTime>0.05</ExecutionTime>
+</ApiResponse>

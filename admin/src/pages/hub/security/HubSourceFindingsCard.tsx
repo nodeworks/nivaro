@@ -15,9 +15,9 @@ import {
 } from './source-findings'
 
 /**
- * Provider scans (Security tab, Task 33b): what the providers the Hub manages found — the newest
- * image of every managed Amazon ECR repository, a Snyk organisation's projects — beside the
- * scanner's findings for pinned images. Shares the vulnerabilities read (one request); shows
+ * Registry scans (Security tab, Task 33b): what the registries the Hub manages found — the newest
+ * image of every managed Amazon ECR repository — beside the scanner's findings for pinned images
+ * and Snyk (its own card). Shares the vulnerabilities read (one request); shows
  * nothing until a source answers. Owners see their own apps' rows only (the API decides).
  */
 export default function HubSourceFindingsCard() {
@@ -27,7 +27,7 @@ export default function HubSourceFindingsCard() {
   const envs = q.data?.environments ?? []
   const groups = bySource(rows)
   return (
-    <SectionCard title='Provider scans' description={scanSummary(rows)}>
+    <SectionCard title='Registry scans' description={scanSummary(rows)}>
       <div className='divide-y divide-slate-100 dark:divide-border'>
         {groups.map((g) => (
           <section key={g.source} aria-label={sourceLabel(g.source)}>

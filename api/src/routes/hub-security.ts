@@ -239,6 +239,25 @@ async function scanFor(req: FastifyRequest, mine: string[]) {
   }
 }
 
+/** Task 43: Snyk findings per connection + project (never throws). */
+async function snykTick(): Promise<void> {
+  try {
+    const { snykFindingsTick } = await import('../services/hub/security/snyk.js')
+    await snykFindingsTick()
+  } catch {
+    // Kept for the next run; the tab shows the last answer and its error.
+  }
+}
+
+async function snykFindings() {
+  try {
+    const { listSnykFindings } = await import('../services/hub/security/snyk.js')
+    return await listSnykFindings()
+  } catch {
+    return []
+  }
+}
+
 /** Task 34: the registrar domain watch, beside the TLS one (never throws). */
 async function domainTick(): Promise<{ checked: number; warned: number }> {
   try {
@@ -708,12 +727,17 @@ export function hubSecurityRoutes(app: FastifyInstance) {
           const mine = findings.filter((f) => f.digest === i.digest)
           return { ...i, counts: severityCounts(mine) }
         }),
-        findings
+        findings,
+        // Task 43: Snyk projects (source `snyk`), per connection + project, counts only. A Snyk
+        // organisation is not an app's: Hub administrators only.
+        snyk: req.isAdmin ? await snykFindings() : []
       }
     }
   })
 
   app.post('/security/vulnerabilities/scan', { preHandler: requireAdmin }, async (req, reply) => {
+    // Task 43: Snyk findings are re-read too (in the background), scanner or not.
+    void snykTick()
     try {
       const id = await startScan({ by: userId(req), via: 'person' })
       await logActivity({
@@ -958,6 +982,8 @@ export function hubSecurityRoutes(app: FastifyInstance) {
       'hub-vuln-scan',
       '40 4 * * *',
       async () => {
+        // Task 43: Snyk findings are read whether or not an image scanner is set.
+        await snykTick()
         const settings = await loadSecuritySettings()
         if (!settings.scanner_url) return
         try {
@@ -970,7 +996,7 @@ export function hubSecurityRoutes(app: FastifyInstance) {
         quiet: true,
         idempotent: 'safe',
         description:
-          'Daily 04:40 (Hub only, only with a scanner endpoint set) — sends every pinned Nivaro and extension image digest to the scanner and keeps its known vulnerabilities.'
+          'Daily 04:40 (Hub only) — reads the open-issue counts of every Snyk project of every Snyk connection (source snyk), and, with a scanner endpoint set, sends every pinned Nivaro and extension image digest to the scanner and keeps its known vulnerabilities.'
       }
     )
   }

@@ -225,6 +225,14 @@ export interface ExecuteDeps {
     ctx: RunContext,
     o: { signal: AbortSignal; log: (line: string, level?: 'info' | 'warn' | 'error') => void }
   ) => Promise<{ changeId: number }>
+  /**
+   * Task 43: after a production promote's checks passed, marks the app's matching Jira versions
+   * released (default: promote-jira.ts releaseJiraOnPromote). Never fails the run.
+   */
+  jiraRelease?: (
+    ctx: RunContext,
+    o: { signal: AbortSignal; log: (line: string, level?: 'info' | 'warn' | 'error') => unknown }
+  ) => Promise<unknown>
 }
 
 export interface RunOutcome {
@@ -1011,6 +1019,15 @@ export async function executePlan(
       if (s.driver === 'docker')
         await docker.verify(s, ctx, log) // phase 4
       else await verify(s, deployedAt.get(s.position))
+    // Task 43: a production promote marks the matching Jira version released (warns, never fails).
+    if (ctx.kind === 'promote' && !plan.apply) {
+      try {
+        const release = deps.jiraRelease ?? (await import('./promote-jira.js')).releaseJiraOnPromote
+        await release(ctx, { signal: ac.signal, log })
+      } catch {
+        await log('Jira: the release step could not run', 'warn')
+      }
+    }
     await log(`done: ${ctx.kind === 'rollback' ? 'rolled back to' : 'promoted'} ${ctx.version}`)
     return { status: 'success', step, error: null }
   } catch (err) {

@@ -13,6 +13,7 @@ import { gitlabAdapter } from './gitlab/index.js'
 import { jiraAdapter } from './jira/index.js'
 import { livekitAdapter } from './livekit/index.js'
 import { mailgunAdapter } from './mailgun/index.js'
+import { namecheapAdapter } from './namecheap/index.js'
 import { neonAdapter } from './neon/index.js'
 import { openaiAdapter } from './openai/index.js'
 import { pagerdutyAdapter } from './pagerduty/index.js'
@@ -53,6 +54,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   livekitAdapter,
   firebaseAdapter,
   mailgunAdapter,
+  namecheapAdapter,
   sendgridAdapter,
   sentryAdapter,
   snykAdapter,

@@ -240,6 +240,38 @@ export const saveAppSecurity = (id: number, every: number, dueDays: number) =>
   )
 
 /** Task 34: a registrar domain the Hub manages (expiry, auto-renew, transfer lock). */
+/** Task 43: one Snyk project's open-issue counts (never issue text). */
+export interface SnykProject {
+  id: string
+  name: string | null
+  project_type: string | null
+  monitored: boolean
+  critical: number
+  high: number
+  medium: number
+  low: number
+  fixable: number | null
+}
+
+/** Task 43: what the Hub last read from one Snyk connection (source `snyk`). */
+export interface SnykConnectionFindings {
+  connection_id: number
+  name: string
+  read_at: string | null
+  ok: boolean
+  error: string | null
+  totals: {
+    critical: number
+    high: number
+    medium: number
+    low: number
+    fixable: number | null
+    projects: number
+    unmonitored: number
+  } | null
+  projects: SnykProject[]
+}
+
 export interface DomainRow {
   id: number
   resource_id: number
@@ -270,9 +302,10 @@ export const fetchVulns = () =>
     last_scan: LastScan | null
     images: PinnedImage[]
     findings: Finding[]
-    /** Task 33: provider sources (Amazon ECR repositories; Task 43 Snyk) — see source-findings.ts. */
+    /** Task 33: managed Amazon ECR repositories (source `ecr`) — see source-findings.ts. */
     repositories?: unknown[]
-    sources?: unknown[]
+    /** Task 43: Snyk projects per connection (Hub administrators; empty for owners). */
+    snyk?: SnykConnectionFindings[]
   }>(api.get('/hub/security/vulnerabilities'))
 export const scanNow = () => api.post('/hub/security/vulnerabilities/scan', {})
 export const fetchSettings = () => data<SecuritySettings>(api.get('/hub/security/settings'))

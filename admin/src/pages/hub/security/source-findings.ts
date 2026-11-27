@@ -1,9 +1,10 @@
 /**
- * Findings the vulnerability answer carries from provider sources (Task 33: `repositories`, one
- * entry per managed Amazon ECR repository with `source: 'ecr'`; Task 43 adds Snyk). The screen
- * never hard-codes a source: every entry with a `source` key — in `repositories` or in a
- * `sources` list — becomes one row, grouped by source, with whatever severity counts it carries
- * (under `counts` or at the top level). Pure, so it is tested without a page.
+ * Registry scans the vulnerability answer carries in `repositories` (Task 33: one entry per
+ * managed Amazon ECR repository, `source: 'ecr'`). The screen never hard-codes a source: every
+ * entry there with a `source` key becomes one row, grouped by source, with whatever severity
+ * counts it carries (under `counts` or at the top level). Snyk is NOT read here: the answer's
+ * `snyk` list (Task 43, per connection) has its own card, HubSnykFindings. Pure, tested without
+ * a page.
  */
 
 export interface SourceCount {
@@ -119,32 +120,31 @@ function detailOf(e: Record<string, unknown>): string | null {
 /** Every source entry of a vulnerability answer, as rows. */
 export function sourceRows(answer: unknown): SourceRow[] {
   if (!isRecord(answer)) return []
-  const lists = [answer.repositories, answer.sources].filter(Array.isArray) as unknown[][]
+  const list = Array.isArray(answer.repositories) ? (answer.repositories as unknown[]) : []
   const rows: SourceRow[] = []
-  for (const list of lists)
-    for (const raw of list) {
-      if (!isRecord(raw)) continue
-      const source = str(raw.source)
-      if (!source) continue
-      const id = int(raw.resource_id) ?? int(raw.id) ?? int(raw.connection_id)
-      const name =
-        str(raw.name) ?? str(raw.label) ?? str(raw.connection_name) ?? (id ? `#${id}` : source)
-      rows.push({
-        key: `${source}:${id ?? name}:${rows.length}`,
-        source,
-        name,
-        app_id: int(raw.app_id),
-        environment_id: int(raw.environment_id),
-        detail: detailOf(raw),
-        mono: !!str(raw.image) || !!str(raw.digest) || raw.source === 'ecr',
-        at: str(raw.pushed_at) ?? str(raw.checked_at) ?? str(raw.read_at),
-        atWord: str(raw.pushed_at) ? 'pushed' : 'read',
-        status: str(raw.scan_status) ?? str(raw.status),
-        counts: countsOf(raw),
-        fixable: int(raw.fixable),
-        error: str(raw.error)
-      })
-    }
+  for (const raw of list) {
+    if (!isRecord(raw)) continue
+    const source = str(raw.source)
+    if (!source) continue
+    const id = int(raw.resource_id) ?? int(raw.id) ?? int(raw.connection_id)
+    const name =
+      str(raw.name) ?? str(raw.label) ?? str(raw.connection_name) ?? (id ? `#${id}` : source)
+    rows.push({
+      key: `${source}:${id ?? name}:${rows.length}`,
+      source,
+      name,
+      app_id: int(raw.app_id),
+      environment_id: int(raw.environment_id),
+      detail: detailOf(raw),
+      mono: !!str(raw.image) || !!str(raw.digest) || raw.source === 'ecr',
+      at: str(raw.pushed_at) ?? str(raw.checked_at) ?? str(raw.read_at),
+      atWord: str(raw.pushed_at) ? 'pushed' : 'read',
+      status: str(raw.scan_status) ?? str(raw.status),
+      counts: countsOf(raw),
+      fixable: int(raw.fixable),
+      error: str(raw.error)
+    })
+  }
   return rows
 }
 

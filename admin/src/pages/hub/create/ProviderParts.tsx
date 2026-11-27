@@ -36,7 +36,9 @@ export const PART_TYPES = [
   'upstash.redis_database',
   'redis-cloud.database',
   'sentry.project',
-  'anthropic.workspace'
+  'anthropic.workspace',
+  'livekit.api_key',
+  'acme.certificate'
 ] as const
 export type PartType = (typeof PART_TYPES)[number]
 export const MAX_PARTS = 6
@@ -50,7 +52,9 @@ const PART_WORDS: Record<PartType, string> = {
   'upstash.redis_database': 'Upstash Redis',
   'redis-cloud.database': 'Redis Cloud database',
   'sentry.project': 'Sentry project',
-  'anthropic.workspace': 'Anthropic workspace'
+  'anthropic.workspace': 'Anthropic workspace',
+  'livekit.api_key': 'LiveKit key',
+  'acme.certificate': 'TLS certificate (ACME)'
 }
 
 const PART_HINT: Record<PartType, string> = {
@@ -67,7 +71,11 @@ const PART_HINT: Record<PartType, string> = {
   'redis-cloud.database':
     'Its address, password included, becomes this environment’s REDIS_URL (a stack secret).',
   'sentry.project': 'Each promotion of this environment records a release on it.',
-  'anthropic.workspace': 'A workspace for this environment’s AI use.'
+  'anthropic.workspace': 'A workspace for this environment’s AI use.',
+  'livekit.api_key':
+    'Paste a key pair from LiveKit Cloud. The app’s huddle settings are filled from it once the app answers.',
+  'acme.certificate':
+    'Only on a Docker driver whose DNS names are made by hand. The names default to this environment’s address.'
 }
 
 export const ENTRA_PART: PartType = 'entra.app_registration'

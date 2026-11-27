@@ -411,7 +411,7 @@ export const HUB_ROUTES: HubRoute[] = [
     'Databases',
     'admin',
     'read',
-    'Database servers (no credentials; resource_id = a linked aws.rds_instance)'
+    'Database servers (no credentials; resource_id = a linked aws.rds_instance, azure.sql_server or azure.sql_database)'
   ),
   r('POST', '/db-servers', 'Databases', 'admin', 'write', 'Add a database server', {
     body: {
@@ -422,7 +422,9 @@ export const HUB_ROUTES: HubRoute[] = [
       provision_mode: s('manual or admin', { enum: ['manual', 'admin'] }),
       admin_login: s(),
       admin_secret: secret('Admin password (admin mode)'),
-      resource_id: n('A managed aws.rds_instance: host and port come from it')
+      resource_id: n(
+        'A managed aws.rds_instance, azure.sql_server or azure.sql_database: host and port come from it'
+      )
     }
   }),
   r('PATCH', '/db-servers/:id', 'Databases', 'admin', 'write', 'Change a database server', {
@@ -2786,7 +2788,11 @@ export const HUB_ROUTES: HubRoute[] = [
     'Security',
     'owner',
     'read',
-    'Pinned images and their open findings, plus each managed ECR repository’s latest scan counts (`repositories`, source ecr)'
+    'Pinned images and their open findings, plus each managed ECR repository’s latest scan counts (`repositories`, source ecr)',
+    {
+      notes:
+        'Task 43: `snyk` lists every Snyk connection with its projects (counts per severity, fixable, monitored), Hub administrators only; empty for owners.'
+    }
   ),
   r(
     'POST',
@@ -2797,7 +2803,8 @@ export const HUB_ROUTES: HubRoute[] = [
     'Scan every pinned image now',
     {
       accepted: true,
-      notes: '409 NO_SCANNER without a scanner endpoint, 409 SCAN_RUNNING while one runs.'
+      notes:
+        '409 NO_SCANNER without a scanner endpoint, 409 SCAN_RUNNING while one runs. Snyk findings are re-read in the background either way (Task 43).'
     }
   ),
   r(

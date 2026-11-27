@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "ea95132c15732412d22c1476fa83f27a",
+    "name": "hub-test-example.com",
+    "available": false,
+    "can_register": false,
+    "created_at": "2025-01-15T10:00:00Z",
+    "current_registrar": "Cloudflare",
+    "expires_at": "2027-01-15T10:00:00Z",
+    "auto_renew": true,
+    "locked": true,
+    "privacy": true,
+    "registrant_contact": {
+      "organization": "Hub Test Org",
+      "email": "registrant@hub-test-example.com"
+    },
+    "registry_statuses": "clienttransferprohibited",
+    "supported_tld": true,
+    "updated_at": "2026-10-01T10:00:00Z"
+  }
+}
