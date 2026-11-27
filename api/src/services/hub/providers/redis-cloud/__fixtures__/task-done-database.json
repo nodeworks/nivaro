@@ -1,0 +1,8 @@
+{
+  "taskId": "task-0001",
+  "commandType": "fixedDatabaseCreateRequest",
+  "status": "processing-completed",
+  "response": {
+    "resourceId": 3003
+  }
+}

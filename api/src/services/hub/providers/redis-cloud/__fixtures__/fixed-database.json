@@ -1,0 +1,17 @@
+{
+  "databaseId": 3003,
+  "subscriptionId": 1001,
+  "name": "demo-db",
+  "protocol": "redis",
+  "status": "active",
+  "dataPersistence": "none",
+  "dataEvictionPolicy": "noeviction",
+  "replication": false,
+  "memoryLimitInGb": 0.25,
+  "publicEndpoint": "redis-12000.c1.us-east-1-1.ec2.cloud.redislabs.com:12000",
+  "security": {
+    "password": "test-secret-rc-pw-0001",
+    "enableDefaultUser": true,
+    "enableTls": false
+  }
+}

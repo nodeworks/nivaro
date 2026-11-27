@@ -1,0 +1,6 @@
+{
+  "taskId": "task-0001",
+  "commandType": "fixedDatabaseCreateRequest",
+  "status": "processing-in-progress",
+  "description": "Request is being processed."
+}
