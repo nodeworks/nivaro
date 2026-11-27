@@ -1,0 +1,12 @@
+{
+  "id": "44444444-4444-4444-8444-444444444444",
+  "name": "example-org/example-repo:package.json",
+  "type": "npm",
+  "isMonitored": true,
+  "issueCountsBySeverity": {
+    "critical": 1,
+    "high": 2,
+    "medium": 3,
+    "low": 4
+  }
+}

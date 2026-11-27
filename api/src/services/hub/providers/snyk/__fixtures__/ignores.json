@@ -1,0 +1,23 @@
+{
+  "SNYK-JS-FAKE-0003": [
+    {
+      "*": {
+        "reason": "Not reachable in our code",
+        "reasonType": "temporary-ignore",
+        "disregardIfFixable": false,
+        "expires": "2027-01-31T00:00:00.000Z",
+        "created": "2026-11-01T00:00:00.000Z"
+      }
+    }
+  ],
+  "SNYK-JS-FAKE-0009": [
+    {
+      "*": {
+        "reason": "Forever",
+        "reasonType": "wont-fix",
+        "disregardIfFixable": false,
+        "created": "2026-11-01T00:00:00.000Z"
+      }
+    }
+  ]
+}

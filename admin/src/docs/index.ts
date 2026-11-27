@@ -385,6 +385,7 @@ import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
+import { hubProvidersSnykDocs } from './sections/hub-providers-snyk.js'
 import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
@@ -1272,6 +1273,7 @@ export const navSections: NavGroup[] = [
       hubProvidersTwilioDocs,
       hubProvidersSlackDocs,
       hubProvidersPagerdutyDocs,
+      hubProvidersSnykDocs,
       hubProvidersSendgridDocs,
       hubProvidersTeamsDocs,
       hubProvidersAnthropicDocs,
