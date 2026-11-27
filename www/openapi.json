@@ -3396,7 +3396,18 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "description": "api or frontend"
+                    "description": "api, frontend, stack, github_actions, vercel or eas_update"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "resource_id": {
+                    "type": "integer",
+                    "description": "Provider kinds: the github.workflow, vercel.project or expo.channel"
+                  },
+                  "deploy_job": {
+                    "type": "string",
+                    "description": "github_actions: null = run the workflow, approve[:<GitHub environment>] = approve the waiting run"
                   },
                   "config": {
                     "type": "object",
@@ -4745,7 +4756,7 @@
         "tags": [
           "Hub mode only · Databases"
         ],
-        "summary": "Database servers (no credentials)",
+        "summary": "Database servers (no credentials; resource_id = a linked aws.rds_instance, azure.sql_server or azure.sql_database)",
         "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:read`.",
         "operationId": "hub_get_db_servers",
         "responses": {
@@ -4865,6 +4876,10 @@
                     "type": "string",
                     "description": "Admin password (admin mode) Write-only: never answered back.",
                     "writeOnly": true
+                  },
+                  "resource_id": {
+                    "type": "integer",
+                    "description": "A managed aws.rds_instance, azure.sql_server or azure.sql_database: host and port come from it"
                   }
                 }
               }
@@ -5677,7 +5692,7 @@
         "tags": [
           "Hub mode only · Targets"
         ],
-        "summary": "GitLab targets for new apps (tokens masked)",
+        "summary": "GitLab and GitHub targets for new apps (tokens masked)",
         "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:read`.",
         "operationId": "hub_get_targets",
         "responses": {
@@ -5726,7 +5741,7 @@
         "tags": [
           "Hub mode only · Targets"
         ],
-        "summary": "Add a GitLab target",
+        "summary": "Add a GitLab or GitHub target",
         "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.",
         "operationId": "hub_post_targets",
         "responses": {
@@ -5769,6 +5784,14 @@
               "schema": {
                 "type": "object",
                 "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "gitlab",
+                      "github"
+                    ],
+                    "description": "gitlab (default) or github"
+                  },
                   "name": {
                     "type": "string"
                   },
@@ -5783,6 +5806,15 @@
                     "type": "string",
                     "description": "GitLab token Write-only: never answered back.",
                     "writeOnly": true
+                  },
+                  "connection_id": {
+                    "type": "integer",
+                    "description": "github: the GitHub connection repositories are made through. gitlab: a gitlab connection whose address and token the target uses instead of its own (no token or api then); null = its own token"
+                  },
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "github: { template, visibility, deploy_workflow, source_branch, dns_mode automatic|manual|route53, dns_zone_resource_id?, wildcard_domain, edge_address, scheme, port, cert_note }"
                   }
                 }
               }
@@ -5865,6 +5897,10 @@
                     "type": "string",
                     "description": "New token (re-syncs created apps) Write-only: never answered back.",
                     "writeOnly": true
+                  },
+                  "connection_id": {
+                    "type": "integer",
+                    "description": "gitlab: use this gitlab connection (null = stop, with a token of its own in the same request)"
                   }
                 }
               }
@@ -6084,12 +6120,17 @@
                     "description": "{ issuer, client_id, client_secret } — client_secret is write-only Write-only: never answered back.",
                     "writeOnly": true
                   },
+                  "target": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "{ kind: gitlab | docker | shared | github, id }"
+                  },
                   "environments": {
                     "type": "array",
                     "items": {
                       "type": "object"
                     },
-                    "description": "{ key, hostname?, database: { server_id … } | { database_id } }"
+                    "description": "{ key, hostname?, database: { server_id … } | { database_id }, providers?: [{ connection_id, type vercel.project | auth0.application | aws.route53_record | aws.rds_instance, fields? }] }"
                   }
                 },
                 "required": [
@@ -22327,7 +22368,7 @@
           "Hub mode only · Costs"
         ],
         "summary": "The cost report as CSV (one line per environment)",
-        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:read`.\n\nEvery text cell is formula-safe. Logged.",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:read`.\n\nEvery text cell is formula-safe. Logged. Ends with an Outside spend section (billed by provider cost feeds, per app and provider) when any feed has rows.",
         "operationId": "hub_get_chargeback.csv",
         "responses": {
           "200": {
@@ -24012,8 +24053,8 @@
         "tags": [
           "Hub mode only · Security"
         ],
-        "summary": "Pinned images and their open findings",
-        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "summary": "Pinned images and their open findings, plus each managed ECR repository’s latest scan counts (`repositories`, source ecr)",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nTask 43: `snyk` lists every Snyk connection with its projects (counts per severity, fixable, monitored), Hub administrators only; empty for owners.",
         "operationId": "hub_get_security_vulnerabilities",
         "responses": {
           "200": {
@@ -24064,7 +24105,7 @@
           "Hub mode only · Security"
         ],
         "summary": "Scan every pinned image now",
-        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\n409 NO_SCANNER without a scanner endpoint, 409 SCAN_RUNNING while one runs.",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\n409 NO_SCANNER without a scanner endpoint, 409 SCAN_RUNNING while one runs. Snyk findings are re-read in the background either way (Task 43).",
         "operationId": "hub_post_security_vulnerabilities_scan",
         "responses": {
           "202": {
@@ -24115,7 +24156,7 @@
           "Hub mode only · Security"
         ],
         "summary": "Certificate expiry and DNS of every environment name",
-        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nAlso answers `domains`: every registrar domain the Hub manages (expiry, auto-renew, transfer lock, state), warned 45 and 14 days ahead. Owners see their own apps.",
         "operationId": "hub_get_security_certificates",
         "responses": {
           "200": {
@@ -25411,6 +25452,2946 @@
           }
         ]
       }
+    },
+    "/hub/provider-types": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Registered providers and their resource types",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nTypes, fields, capabilities and the risk vocabulary of each adapter. Never connection data.",
+        "operationId": "hub_get_provider_types",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/connections": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Provider connections (admins: all; owners: those allowed for their apps)",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nSecret fields are write-only: reads answer a mask, a fingerprint and the names of the secret fields that hold a value.",
+        "operationId": "hub_get_connections",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Only this provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Create a provider connection",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.\n\nSecret fields are write-only: reads answer a mask, a fingerprint and the names of the secret fields that hold a value.",
+        "operationId": "hub_post_connections",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "description": "Provider key (github, aws, …)"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Display name"
+                  },
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Non-secret connection fields"
+                  },
+                  "secrets": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Secret connection fields (sealed, never answered back) Write-only: never answered back.",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "provider",
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/connections/{id}": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "One provider connection",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nSecret fields are write-only: reads answer a mask, a fingerprint and the names of the secret fields that hold a value.",
+        "operationId": "hub_get_connections_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Edit a provider connection",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.\n\nSecret fields are write-only: reads answer a mask, a fingerprint and the names of the secret fields that hold a value. Only the secret keys sent change; a masked value keeps the stored one, an empty value clears it. A gitlab connection that Hub targets use: a new token or address re-syncs every app created on them (answer target_sync), and a group or address that would leave a target outside is refused (409 CONNECTION_IN_USE).",
+        "operationId": "hub_patch_connections_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Display name"
+                  },
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Non-secret fields to change (merged over the stored ones)"
+                  },
+                  "secrets": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "Secret fields to change Write-only: never answered back.",
+                    "writeOnly": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Delete a provider connection",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.\n\nRefused (409 CONNECTION_IN_USE) while it still has managed resources or a Hub target names it.",
+        "operationId": "hub_delete_connections_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/connections/{id}/test": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Test the credentials: identity and the permissions they have",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nCalls the provider. Stores the result and the connection status.",
+        "operationId": "hub_post_connections_id_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/connections/{id}/acme/generate-account-key": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Generate and seal the ACME account key of an acme connection",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.\n\nOnly for acme connections. The key is made on the server and sealed into the connection; it is never answered. 409 ACCOUNT_KEY_EXISTS when a key is stored and replace is not true.",
+        "operationId": "hub_post_connections_id_acme_generate_account_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "replace": {
+                    "type": "boolean",
+                    "description": "Replace a stored key (makes a new ACME account)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/connections/{id}/unmanaged": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Resources the Hub does not manage yet",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_connections_id_unmanaged",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Resource type key (aws.vpc …)"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Next page, from the previous answer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/connections/{id}/adopt": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Adopt an existing provider resource",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nBinds it to an app environment or (admins only) to the shared scope. No provider write.",
+        "operationId": "hub_post_connections_id_adopt",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "description": "Resource type key"
+                  },
+                  "externalId": {
+                    "type": "string",
+                    "description": "The provider’s id for it"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "app",
+                      "shared"
+                    ],
+                    "description": "app or shared"
+                  },
+                  "appId": {
+                    "type": "integer",
+                    "description": "Required for scope app"
+                  },
+                  "environmentId": {
+                    "type": "integer",
+                    "description": "The environment of the app"
+                  }
+                },
+                "required": [
+                  "type",
+                  "externalId",
+                  "scope"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/apps/{id}/connections": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Connections allowed for an app",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_apps_id_connections",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Set the connections allowed for an app",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.",
+        "operationId": "hub_put_apps_id_connections",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "connection_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "description": "Exactly these connections are allowed"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resources": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Managed resources the caller may see",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_resources",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "An app id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "An environment id"
+            }
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Provider key"
+            }
+          },
+          {
+            "name": "connection",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "A connection id"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Resource type key"
+            }
+          },
+          {
+            "name": "drift",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "1 = only resources that drifted"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "app",
+                "shared"
+              ],
+              "description": "app or shared"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resources/{id}": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "One managed resource",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nA row with no provider id carries pending_create {change_id, status, resumable}: its create has not reached the provider (still running, or failed).",
+        "operationId": "hub_get_resources_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resources/{id}/discard": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Discard a create that never reached the provider",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nNo provider call: drops the resource row (it has no provider id) and closes its failed change as cancelled. Refused while the change runs (409 RESOURCE_BUSY) and for a resource the provider has (409 BAD_STATUS).",
+        "operationId": "hub_post_resources_id_discard",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resources/plan": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Plan changes to managed resources",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read` (a plan writes nothing).\n\nReads the provider and stores a planned change; nothing is written at the provider. Every refusal carries a code (STALE_PLAN, CONFIRM_MISMATCH, FROZEN, CONNECTION_NOT_ALLOWED, SHARED_ADMIN_ONLY, SHARED_IN_USE …); a provider failure is 502 PROVIDER_ERROR.",
+        "operationId": "hub_post_resources_plan",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "plan",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "connectionId": {
+                    "type": "integer",
+                    "description": "The connection"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "app",
+                      "shared"
+                    ],
+                    "description": "app or shared"
+                  },
+                  "appId": {
+                    "type": "integer",
+                    "description": "Required for scope app"
+                  },
+                  "environmentId": {
+                    "type": "integer",
+                    "description": "The environment of the app"
+                  },
+                  "ops": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "{action: create|update|delete|adopt|reapply|accept, resourceId?, type?, fields?, externalId?}"
+                  }
+                },
+                "required": [
+                  "connectionId",
+                  "scope"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Resource changes the caller may see",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_resource_changes",
+        "parameters": [
+          {
+            "name": "app",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "An app id"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "An environment id"
+            }
+          },
+          {
+            "name": "connection",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "A connection id"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "app",
+                "shared"
+              ],
+              "description": "app or shared"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "One status, or a comma list"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "1–200, default 50"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "description": "Page back from this change id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes/{id}": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "One resource change, step by step",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_resource_changes_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes/{id}/start": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Start a planned change",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.\n\nBound to the plan hash; destructive changes need the typed confirm; an owner’s cost change is saved as pending_approval. Every refusal carries a code (STALE_PLAN, CONFIRM_MISMATCH, FROZEN, CONNECTION_NOT_ALLOWED, SHARED_ADMIN_ONLY, SHARED_IN_USE …); a provider failure is 502 PROVIDER_ERROR.",
+        "operationId": "hub_post_resource_changes_id_start",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Started in the background",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "planHash": {
+                    "type": "string",
+                    "description": "The planHash of the plan read"
+                  },
+                  "confirm": {
+                    "type": "string",
+                    "description": "The text the plan asks to be typed, when it asks"
+                  }
+                },
+                "required": [
+                  "planHash"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Cancel a change that has not started",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.",
+        "operationId": "hub_post_resource_changes_id_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes/{id}/resume": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Resume an interrupted change",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nReplays only the steps without a recorded success.",
+        "operationId": "hub_post_resource_changes_id_resume",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Started in the background",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes/{id}/undo": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Plan the way back of an applied change",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.\n\nMakes a new planned change from the observed state back to the stored before-state.",
+        "operationId": "hub_post_resource_changes_id_undo",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes/{id}/approve": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Approve an owner’s pending change",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.",
+        "operationId": "hub_post_resource_changes_id_approve",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Started in the background",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "planHash": {
+                    "type": "string",
+                    "description": "The planHash the approver saw"
+                  }
+                },
+                "required": [
+                  "planHash"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resource-changes/{id}/decline": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Decline an owner’s pending change",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.",
+        "operationId": "hub_post_resource_changes_id_decline",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "description": "Why (shown to the owner)"
+                  }
+                },
+                "required": [
+                  "reason"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/resources/{id}/bindings": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "A resource’s outputs and where they go",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nOutputs answer the key, a fingerprint and when it changed — never a value. A once-only output whose copy is gone is `lost` (rotate it).",
+        "operationId": "hub_get_resources_id_bindings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Bind a resource’s outputs to settings",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nSensitive: changes or stops something people rely on.\n\nReplaces the list, then pushes the stored values in the background. A stack target only saves the stack settings (the stack then needs Apply now); an app setting goes through the hub link and must be on its allow-list (SETTING_NOT_ALLOWED). A secret output never binds to a plain setting (SECRET_TO_PLAIN).",
+        "operationId": "hub_put_resources_id_bindings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "x-hub-sensitive": true,
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "bindings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "Each {output_key, environment_id, target stack_setting|stack_secret|app_setting, target_key}"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/notify-routes": {
+      "get": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Notify routes (admins: all; owners: their apps’)",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_notify_routes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Send Hub events through a resource",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.",
+        "operationId": "hub_post_notify_routes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "A label"
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "hub",
+                      "app"
+                    ],
+                    "description": "hub (every app, admins) or app"
+                  },
+                  "app_id": {
+                    "type": "integer",
+                    "description": "The app (scope app)"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Event names (deploy.failed, incident.opened …)"
+                  },
+                  "resource_id": {
+                    "type": "integer",
+                    "description": "The sending resource (Slack channel, Teams webhook …)"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Default true"
+                  }
+                },
+                "required": [
+                  "scope",
+                  "resource_id"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/notify-routes/{id}": {
+      "patch": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Change a notify route",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.",
+        "operationId": "hub_patch_notify_routes_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "A label"
+                  },
+                  "events": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Event names"
+                  },
+                  "resource_id": {
+                    "type": "integer",
+                    "description": "The sending resource"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "On or off"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Delete a notify route",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.",
+        "operationId": "hub_delete_notify_routes_id",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/notify-routes/{id}/test": {
+      "post": {
+        "tags": [
+          "Hub mode only · Providers"
+        ],
+        "summary": "Send one test message through a route",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nWaits for the provider (at most 10 s) and answers ok or the scrubbed error.",
+        "operationId": "hub_post_notify_routes_id_test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/providers/estimate": {
+      "post": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "Estimate one provider resource",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read` (a plan writes nothing).\n\nA read: no plan is saved and no audit row is written; works during maintenance. Amounts are in cents, list prices, with basis, confidence, lines and the price date. An unknown price answers confidence unknown (\"No estimate\"), never an error. Judged like a plan (the app's allowed connections, shared scope admins only). Tax and discount are separate lines.",
+        "operationId": "hub_post_providers_estimate",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "plan",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "connection_id": {
+                    "type": "integer",
+                    "description": "The connection"
+                  },
+                  "type": {
+                    "type": "string",
+                    "description": "The resource type key (required without resource_id)"
+                  },
+                  "desired": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "The form’s field values (secrets are never needed)"
+                  },
+                  "resource_id": {
+                    "type": "integer",
+                    "description": "An existing managed resource (answers before → after)"
+                  },
+                  "app_id": {
+                    "type": "integer",
+                    "description": "The app (scope app)"
+                  },
+                  "environment_id": {
+                    "type": "integer",
+                    "description": "The environment of the app"
+                  },
+                  "egress_gb_month": {
+                    "type": "integer",
+                    "description": "Expected data out, GB a month (absent = what the Hub measured)"
+                  },
+                  "delete": {
+                    "type": "boolean",
+                    "description": "Estimate deleting resource_id (the saving)"
+                  }
+                },
+                "required": [
+                  "connection_id"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/environments/{envId}/stack/estimate": {
+      "post": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "Estimate an environment’s Docker stack at the chargeback rates",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read` (a plan writes nothing).\n\nA read: no plan is saved and no audit row is written; works during maintenance. Amounts are in cents, list prices, with basis, confidence, lines and the price date. An unknown price answers confidence unknown (\"No estimate\"), never an error. Answers {before, after, deltaMonthlyCents}.",
+        "operationId": "hub_post_environments_envId_stack_estimate",
+        "parameters": [
+          {
+            "name": "envId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "plan",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "size": {
+                    "type": "string",
+                    "enum": [
+                      "small",
+                      "medium",
+                      "large"
+                    ],
+                    "description": "small, medium or large"
+                  },
+                  "replicas": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "{role: count} laid over the size template"
+                  },
+                  "settings": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "The stack settings form (does not change the figure today)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/apps/create/estimate": {
+      "post": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "Estimate a new app before creating it",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:read` (a plan writes nothing).\n\nA read: no plan is saved and no audit row is written; works during maintenance. Amounts are in cents, list prices, with basis, confidence, lines and the price date. An unknown price answers confidence unknown (\"No estimate\"), never an error. Takes the Create app body; answers per environment its stack and provider parts.",
+        "operationId": "hub_post_apps_create_estimate",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "plan",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "target": {
+                    "type": "object",
+                    "additionalProperties": true,
+                    "description": "As for /apps/create"
+                  },
+                  "environments": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    },
+                    "description": "As for /apps/create"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/costs/live": {
+      "get": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "Run-rate now, month to date, forecast and billed",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.\n\nOwners see their own apps only. Billed comes from provider cost feeds through the last date a provider reported; the gap is the billed amount against the estimate over the same days.",
+        "operationId": "hub_get_costs_live",
+        "parameters": [
+          {
+            "name": "app_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Only this app"
+            }
+          },
+          {
+            "name": "environment_id",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "description": "Only this environment"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/apps/{id}/cost-budget": {
+      "get": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "An app’s monthly budget",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_apps_id_cost_budget",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "Set an app’s monthly budget",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nThe forecast alerts at 80 % and 100 % once per threshold per month. auto_approve_under_cents overrides the Hub-wide limit for this app (null = the Hub-wide one).",
+        "operationId": "hub_put_apps_id_cost_budget",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "monthly_cents": {
+                    "type": "integer",
+                    "description": "Monthly budget in cents (0 = none)"
+                  },
+                  "auto_approve_under_cents": {
+                    "type": "integer",
+                    "description": "Owner changes under this skip approval (null = Hub-wide)"
+                  }
+                },
+                "required": [
+                  "monthly_cents"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/costs/outside": {
+      "get": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "Outside spend billed by provider cost feeds",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:read`.\n\nTask 34: what provider connections with a cost feed billed, per app (by managed resource, then the nivaro-hub:app tag), shared resources and unassigned, per provider: month to date and each of the last 12 calendar months, in cents per currency. Also each feed’s newest billed day and its last read.",
+        "operationId": "hub_get_costs_outside",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
+    },
+    "/hub/costs/settings": {
+      "get": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "The Hub-wide auto-approve limit",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators, or the app’s owners (an app you do not own answers 404).\n\nAPI key scope: `hub:read`.",
+        "operationId": "hub_get_costs_settings",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "read",
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "Hub mode only · Costs"
+        ],
+        "summary": "Set the Hub-wide auto-approve limit",
+        "description": "**Hub mode only** — mounted only on a Nivaro Hub (HUB=on); a regular install answers 404.\n\nWho: Hub administrators.\n\nAPI key scope: `hub:write`.\n\nRefused (403) to connected apps / MCP tool calls, View-as and run-as-key.\n\nAn owner’s costed change whose monthly increase and one-time total are both under it runs without approval; 0 = every costed change waits. An unknown estimate never auto-approves.",
+        "operationId": "hub_put_costs_settings",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not allowed for this caller (ADMIN_ONLY, HUB_SCOPE_MISSING, …)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HubError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found, not yours, or not a Hub"
+          }
+        },
+        "x-hub-mode-only": true,
+        "x-hub-access": "write",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "cost_auto_approve_under_cents": {
+                    "type": "integer",
+                    "description": "Cents (0 = never auto-approve)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "hubApiKey": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -26223,6 +29204,10 @@
     {
       "name": "Hub mode only · Lifecycle",
       "description": "Hub mode only (HUB=on). Lifecycle of the Nivaro Hub — not part of a regular install's API."
+    },
+    {
+      "name": "Hub mode only · Providers",
+      "description": "Hub mode only (HUB=on). Providers of the Nivaro Hub — not part of a regular install's API."
     }
   ],
   "x-tagGroups": [
@@ -26266,7 +29251,8 @@
         "Hub mode only · Federation",
         "Hub mode only · Security",
         "Hub mode only · Phone",
-        "Hub mode only · Lifecycle"
+        "Hub mode only · Lifecycle",
+        "Hub mode only · Providers"
       ]
     }
   ]
