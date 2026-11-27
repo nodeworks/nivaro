@@ -13,7 +13,10 @@ import {
  * through `ctx.fetch`, whose only allowed host is the tenant domain.
  */
 
-export const TOKEN_KEY = 'auth0-management'
+/** A cached token belongs to one domain + audience: a config change never reuses it. */
+export function tokenKey(config: Record<string, unknown>): string {
+  return `auth0-management:${domainOf(config)}:${audienceOf(config)}`.toLowerCase()
+}
 
 export const CONNECTION_FIELDS: ConnectionField[] = [
   {
@@ -37,6 +40,12 @@ export const CONNECTION_FIELDS: ConnectionField[] = [
     kind: 'string',
     secret: true,
     required: true
+  },
+  {
+    key: 'custom_domain_confirmed',
+    label: 'This is my tenant’s custom domain',
+    kind: 'boolean',
+    help: 'Needed only when the domain does not end in .auth0.com. The client secret is sent to this domain, so confirm it is yours.'
   },
   {
     key: 'audience',
@@ -70,6 +79,15 @@ export function domainProblem(raw: unknown): string | null {
   )
     return 'That domain is not a public Auth0 domain.'
   return null
+}
+
+/** A tenant domain on auth0.com (any region), or one the admin confirmed as a custom domain. */
+export function domainAllowed(config: Record<string, unknown>): string | null {
+  const d = domainProblem(config.domain)
+  if (d) return d
+  if (domainOf(config).endsWith('.auth0.com') || config.custom_domain_confirmed === true)
+    return null
+  return 'That is not an auth0.com domain. Tick “This is my tenant’s custom domain” to confirm it is yours.'
 }
 
 export function domainOf(config: Record<string, unknown>): string {
@@ -185,12 +203,12 @@ export async function mintToken(ctx: ProviderContext): Promise<string> {
   if (typeof token !== 'string' || !token)
     throw new ProviderError('AUTH_FAILED', 'Auth0 did not return an access token.')
   const expiresIn = typeof obj.expires_in === 'number' ? obj.expires_in : 86_400
-  ctx.tokens.set(TOKEN_KEY, token, new Date(ctx.now().getTime() + expiresIn * 1000))
+  ctx.tokens.set(tokenKey(ctx.config), token, new Date(ctx.now().getTime() + expiresIn * 1000))
   return token
 }
 
 export async function managementToken(ctx: ProviderContext): Promise<string> {
-  return ctx.tokens.get(TOKEN_KEY) ?? (await mintToken(ctx))
+  return ctx.tokens.get(tokenKey(ctx.config)) ?? (await mintToken(ctx))
 }
 
 export interface MgmtResult {
@@ -227,7 +245,7 @@ export async function mgmt(
     if (res.status === 401 && attempt === 0) {
       // The cached token may have been revoked: drop it and mint once more.
       await res.body?.cancel().catch(() => {})
-      ctx.tokens.delete(TOKEN_KEY)
+      ctx.tokens.delete(tokenKey(ctx.config))
       continue
     }
     const body = await readBody(res)
