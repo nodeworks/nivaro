@@ -454,6 +454,10 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_resource_outputs',
       'nivaro_hub_resource_bindings',
       'nivaro_hub_notify_routes',
+      // Hub live costs (585): price cache, run-rate figures, per-app budgets
+      'nivaro_hub_price_cache',
+      'nivaro_hub_cost_runrate',
+      'nivaro_hub_cost_budgets',
       // Hub placement (580): regions + host membership, cost centres, peer Hubs (sealed key)
       'nivaro_hub_regions',
       'nivaro_hub_region_drivers',
