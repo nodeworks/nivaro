@@ -1,0 +1,26 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": [
+    {
+      "id": "ea95132c15732412d22c1476fa83f27a",
+      "name": "hub-test-example.com",
+      "current_registrar": "Cloudflare",
+      "expires_at": "2027-01-15T10:00:00Z",
+      "auto_renew": true,
+      "locked": true,
+      "privacy": true
+    },
+    {
+      "id": "fa95132c15732412d22c1476fa83f27b",
+      "name": "hub-test-lapsing.dev",
+      "current_registrar": "Cloudflare",
+      "expires_at": "2026-12-10T10:00:00Z",
+      "auto_renew": false,
+      "locked": false,
+      "privacy": true
+    }
+  ],
+  "result_info": { "page": 1, "per_page": 50, "count": 2, "total_count": 2, "total_pages": 1 }
+}

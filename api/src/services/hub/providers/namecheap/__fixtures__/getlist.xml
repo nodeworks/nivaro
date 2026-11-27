@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+  <Errors />
+  <Warnings />
+  <RequestedCommand>namecheap.domains.getList</RequestedCommand>
+  <CommandResponse Type="namecheap.domains.getList">
+    <DomainGetListResult>
+      <Domain ID="1001" Name="hub-test-example.com" User="hubtest" Created="03/15/2025" Expires="03/15/2027" IsExpired="false" IsLocked="true" AutoRenew="true" WhoisGuard="ENABLED" IsPremium="false" IsOurDNS="true" />
+      <Domain ID="1002" Name="hub-test-other.net" User="hubtest" Created="12/01/2024" Expires="12/20/2026" IsExpired="false" IsLocked="false" AutoRenew="false" WhoisGuard="NOTPRESENT" IsPremium="false" IsOurDNS="false" />
+    </DomainGetListResult>
+    <Paging>
+      <TotalItems>2</TotalItems>
+      <CurrentPage>1</CurrentPage>
+      <PageSize>100</PageSize>
+    </Paging>
+  </CommandResponse>
+  <Server>SANDBOX-TEST</Server>
+  <GMTTimeDifference>--5:00</GMTTimeDifference>
+  <ExecutionTime>0.05</ExecutionTime>
+</ApiResponse>

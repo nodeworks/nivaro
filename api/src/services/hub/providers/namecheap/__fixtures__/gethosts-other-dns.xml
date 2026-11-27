@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ApiResponse Status="OK" xmlns="http://api.namecheap.com/xml.response">
+  <Errors />
+  <Warnings />
+  <RequestedCommand>namecheap.domains.dns.getHosts</RequestedCommand>
+  <CommandResponse Type="namecheap.domains.dns.getHosts">
+    <DomainDNSGetHostsResult Domain="hub-test-other.net" EmailType="" IsUsingOurDNS="false" />
+  </CommandResponse>
+  <Server>SANDBOX-TEST</Server>
+  <GMTTimeDifference>--5:00</GMTTimeDifference>
+  <ExecutionTime>0.05</ExecutionTime>
+</ApiResponse>
