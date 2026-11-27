@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><requestId>req-fake-0001</requestId><addressesSet><item><publicIp>203.0.113.30</publicIp><allocationId>eipalloc-0ccc2020</allocationId><domain>vpc</domain><instanceId>i-0eee5555</instanceId><associationId>eipassoc-0fake01</associationId><tagSet><item><key>Name</key><value>web-ip</value></item></tagSet></item></addressesSet></DescribeAddressesResponse>

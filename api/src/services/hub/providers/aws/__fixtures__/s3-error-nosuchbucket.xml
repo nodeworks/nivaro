@@ -1,0 +1,1 @@
+<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message><BucketName>shop-assets</BucketName><RequestId>req-fake-s3-1</RequestId></Error>

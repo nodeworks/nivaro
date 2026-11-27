@@ -1,0 +1,19 @@
+{
+  "Certificate": {
+    "CertificateArn": "arn:aws:acm:us-east-1:123456789012:certificate/0123fake",
+    "DomainName": "example.com",
+    "SubjectAlternativeNames": ["example.com"],
+    "Status": "PENDING_VALIDATION",
+    "DomainValidationOptions": [
+      {
+        "DomainName": "example.com",
+        "ValidationStatus": "PENDING_VALIDATION",
+        "ResourceRecord": {
+          "Name": "_a1.example.com.",
+          "Type": "CNAME",
+          "Value": "_b1.acm-validations.aws."
+        }
+      }
+    ]
+  }
+}

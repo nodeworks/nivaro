@@ -1,0 +1,1 @@
+<Error><Code>BucketAlreadyExists</Code><Message>The requested bucket name is not available.</Message><RequestId>req-fake-s3-5</RequestId></Error>

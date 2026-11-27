@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="https://route53.amazonaws.com/doc/2013-04-01/"><Error><Type>Sender</Type><Code>InvalidChangeBatch</Code><Message>Tried to create resource record set [name='www.example.com.', type='A'] but it already exists</Message></Error><RequestId>req-fake-r53-2</RequestId></ErrorResponse>

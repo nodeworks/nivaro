@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="http://rds.amazonaws.com/doc/2014-10-31/"><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>User is not authorized to perform rds:DescribeDBSubnetGroups</Message></Error><RequestId>req-fake-rds-4</RequestId></ErrorResponse>

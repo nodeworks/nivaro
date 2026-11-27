@@ -1,0 +1,1 @@
+<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>shop-assets</Name><KeyCount>1</KeyCount><MaxKeys>1</MaxKeys><IsTruncated>true</IsTruncated><Contents><Key>logo.png</Key><Size>10</Size></Contents></ListBucketResult>
