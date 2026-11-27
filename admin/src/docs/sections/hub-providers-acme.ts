@@ -33,7 +33,7 @@ export const hubProvidersAcmeDocs: DocSection = {
         ],
         [
           'Allowed domains',
-          'Optional. When set, certificates can only be requested for these domains and their subdomains. **Set it** when app owners use the connection: without it any name inside any zone the DNS connection can see may be requested.'
+          'When set, every name (wildcards included) must equal an entry or sit under one, else the plan fails with `NAME_NOT_ALLOWED`. Names are compared lower-case, without a trailing dot, non-ASCII as punycode. When it is **empty**, every certificate order (create, reissue, rotate, renew) is admin-only and the plan says why: an app owner can never order a name outside their app.'
         ],
         [
           'Seconds to wait for DNS',
@@ -41,7 +41,7 @@ export const hubProvidersAcmeDocs: DocSection = {
         ],
         [
           'ACME account key',
-          'Secret, sealed, never shown again. A PEM private key: EC P-256 or P-384, or RSA 2048 and up. Make one with `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256`. The key is the account: keep a copy somewhere safe, because the Hub cannot re-read it.'
+          'Secret, sealed, never shown again. Use **Generate account key** on the saved connection (admin only: the server makes an EC P-256 key and seals it; the key is never answered; replacing a stored key makes a new ACME account and asks twice), or paste your own PEM (EC P-256/P-384 or RSA 2048+). `POST /api/hub/connections/:id/acme/generate-account-key`. The Hub cannot re-read the key.'
         ]
       ]
     },
@@ -92,7 +92,7 @@ export const hubProvidersAcmeDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Needs a live check: the exact answers of a real Let’s Encrypt directory (rate-limit problem types and `Retry-After`), certificate URLs surviving past expiry (the Hub treats a 404 as “gone” and plans a new order), and Route 53 propagation timing. Admin-side generation of the account key is not built: the key is pasted into the connection form.'
+      text: 'Needs a live check: the exact answers of a real Let’s Encrypt directory (rate-limit problem types and `Retry-After`), certificate URLs surviving past expiry (the Hub treats a 404 as “gone” and plans a new order), and Route 53 propagation timing.'
     }
   ]
 }

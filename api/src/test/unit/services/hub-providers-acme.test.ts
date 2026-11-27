@@ -506,6 +506,68 @@ describe('acme.certificate plan', () => {
   })
 })
 
+describe('acme owner gate and name normalisation', () => {
+  it('without allowed domains every order is admin-only, and the plan says why; a delete is not', () => {
+    const ctx = ctxFor(world, {}, NOW_DUE)
+    const [create] = acmeAdapter.plan(ctx, certDesired(), null)
+    expect(create.data?.$adminOnly).toBe(true)
+    expect(create.reason).toMatch(/no allowed domains/)
+    const [renew] = acmeAdapter.plan(ctx, certDesired(), certObs())
+    expect(renew.data?.$adminOnly).toBe(true)
+    const [reissue] = acmeAdapter.plan(ctx, certDesired({ key_type: 'ec384' }), certObs())
+    expect(reissue.data?.$adminOnly).toBe(true)
+    const [del] = acmeAdapter.plan(ctx, null, certObs())
+    expect(del.data?.$adminOnly).toBeUndefined()
+  })
+
+  it('with allowed domains owners may order; names outside them fail at plan time, wildcards included', () => {
+    const ctx = ctxFor(world, { allowed_domains: ['Example.Test.'] })
+    const [create] = acmeAdapter.plan(ctx, certDesired(), null)
+    expect(create.data?.$adminOnly).toBeUndefined()
+    expect(() => acmeAdapter.plan(ctx, certDesired({ names: ['app.other.test'] }), null)).toThrow(
+      expect.objectContaining({ code: 'NAME_NOT_ALLOWED' })
+    )
+    expect(() => acmeAdapter.plan(ctx, certDesired({ names: ['*.other.test'] }), null)).toThrow(
+      expect.objectContaining({ code: 'NAME_NOT_ALLOWED' })
+    )
+    expect(() =>
+      acmeAdapter.plan(ctx, certDesired({ names: ['*.example.test'] }), null)
+    ).not.toThrow()
+    // a lookalike suffix is not "under" the entry
+    expect(() => acmeAdapter.plan(ctx, certDesired({ names: ['badexample.test'] }), null)).toThrow(
+      expect.objectContaining({ code: 'NAME_NOT_ALLOWED' })
+    )
+    expect(() =>
+      acmeAdapter.plan(ctx, certDesired({ names: ['app.example.test'] }, null), certObs())
+    ).not.toThrow()
+  })
+
+  it('names compare lower-case, without a trailing dot, IDN as punycode; unsafe characters are refused', () => {
+    expect(parseNames(['APP.Example.Test.']).map((n) => n.name)).toEqual(['app.example.test'])
+    expect(parseNames(['bücher.example.test']).map((n) => n.name)).toEqual([
+      'xn--bcher-kva.example.test'
+    ])
+    expect(parseNames(['*.Bücher.example.test.'])[0]).toMatchObject({
+      name: '*.xn--bcher-kva.example.test',
+      wildcard: true
+    })
+    for (const bad of [
+      'a b.example.test',
+      'a/b.example.test',
+      'user@example.test',
+      'a%2e.example.test',
+      'ex\u0000.test',
+      'a_b.example.test'
+    ])
+      expect(() => parseNames([bad])).toThrow(/valid certificate name/)
+    // a unicode allowed domain matches its punycode name
+    const ctx = ctxFor(world, { allowed_domains: ['bücher.example.test'] })
+    expect(() =>
+      acmeAdapter.plan(ctx, certDesired({ names: ['xn--bcher-kva.example.test'] }), null)
+    ).not.toThrow()
+  })
+})
+
 // ═══ Certificate: apply ═══
 
 describe('acme.certificate apply', () => {

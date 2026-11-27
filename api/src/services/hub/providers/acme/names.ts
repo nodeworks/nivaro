@@ -1,3 +1,4 @@
+import { domainToASCII } from 'node:url'
 import { ProviderError } from '../types.js'
 import { allowedDomains, HOST_RE } from './client.js'
 
@@ -12,6 +13,22 @@ export interface ParsedName {
   base: string
 }
 
+/**
+ * One name as it is compared and ordered: lower-case, one trailing dot trimmed, a non-ASCII host
+ * converted to punycode. A name that cannot survive that conversion comes back as '' (refused).
+ */
+export function normName(raw: unknown): string {
+  const t = String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, '')
+  const wild = t.startsWith('*.')
+  const host = wild ? t.slice(2) : t
+  if (/[\s/\\@:?#%]/.test(host) || [...host].some((c) => c.charCodeAt(0) < 0x20)) return ''
+  const ascii = host ? domainToASCII(host) : ''
+  return ascii ? (wild ? `*.${ascii}` : ascii) : ''
+}
+
 /** Lower-cases and checks every name; a wildcard is only `*.` in front of a plain host. */
 export function parseNames(input: unknown): ParsedName[] {
   const list = Array.isArray(input) ? input : []
@@ -22,12 +39,11 @@ export function parseNames(input: unknown): ParsedName[] {
   const seen = new Set<string>()
   const out: ParsedName[] = []
   for (const raw of list) {
-    const name = String(raw ?? '')
-      .trim()
-      .toLowerCase()
-    const wildcard = name.startsWith('*.')
-    const base = wildcard ? name.slice(2) : name
-    if (!HOST_RE.test(base))
+    const written = normName(raw)
+    const wildcard = written.startsWith('*.')
+    const base = wildcard ? written.slice(2) : written
+    const name = wildcard ? `*.${base}` : base
+    if (!base || !HOST_RE.test(base))
       throw new ProviderError(
         'INVALID_FIELDS',
         `“${name.slice(0, 80)}” is not a valid certificate name. Use a host name such as app.example.com or *.example.com (punycode for non-ASCII names).`
@@ -40,7 +56,7 @@ export function parseNames(input: unknown): ParsedName[] {
 }
 
 export const sortedNames = (names: string[]): string[] =>
-  [...new Set(names.map((n) => String(n).trim().toLowerCase()))].sort()
+  [...new Set(names.map((n) => normName(n) || String(n).trim().toLowerCase()))].sort()
 
 export const sameNames = (a: string[], b: string[]): boolean =>
   JSON.stringify(sortedNames(a)) === JSON.stringify(sortedNames(b))
@@ -73,3 +89,15 @@ export function checkNamesAllowed(
 }
 
 export const challengeName = (base: string): string => `_acme-challenge.${base}`
+
+/** Refuses a name that is not equal to or under one of the allowed domains (none set = no check). */
+export function checkAllowedDomains(names: ParsedName[], config: Record<string, unknown>): void {
+  const allowed = allowedDomains(config)
+  if (!allowed.length) return
+  for (const n of names)
+    if (!allowed.some((d) => insideZone(n.base, d)))
+      throw new ProviderError(
+        'NAME_NOT_ALLOWED',
+        `${n.name} is not under one of this connection's allowed domains.`
+      )
+}
