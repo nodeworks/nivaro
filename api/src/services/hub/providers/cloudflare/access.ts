@@ -150,7 +150,11 @@ export const accessPolicySpec: ResourceTypeSpec = {
     if (op.kind === 'noop') return []
     const flags = new Set<RiskFlag>()
     if (op.kind === 'delete' || op.kind === 'replace') flags.add('destructive')
-    if (op.kind !== 'delete' && desired && letsEveryoneIn(desired.fields))
+    if (
+      op.kind !== 'delete' &&
+      desired &&
+      (letsEveryoneIn(desired.fields) || usesOtherRule(desired.fields))
+    )
       flags.add('public_exposure')
     return [...flags]
   },
@@ -214,13 +218,53 @@ const rulesIn = (v: unknown): Rule[] =>
     value: asObj(r).value == null || asObj(r).value === '' ? null : String(asObj(r).value)
   }))
 
-/** Exported for tests: does this policy let everyone in? */
+const KNOWN_CF = new Set(Object.values(SIMPLE).map((d) => d.key))
+const ALL_IPS = /^(0\.0\.0\.0|::|(0{1,4}:){7}0{1,4})\/0$/i
+
+/** The rule as Cloudflare would receive it; a rule that cannot be translated is a bare unknown. */
+function translated(rule: unknown): Record<string, unknown> {
+  try {
+    return ruleToCf(rule)
+  } catch {
+    return { unrecognised: {} }
+  }
+}
+
+function cfKey(r: Record<string, unknown>): string | null {
+  const keys = Object.keys(r)
+  return keys.length === 1 && KNOWN_CF.has(keys[0]) ? keys[0] : null
+}
+
+/** Everyone: `everyone`, an IP range covering every address, or a rule the Hub does not know. */
+function admitsEveryone(r: Record<string, unknown>): boolean {
+  const key = cfKey(r)
+  if (key === null || key === 'everyone') return true
+  if (key === 'ip') return ALL_IPS.test(String(asObj(r.ip).ip ?? '').trim())
+  return false
+}
+
+/** A rule that actually limits who gets in (a known kind that is not "everyone"). */
+function restricts(r: Record<string, unknown>): boolean {
+  return cfKey(r) !== null && !admitsEveryone(r)
+}
+
+/** True when any list uses a raw-JSON `other` rule (the Hub cannot judge what it admits). */
+export function usesOtherRule(fields: Record<string, unknown>): boolean {
+  return ['include', 'exclude', 'require'].some((k) =>
+    arr(fields[k]).some((r) => asObj(r).kind === 'other')
+  )
+}
+
+/**
+ * Exported for tests: does this policy let everyone in? Judged on the translated Cloudflare rules,
+ * so an `other` rule or a 0.0.0.0/0 IP range counts like "everyone"; a require list narrows it only
+ * when it holds a rule that really restricts.
+ */
 export function letsEveryoneIn(fields: Record<string, unknown>): boolean {
   const decision = String(fields.decision ?? '')
   if (decision !== 'allow' && decision !== 'bypass') return false
-  if (!rulesIn(fields.include).some((r) => r.kind === 'everyone')) return false
-  // A require list narrows "everyone" to people who also meet every rule in it.
-  return rulesIn(fields.require).length === 0
+  if (!arr(fields.include).map(translated).some(admitsEveryone)) return false
+  return !arr(fields.require).map(translated).some(restricts)
 }
 
 // ── Applications ──

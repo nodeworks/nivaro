@@ -7,6 +7,7 @@ import type {
   RiskFlag
 } from '../types.js'
 import { ProviderError } from '../types.js'
+import { ACCESS_APP } from './access.js'
 import { accountPath, cfCall, checkId, joinId, nextCursor, pageOf, splitId } from './client.js'
 import {
   arr,
@@ -44,6 +45,47 @@ const HOST_RE =
 const SERVICE_RE =
   '^(https?://[^\\s]+|tcp://[^\\s]+|ssh://[^\\s]+|rdp://[^\\s]+|unix:[^\\s]+|http_status:\\d{3})$'
 const RAW_TCP = /^(tcp|ssh|rdp):\/\//i
+
+/** Services that must never be exposed without an admin's say: raw TCP, unix sockets, local targets. */
+export function sensitiveService(service: string): boolean {
+  const s = service.trim()
+  if (RAW_TCP.test(s) || /^unix:/i.test(s)) return true
+  let host = ''
+  try {
+    host = new URL(s).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  } catch {
+    return false
+  }
+  if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0') return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    return (
+      a === 127 ||
+      a === 10 ||
+      a === 0 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    )
+  }
+  if (host.includes(':'))
+    return (
+      host === '::1' ||
+      host === '::' ||
+      /^f[cd]/.test(host) ||
+      /^fe[89ab]/.test(host) ||
+      host.startsWith('::ffff:')
+    )
+  return false
+}
+
+/** True when an Access application's hostname covers the tunnel hostname. */
+export function accessCovers(domain: string, hostname: string): boolean {
+  const d = domain.split('/')[0].toLowerCase()
+  const h = hostname.toLowerCase()
+  return d === h || (d.startsWith('*.') && h.endsWith(d.slice(1)))
+}
 
 export const tunnelSpec: ResourceTypeSpec = {
   key: TUNNEL,
@@ -105,19 +147,34 @@ export const tunnelRouteSpec: ResourceTypeSpec = {
       required: true,
       pattern: SERVICE_RE,
       help: 'Where the tunnel sends it, like http://app:3055 or http_status:404.'
+    },
+    {
+      key: 'access_application',
+      label: 'Guarded by Access application',
+      kind: 'ref',
+      refType: ACCESS_APP,
+      help: 'The Hub-managed Access application that guards this hostname. Without one, the hostname is open to the internet and a Hub admin approves it.'
     }
   ],
   capabilities: { ...FULL_CAPS },
   reversible: true,
-  refs: [{ field: 'tunnel', type: TUNNEL, required: true }],
+  refs: [
+    { field: 'tunnel', type: TUNNEL, required: true },
+    { field: 'access_application', type: ACCESS_APP, required: false }
+  ],
   risk(op, desired): RiskFlag[] {
     if (op.kind === 'noop') return []
     const flags = new Set<RiskFlag>()
     if (op.kind === 'update' || op.kind === 'delete' || op.kind === 'replace') flags.add('downtime')
     if (op.kind === 'delete' || op.kind === 'replace') flags.add('destructive')
-    const service = String(desired?.fields.service ?? '')
-    // A raw TCP / SSH / RDP hostname on the public internet is a way in, not a web page.
-    if (op.kind !== 'delete' && RAW_TCP.test(service)) flags.add('public_exposure')
+    if (op.kind === 'create' || op.kind === 'update' || op.kind === 'replace') {
+      const service = String(desired?.fields.service ?? '')
+      // A public hostname is open to the internet unless a Hub-managed Access application guards
+      // it (the `access_application` ref, whose hostname apply checks). Raw TCP / SSH / RDP,
+      // unix sockets and loopback, link-local or private targets are always flagged.
+      const guarded = typeof desired?.refs.access_application === 'string'
+      if (!guarded || sensitiveService(service)) flags.add('public_exposure')
+    }
     return [...flags]
   },
   estimate: includedEstimate('Cloudflare Tunnel is free.')
@@ -338,6 +395,25 @@ async function readConfig(ctx: ProviderContext, tunnelId: string): Promise<Tunne
   return { config, ingress: arr(config.ingress).map((r) => asObj(r) as unknown as Ingress) }
 }
 
+async function assertGuard(
+  ctx: ProviderContext,
+  guard: string | string[] | null | undefined,
+  hostname: string
+): Promise<void> {
+  if (typeof guard !== 'string') return
+  const app = await cfCall<{ domain?: string }>(
+    ctx,
+    'GET',
+    `${accountPath(ctx)}/access/apps/${checkId(guard, 'application id')}`,
+    { allow: [404] }
+  )
+  if (!app.result?.domain || !accessCovers(String(app.result.domain), hostname))
+    throw new ProviderError(
+      'ACCESS_NOT_COVERING',
+      `The Access application does not guard ${hostname}. Point it at that hostname or drop the guard.`
+    )
+}
+
 const isCatchAll = (r: Ingress) => !r.hostname
 
 async function writeConfig(
@@ -455,6 +531,7 @@ export const tunnelRouteImpl: TypeImpl = {
         )
       if (!hostname || !service)
         throw new ProviderError('INVALID', 'A public hostname needs a hostname and a service.')
+      await assertGuard(ctx, desired?.refs.access_application, hostname)
       const cfg = await readConfig(ctx, tunnelId)
       if (!cfg)
         throw new ProviderError('NOT_FOUND', 'The tunnel no longer exists.', { status: 404 })
@@ -496,6 +573,7 @@ export const tunnelRouteImpl: TypeImpl = {
           throw new ProviderError('NOT_FOUND', 'The tunnel no longer exists.', { status: 404 })
         const service = str(desired.fields.service)
         if (!service) throw new ProviderError('INVALID', 'A rule needs a service.')
+        await assertGuard(ctx, desired.refs.access_application, ids[1])
         const rules = cfg.ingress.filter((r) => !isCatchAll(r))
         const have = rules.find((r) => r.hostname === ids[1])
         if (!have) return add()

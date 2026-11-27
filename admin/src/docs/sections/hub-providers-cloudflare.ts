@@ -35,7 +35,7 @@ export const hubProvidersCloudflareDocs: DocSection = {
         [
           '`cloudflare.tunnel_route`',
           '`<tunnel id>:<hostname>`',
-          'One public hostname → service rule in the tunnel’s ingress list. The Hub reads the whole list, changes its own rule and writes it back with the catch-all last; other rules and settings are kept. A raw `tcp://`, `ssh://` or `rdp://` service is `public_exposure`; changing or removing a rule is `downtime`. It does not make DNS: the hostname’s CNAME is a `cloudflare.dns_record`. A locally managed tunnel is refused (`TUNNEL_LOCAL`).'
+          'One public hostname → service rule in the tunnel’s ingress list. The Hub reads the whole list, changes its own rule and writes it back with the catch-all last; other rules and settings are kept. Creating or changing a route is `public_exposure` unless a Hub-managed Access application guards the hostname (the optional `access_application` reference; apply refuses `ACCESS_NOT_COVERING` when that application’s hostname does not cover the route’s). `ssh://`, `rdp://`, `tcp://` and `unix:` services and loopback, link-local or private targets are always `public_exposure`, guarded or not; changing or removing a rule is `downtime`. It does not make DNS: the hostname’s CNAME is a `cloudflare.dns_record`. A locally managed tunnel is refused (`TUNNEL_LOCAL`).'
         ],
         [
           '`cloudflare.access_application`',
@@ -45,7 +45,7 @@ export const hubProvidersCloudflareDocs: DocSection = {
         [
           '`cloudflare.access_policy`',
           '`<application id>:<policy id>`',
-          'A policy of one application: decision (allow, deny, non_identity, bypass) and include / exclude / require rules (everyone, email, email domain, IP range, group, service token, any service token). A policy that lets everyone in — an allow or bypass whose include has "everyone" and no require rule narrows it — is `public_exposure` (a Hub admin approves). Rules the Hub does not model are kept as they are.'
+          'A policy of one application: decision (allow, deny, non_identity, bypass) and include / exclude / require rules (everyone, email, email domain, IP range, group, service token, any service token). A policy that lets everyone in is `public_exposure` (a Hub admin approves). It is judged on the rules as Cloudflare receives them: an allow or bypass counts as open when include has "everyone", an IP range of 0.0.0.0/0 or ::/0, or any rule kind the Hub does not recognise, and a require list narrows it only when it holds a rule that really restricts who gets in. Any create or update that uses a raw-JSON `other` rule is `public_exposure` too. Rules the Hub does not model are kept as they are.'
         ],
         [
           '`cloudflare.r2_bucket`',

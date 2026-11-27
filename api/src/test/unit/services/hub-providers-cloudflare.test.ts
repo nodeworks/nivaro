@@ -1306,18 +1306,113 @@ describe('cloudflare adapter: risk flags per type', () => {
     expect(s.risk(op('noop'), null)).toEqual([])
   })
 
-  it('tunnel and routes: deleting a tunnel is destructive + downtime; a raw TCP hostname is public exposure', () => {
+  it('tunnel route: deleting a tunnel is destructive + downtime; a hostname not guarded by a Hub-managed Access application is public exposure', () => {
     expect(spec('cloudflare.tunnel').risk(op('delete'), null)).toEqual(['destructive', 'downtime'])
     const r = spec('cloudflare.tunnel_route')
+    const route = (service: string, guarded = false) =>
+      desired(
+        'cloudflare.tunnel_route',
+        { service, hostname: 'app.example.test' },
+        guarded ? { access_application: APP } : {}
+      )
+    expect(r.risk(op('create'), route('http://a:1'))).toEqual(['public_exposure'])
+    expect(r.risk(op('update'), route('http://a:1'))).toEqual(['downtime', 'public_exposure'])
+    expect(r.risk(op('create'), route('http://a:1', true))).toEqual([])
+    expect(r.risk(op('update'), route('http://a:1', true))).toEqual(['downtime'])
+    expect(r.risk(op('delete'), null)).toEqual(['downtime', 'destructive'])
+  })
+
+  it('tunnel route: ssh/rdp/tcp, unix sockets and loopback, link-local or private targets are always public exposure, guarded or not', () => {
+    const r = spec('cloudflare.tunnel_route')
+    for (const service of [
+      'ssh://host:22',
+      'rdp://host:3389',
+      'tcp://db:5432',
+      'unix:/var/run/docker.sock',
+      'http://localhost:3055',
+      'http://127.0.0.1:3055',
+      'http://[::1]:80',
+      'http://10.1.2.3',
+      'http://172.20.0.5',
+      'http://192.168.1.9',
+      'http://169.254.169.254/latest',
+      'http://[fd00::1]'
+    ])
+      for (const guarded of [false, true])
+        expect(
+          r.risk(
+            op('create'),
+            desired(
+              'cloudflare.tunnel_route',
+              { service },
+              guarded ? { access_application: APP } : {}
+            )
+          ),
+          `${service} guarded=${guarded}`
+        ).toContain('public_exposure')
     expect(
-      r.risk(op('update'), desired('cloudflare.tunnel_route', { service: 'http://a:1' }))
-    ).toEqual(['downtime'])
-    expect(
-      r.risk(op('create'), desired('cloudflare.tunnel_route', { service: 'ssh://host:22' }))
-    ).toEqual(['public_exposure'])
-    expect(
-      r.risk(op('create'), desired('cloudflare.tunnel_route', { service: 'http://a:1' }))
+      r.risk(
+        op('create'),
+        desired(
+          'cloudflare.tunnel_route',
+          { service: 'http://172.32.0.1' },
+          { access_application: APP }
+        )
+      )
     ).toEqual([])
+    expect(
+      r.risk(
+        op('create'),
+        desired(
+          'cloudflare.tunnel_route',
+          { service: 'http://app:3055' },
+          { access_application: APP }
+        )
+      )
+    ).toEqual([])
+  })
+
+  it('tunnel route: the guard must really cover the hostname, checked when applying', async () => {
+    const routes: Route[] = [
+      { method: 'GET', path: new RegExp(`^/accounts/${A}/cfd_tunnel/${T}$`), body: fx('tunnel') },
+      {
+        method: 'GET',
+        path: new RegExp(`^/accounts/${A}/cfd_tunnel/${T}/configurations$`),
+        body: fx('tunnel-config')
+      },
+      { method: 'PUT', path: /configurations$/, body: {} },
+      {
+        method: 'GET',
+        path: new RegExp(`^/accounts/${A}/access/apps/${APP}$`),
+        body: fx('access-app')
+      }
+    ]
+    const make = (hostname: string) => ({
+      op: {
+        kind: 'create' as const,
+        type: 'cloudflare.tunnel_route',
+        resourceId: 1,
+        externalId: null,
+        reason: '',
+        changes: [],
+        preconditions: {},
+        risk: []
+      },
+      want: desired(
+        'cloudflare.tunnel_route',
+        { hostname, service: 'http://x:1' },
+        { tunnel: T, access_application: APP }
+      )
+    })
+    const bad = harness(routes)
+    const m = make('other.example.test')
+    await expect(adapter.apply(bad.ctx, m.op, m.want)).rejects.toMatchObject({
+      code: 'ACCESS_NOT_COVERING'
+    })
+    expect(bad.writes()).toEqual([])
+    const good = harness(routes)
+    const g = make('admin.example.test')
+    expect((await adapter.apply(good.ctx, g.op, g.want)).ok).toBe(true)
   })
 
   it('access: a policy that lets everyone in is public exposure; require narrows it', () => {
@@ -1360,6 +1455,60 @@ describe('cloudflare adapter: risk flags per type', () => {
       'public_exposure'
     ])
     expect(app.risk(op('update', [{ field: 'name', from: 'a', to: 'b' }]), null)).toEqual([])
+  })
+
+  it('access: translated rules decide: 0.0.0.0/0, ::/0 and unknown kinds are everyone; require narrows only when it restricts', () => {
+    const s = spec('cloudflare.access_policy')
+    const pol = (over: Record<string, unknown>) =>
+      desired('cloudflare.access_policy', { decision: 'allow', include: [], ...over })
+    const flagged = (over: Record<string, unknown>) =>
+      s.risk(op('create'), pol(over)).includes('public_exposure')
+    expect(flagged({ include: [{ kind: 'ip', value: '0.0.0.0/0' }] })).toBe(true)
+    expect(flagged({ include: [{ kind: 'ip', value: '::/0' }] })).toBe(true)
+    expect(flagged({ include: [{ kind: 'ip', value: '0:0:0:0:0:0:0:0/0' }] })).toBe(true)
+    expect(flagged({ include: [{ kind: 'ip', value: '203.0.113.0/24' }] })).toBe(false)
+    expect(flagged({ include: [{ kind: 'mystery', value: 'x' }] })).toBe(true)
+    expect(
+      flagged({
+        include: [{ kind: 'other', value: JSON.stringify({ github_organization: { name: 'o' } }) }]
+      })
+    ).toBe(true)
+    const open = [{ kind: 'everyone' }]
+    expect(flagged({ include: open, require: [{ kind: 'everyone' }] })).toBe(true)
+    expect(flagged({ include: open, require: [{ kind: 'ip', value: '0.0.0.0/0' }] })).toBe(true)
+    expect(flagged({ include: open, require: [{ kind: 'other', value: '{"x":{}}' }] })).toBe(true)
+    expect(
+      flagged({ include: open, require: [{ kind: 'email_domain', value: 'example.test' }] })
+    ).toBe(false)
+    expect(flagged({ include: open, require: [{ kind: 'any_valid_service_token' }] })).toBe(false)
+    expect(
+      letsEveryoneIn({ decision: 'bypass', include: [{ kind: 'ip', value: '0.0.0.0/0' }] })
+    ).toBe(true)
+  })
+
+  it('access: every create or update that uses an `other` rule is public exposure, whatever the decision', () => {
+    const s = spec('cloudflare.access_policy')
+    const other = { kind: 'other', value: JSON.stringify({ certificate: {} }) }
+    for (const decision of ['allow', 'deny', 'bypass', 'non_identity'])
+      for (const list of ['include', 'exclude', 'require'])
+        for (const kind of ['create', 'update'] as const)
+          expect(
+            s.risk(
+              op(kind),
+              desired('cloudflare.access_policy', {
+                decision,
+                include: [{ kind: 'email', value: 'a@example.test' }],
+                [list]: [other]
+              })
+            ),
+            `${decision} ${list} ${kind}`
+          ).toContain('public_exposure')
+    expect(
+      s.risk(
+        op('delete'),
+        desired('cloudflare.access_policy', { decision: 'deny', exclude: [other] })
+      )
+    ).toEqual(['destructive'])
   })
 
   it('bucket delete is destructive + data_loss; worker routes move traffic; secret delete is destructive', () => {
