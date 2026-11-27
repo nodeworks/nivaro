@@ -6,6 +6,7 @@ import { githubAdapter } from './github/index.js'
 import { neonAdapter } from './neon/index.js'
 import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
+import { sendgridAdapter } from './sendgrid/index.js'
 import { sentryAdapter } from './sentry/index.js'
 import type { ProviderAdapter } from './types.js'
 import { upstashAdapter } from './upstash/index.js'
@@ -25,6 +26,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   dockerhubAdapter,
   expoAdapter,
   githubAdapter,
+  sendgridAdapter,
   sentryAdapter,
   redisCloudAdapter,
   upstashAdapter,

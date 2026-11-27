@@ -1,0 +1,5 @@
+{
+  "api_key_id": "FakeKeyIdDemoApp0000001",
+  "name": "demo-app-mail",
+  "scopes": ["mail.send"]
+}

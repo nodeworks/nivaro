@@ -1,0 +1,36 @@
+{
+  "results": [
+    {
+      "id": 1001,
+      "nickname": "Demo alerts",
+      "from_email": "alerts@example.com",
+      "from_name": "Demo Hub",
+      "reply_to": "alerts@example.com",
+      "reply_to_name": "",
+      "address": "1 Example Street",
+      "address2": "",
+      "city": "Exampleville",
+      "state": "EX",
+      "zip": "00000",
+      "country": "US",
+      "verified": true,
+      "locked": false
+    },
+    {
+      "id": 1002,
+      "nickname": "Pending sender",
+      "from_email": "pending@example.com",
+      "from_name": "",
+      "reply_to": "pending@example.com",
+      "reply_to_name": "",
+      "address": "1 Example Street",
+      "address2": "",
+      "city": "Exampleville",
+      "state": "",
+      "zip": "",
+      "country": "US",
+      "verified": false,
+      "locked": false
+    }
+  ]
+}
