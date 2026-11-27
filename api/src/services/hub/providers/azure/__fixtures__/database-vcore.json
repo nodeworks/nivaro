@@ -1,0 +1,15 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Sql/servers/sql-test-hub/databases/big-db",
+  "name": "big-db",
+  "location": "eastus",
+  "sku": {
+    "name": "GP_Gen5",
+    "tier": "GeneralPurpose",
+    "family": "Gen5",
+    "capacity": 4
+  },
+  "properties": {
+    "status": "Online",
+    "maxSizeBytes": 107374182400
+  }
+}

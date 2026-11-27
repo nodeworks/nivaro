@@ -1,0 +1,12 @@
+{
+  "Items": [
+    {
+      "currencyCode": "USD",
+      "retailPrice": 0.115,
+      "unitOfMeasure": "1 GB/Month",
+      "meterName": "Data Stored",
+      "productName": "SQL Database Single/Elastic Pool General Purpose - Provisioned - Gen5",
+      "effectiveStartDate": "2026-10-01T00:00:00Z"
+    }
+  ]
+}

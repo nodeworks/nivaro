@@ -390,6 +390,7 @@ import { hubProvidersLivekitDocs } from './sections/hub-providers-livekit.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
+import { hubProvidersAzureDocs } from './sections/hub-providers-azure.js'
 import { hubProvidersPortainerDocs } from './sections/hub-providers-portainer.js'
 import {
   hubProvidersRedisCloudDocs,
@@ -1286,6 +1287,7 @@ export const navSections: NavGroup[] = [
       hubProvidersPagerdutyDocs,
       hubProvidersSnykDocs,
       hubProvidersPortainerDocs,
+      hubProvidersAzureDocs,
       hubProvidersSendgridDocs,
       hubProvidersTeamsDocs,
       hubProvidersAnthropicDocs,

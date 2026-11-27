@@ -1,0 +1,30 @@
+{
+  "properties": {
+    "columns": [
+      {
+        "name": "Cost",
+        "type": "Number"
+      },
+      {
+        "name": "ResourceId",
+        "type": "String"
+      },
+      {
+        "name": "TagKey",
+        "type": "String"
+      },
+      {
+        "name": "TagValue",
+        "type": "String"
+      }
+    ],
+    "rows": [
+      [
+        13,
+        "/subscriptions/00000000-0000-4000-8000-000000000001/resourcegroups/rg-test-hub/providers/microsoft.sql/servers/sql-test-hub/databases/app-db",
+        "nivaro-hub-app",
+        "7"
+      ]
+    ]
+  }
+}

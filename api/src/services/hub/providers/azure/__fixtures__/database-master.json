@@ -1,0 +1,12 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub/providers/Microsoft.Sql/servers/sql-test-hub/databases/master",
+  "name": "master",
+  "location": "eastus",
+  "sku": {
+    "name": "System",
+    "tier": "System"
+  },
+  "properties": {
+    "status": "Online"
+  }
+}

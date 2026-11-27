@@ -1,0 +1,11 @@
+{
+  "id": "/subscriptions/00000000-0000-4000-8000-000000000001/resourceGroups/rg-test-hub",
+  "name": "rg-test-hub",
+  "location": "eastus",
+  "tags": {
+    "nivaro-hub-app": "7"
+  },
+  "properties": {
+    "provisioningState": "Succeeded"
+  }
+}
