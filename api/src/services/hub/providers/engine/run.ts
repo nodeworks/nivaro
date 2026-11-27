@@ -51,6 +51,7 @@ import { CREATE_CHANGE_TAG } from './discard.js'
 import {
   assertCarriedGrantOps,
   assertMayWrite,
+  assertRenewalOps,
   claimResourceChecklist,
   judgeAccess,
   judgeChangeGates,
@@ -379,13 +380,15 @@ async function judgeForRun(row: HubResourceChangeRow, actor: HubActor): Promise<
     actor
   )
   assertCarriedGrantOps(access, plan.ops, plan.resourceIds, new Set(rows.map((r) => r.id)))
+  assertRenewalOps(plan.origin, plan.ops)
   // Task 11a: a carried change resumes only while its run still carries it.
   if (plan.origin)
     await judgeOrigin(plan.origin, {
       scope: row.scope,
       appId: row.app_id,
       environmentId: row.environment_id,
-      actions: plan.request.ops.map((o) => o.action)
+      actions: plan.request.ops.map((o) => o.action),
+      resourceIds: plan.request.ops.map((o) => o.resourceId ?? null)
     })
   const gates = await judgeChangeGates({
     scope: row.scope,

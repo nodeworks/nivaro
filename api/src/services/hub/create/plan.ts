@@ -591,6 +591,18 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     // engine judges each when the providers step plans it.
     const parts = providerPartsOf((e as { providers?: unknown }).providers)
     if (!parts.ok) block('BAD_PROVIDER_PART', parts.text, label)
+    // Task 43: an ACME certificate only where Traefik cannot get one itself (a Docker driver whose
+    // names are made by hand).
+    if (
+      parts.ok &&
+      parts.parts.some((p) => p.type === 'acme.certificate') &&
+      !(kind === 'docker' && naming?.dns_mode === 'manual')
+    )
+      block(
+        'BAD_PROVIDER_PART',
+        'An ACME certificate is offered only on a Docker driver whose DNS names are made by hand: elsewhere the edge gets its own certificate.',
+        label
+      )
     planned.push({
       key: envKey,
       position,

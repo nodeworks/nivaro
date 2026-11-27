@@ -7,7 +7,11 @@ export const CREATE_PROVIDER_TYPES = [
   'vercel.project',
   'auth0.application',
   'aws.route53_record',
-  'aws.rds_instance'
+  'aws.rds_instance',
+  // Task 43 (Wave 3): LiveKit huddles (the pasted key pair → the app's huddle settings) and a TLS
+  // certificate from an ACME CA (Docker drivers whose names are made by hand only).
+  'livekit.api_key',
+  'acme.certificate'
 ] as const
 export type CreateProviderType = (typeof CREATE_PROVIDER_TYPES)[number]
 
@@ -54,19 +58,59 @@ export function providerPartsOf(
 
 /** A part in plain words for the plan (never a field value). */
 export function partLine(envKey: string, p: CreateProviderPart): string {
-  const name = typeof p.fields?.name === 'string' ? ` ${p.fields.name}` : ''
+  const n = partName(p)
+  const name = n ? ` ${n}` : ''
   const what: Record<CreateProviderType, string> = {
     'vercel.project': 'a Vercel project',
     'auth0.application': 'an Auth0 application (sign-in addresses from the environment)',
     'aws.route53_record': 'a Route 53 record',
-    'aws.rds_instance': 'an RDS instance (link it as a database server once it is available)'
+    'aws.rds_instance': 'an RDS instance (link it as a database server once it is available)',
+    'livekit.api_key':
+      'a LiveKit Cloud key (the huddle settings are filled from it once the app answers)',
+    'acme.certificate':
+      'a TLS certificate from an ACME CA for the environment name (Traefik cannot get one on its own for a name made by hand)'
   }
   return `${envKey}: ${what[p.type]}${name} through connection #${p.connection_id}`
+}
+
+/** A part's own name (its type's name field), never a secret value. */
+export function partName(p: CreateProviderPart): string | null {
+  const v = p.type === 'livekit.api_key' ? p.fields?.api_key : p.fields?.name
+  return typeof v === 'string' && v ? v : null
+}
+
+/**
+ * Task 43: the bindings a made part gets by default (output → destination), so nobody copies a
+ * key: a LiveKit key fills the app's huddle settings (allow-listed app settings, pushed over the
+ * hub link once the app answers). An ACME certificate gets none: which stack secrets the edge
+ * reads them from is the operator's (docs, hub-providers-acme).
+ */
+export function partBindings(
+  type: CreateProviderType
+): Array<{ output_key: string; target: 'app_setting'; target_key: string }> {
+  if (type === 'livekit.api_key')
+    return [
+      { output_key: 'url', target: 'app_setting', target_key: 'huddle_livekit_url' },
+      { output_key: 'api_key', target: 'app_setting', target_key: 'huddle_livekit_key' },
+      { output_key: 'api_secret', target: 'app_setting', target_key: 'huddle_livekit_secret' }
+    ]
+  return []
 }
 
 /** The fields one part is created with (Auth0 addresses from the environment when left out). */
 export function partFields(p: CreateProviderPart, baseUrl: string): Record<string, unknown> {
   const f = { ...(p.fields ?? {}) }
+  if (p.type === 'acme.certificate') {
+    // The environment's own name when the request names none.
+    let host = ''
+    try {
+      host = new URL(baseUrl).hostname
+    } catch {
+      host = ''
+    }
+    if (f.names === undefined && host) f.names = [host]
+    if (f.name === undefined && host) f.name = host
+  }
   if (p.type === 'auth0.application') {
     const base = baseUrl.replace(/\/+$/, '')
     if (f.callbacks === undefined) f.callbacks = [redirectUriFor(base)]

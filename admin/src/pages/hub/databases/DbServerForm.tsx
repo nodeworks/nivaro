@@ -35,6 +35,15 @@ import {
  * login is two values, user + password; both come back as the mask and stay stored while left
  * alone. Test connects with the saved login and says what it may do in words.
  */
+
+/** Task 43: what a SQL Server database server may be linked to (resource_id). */
+const LINK_TYPES_MSSQL = ['aws.rds_instance', 'azure.sql_server', 'azure.sql_database'] as const
+const LINK_TYPE_LABELS: Record<string, string> = {
+  'aws.rds_instance': 'RDS instance',
+  'azure.sql_server': 'Azure SQL server',
+  'azure.sql_database': 'Azure SQL database'
+}
+
 export function DbServerForm({
   server,
   onSaved,
@@ -216,20 +225,23 @@ export function DbServerForm({
           <div className='sm:col-span-2'>
             <Field
               id={id('rds')}
-              label='Amazon RDS instance'
+              label={engine === 'mssql' ? 'Managed database resource' : 'Amazon RDS instance'}
               hint={
                 resourceId
-                  ? 'Host and port come from the instance when it is available; its engine must match.'
-                  : 'Optional: link a managed RDS instance so its address is kept up to date.'
+                  ? 'Host and port come from the resource when it is available; its engine must match.'
+                  : engine === 'mssql'
+                    ? 'Optional: link a managed RDS instance or Azure SQL server or database so its address is kept up to date.'
+                    : 'Optional: link a managed RDS instance so its address is kept up to date.'
               }
             >
               <ManagedResourcePicker
                 id={id('rds')}
-                type='aws.rds_instance'
+                type={engine === 'mssql' ? LINK_TYPES_MSSQL : 'aws.rds_instance'}
+                typeLabels={LINK_TYPE_LABELS}
                 value={resourceId}
                 onChange={setResourceId}
-                allowNone='Not an RDS instance'
-                placeholder='Not an RDS instance'
+                allowNone='Not linked'
+                placeholder='Not linked'
               />
             </Field>
           </div>

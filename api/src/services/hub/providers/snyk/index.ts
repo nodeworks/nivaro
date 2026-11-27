@@ -332,6 +332,26 @@ async function readIgnore(ctx: ProviderContext, externalId: string): Promise<Obs
 
 /** Everything of Snyk's answer the vulnerability tab needs, per connection (see findings.ts). */
 export async function readSnykFindings(ctx: ProviderContext): Promise<SnykFindings> {
+  return (await readSnykProjectFindings(ctx)).totals
+}
+
+/** One project's row of the Hub vulnerability tab (Task 43): counts only, never issue text. */
+export interface SnykProjectFindings {
+  id: string
+  name: string | null
+  project_type: string | null
+  monitored: boolean
+  critical: number
+  high: number
+  medium: number
+  low: number
+  fixable: number | null
+}
+
+/** The totals (readSnykFindings) and the per-project rows they are made of, in one read. */
+export async function readSnykProjectFindings(
+  ctx: ProviderContext
+): Promise<{ totals: SnykFindings; projects: SnykProjectFindings[] }> {
   const projects = await listProjects(ctx)
   let read = 0
   for (const p of projects) {
@@ -344,7 +364,21 @@ export async function readSnykFindings(ctx: ProviderContext): Promise<SnykFindin
     read += 1
     p.fields.fixable = await readSnykFixable(ctx, p.externalId)
   }
-  return snykFindingsFor(projects)
+  return {
+    totals: snykFindingsFor(projects),
+    projects: projects.map((p) => ({
+      id: p.externalId,
+      name: str(p.fields.name),
+      project_type: str(p.fields.project_type),
+      monitored: p.fields.monitored !== false,
+      critical: count(p.fields.critical),
+      high: count(p.fields.high),
+      medium: count(p.fields.medium),
+      low: count(p.fields.low),
+      fixable:
+        p.fields.fixable === null || p.fields.fixable === undefined ? null : count(p.fields.fixable)
+    }))
+  }
 }
 
 // ── Plan ──

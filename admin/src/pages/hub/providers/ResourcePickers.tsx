@@ -57,11 +57,16 @@ export function ManagedResourcePicker({
   onChange,
   filter = {},
   placeholder = 'Pick a managed resource',
-  allowNone
+  allowNone,
+  typeLabels
 }: {
   id: string
-  /** The resource type, e.g. aws.route53_zone. */
-  type: string
+  /**
+   * The resource type, e.g. aws.route53_zone. Several (Task 43: an RDS instance or an Azure SQL
+   * server / database) list them together, each labelled with `typeLabels`.
+   */
+  type: string | readonly string[]
+  typeLabels?: Record<string, string>
   value: number | null
   onChange: (id: number | null) => void
   /** Narrows the list (scope, app, connection). */
@@ -70,15 +75,22 @@ export function ManagedResourcePicker({
   /** Adds a "None" choice that clears the value. */
   allowNone?: string
 }) {
-  const f: ResourceFilter = { ...filter, type }
+  const types = typeof type === 'string' ? [type] : [...type]
+  const f: ResourceFilter = types.length === 1 ? { ...filter, type: types[0] } : { ...filter }
   const q = useQuery({ queryKey: providerKeys.resources(f), queryFn: () => fetchResources(f) })
-  const live = (q.data ?? []).filter((r) => !r.deleted_at && !!r.external_id)
+  const live = (q.data ?? []).filter(
+    (r) => !r.deleted_at && !!r.external_id && types.includes(r.type)
+  )
   const options = [
     ...(allowNone ? [{ value: '', label: allowNone }] : []),
-    ...live.map((r) => ({
-      value: String(r.id),
-      label: r.environment_id == null ? resourceLabel(r) : `${resourceLabel(r)} · environment`
-    }))
+    ...live.map((r) => {
+      const kind = types.length > 1 ? (typeLabels?.[r.type] ?? r.type) : null
+      const base = kind ? `${resourceLabel(r)} · ${kind}` : resourceLabel(r)
+      return {
+        value: String(r.id),
+        label: r.environment_id == null ? base : `${base} · environment`
+      }
+    })
   ]
   // A stored value the list no longer has (deleted, out of scope) still shows as its id.
   if (value != null && !live.some((r) => r.id === value))

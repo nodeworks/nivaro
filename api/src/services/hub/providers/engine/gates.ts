@@ -56,7 +56,7 @@ export interface AccessInput {
    * allowed list does not name — the grant is per resource, never the whole connection. Any op
    * that does not name an existing resource (create, adopt) still needs the allowed list.
    */
-  carriedBy?: 'promotion' | 'creation' | 'retirement' | null
+  carriedBy?: ChangeOrigin['kind'] | null
   requestOps?: ReadonlyArray<{ action: string; resourceId?: number | null }>
 }
 
@@ -320,8 +320,12 @@ const retireSource = (id: number) => `retire:${id}`
 const ORIGIN_ACTIONS: Record<ChangeOrigin['kind'], readonly PlanAction[]> = {
   promotion: ['adopt', 'update'],
   creation: ['create', 'adopt', 'update'],
-  retirement: ['delete']
+  retirement: ['delete'],
+  renewal: ['reapply']
 }
+
+/** Task 43: the types a renewal origin may re-apply (each plans a `renew` op in its window). */
+export const RENEWABLE_TYPES: readonly string[] = Object.freeze(['acme.certificate'])
 
 /**
  * Throws ORIGIN_INVALID unless `origin` is a run that may carry this change NOW: the right kind of
@@ -335,6 +339,8 @@ export async function judgeOrigin(
     appId: number | null
     environmentId: number | null
     actions: PlanAction[]
+    /** The request ops' resource ids (Task 43: a renewal names exactly one). */
+    resourceIds?: ReadonlyArray<number | null | undefined>
   }
 ): Promise<void> {
   const bad = (message: string) => refuse('ORIGIN_INVALID', message)
@@ -349,6 +355,27 @@ export async function judgeOrigin(
         ? 'A retirement only deletes resources.'
         : `A ${origin.kind} cannot ${wrong ?? 'do that to'} resources.`
     )
+  if (origin.kind === 'renewal') {
+    const id = Number(origin.resourceId)
+    const ids = c.resourceIds ?? []
+    if (!ids.length || ids.some((x) => Number(x) !== id))
+      throw bad('A renewal re-applies only the resource it renews.')
+    const r = (await db('nivaro_hub_resources')
+      .where({ id })
+      .whereNull('deleted_at')
+      .first('id', 'type', 'app_id', 'environment_id', 'external_id')) as
+      | Record<string, unknown>
+      | undefined
+    if (
+      !r?.external_id ||
+      !RENEWABLE_TYPES.includes(String(r.type)) ||
+      Number(r.app_id) !== Number(c.appId) ||
+      (r.environment_id == null ? null : Number(r.environment_id)) !==
+        (c.environmentId == null ? null : Number(c.environmentId))
+    )
+      throw bad('The resource this renewal is for is not a renewable resource of this app.')
+    return
+  }
   if (origin.kind === 'promotion') {
     // The environment's own resources, or the app's (an app-level workflow / project the
     // environment's component deploys through).
@@ -412,7 +439,10 @@ export async function hubRecordBlockers(
   deleted: HubResourceRow[],
   appId: number | null
 ): Promise<Array<{ code: string; message: string }>> {
-  const rds = deleted.filter((r) => r.type === 'aws.rds_instance')
+  // Task 43: an Azure SQL server or database linked as a database server counts the same.
+  const rds = deleted.filter((r) =>
+    ['aws.rds_instance', 'azure.sql_server', 'azure.sql_database'].includes(r.type)
+  )
   if (!rds.length) return []
   const out: Array<{ code: string; message: string }> = []
   try {
@@ -441,7 +471,7 @@ export async function hubRecordBlockers(
       if (foreign)
         out.push({
           code: 'SHARED_IN_USE',
-          message: `Database server ${s.name} is this RDS instance, and it still holds databases of other apps (or of no environment). Move or drop them first.`
+          message: `Database server ${s.name} is this resource, and it still holds databases of other apps (or of no environment). Move or drop them first.`
         })
     }
   } catch {
@@ -452,6 +482,24 @@ export async function hubRecordBlockers(
     })
   }
   return out
+}
+
+/**
+ * Task 43: after the adapter has planned (and again at start/resume), a renewal may only renew:
+ * every op is the adapter's `renew` update or nothing to do. Anything else (a reissue because the
+ * names changed, a delete) is a person's change, refused ORIGIN_INVALID.
+ */
+export function assertRenewalOps(
+  origin: ChangeOrigin | null | undefined,
+  ops: ReadonlyArray<{ kind: string; action?: string }>
+): void {
+  if (origin?.kind !== 'renewal') return
+  const real = ops.filter((o) => o.kind !== 'noop')
+  if (!real.length || real.some((o) => o.kind !== 'update' || o.action !== 'renew'))
+    throw refuse(
+      'ORIGIN_INVALID',
+      'An automatic renewal only renews: this resource has other changes waiting, so a person plans them.'
+    )
 }
 
 /**

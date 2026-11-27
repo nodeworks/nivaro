@@ -412,7 +412,7 @@ function build() {
       databaseServers: {
         type: GraphQLJSON,
         description:
-          'Database servers (no credentials); resource_id = the aws.rds_instance a server is (Task 11)',
+          'Database servers (no credentials); resource_id = the aws.rds_instance or Azure SQL server / database a server is (Tasks 11, 43)',
         resolve: (_r, _a, ctx) => hubRest(ctx, 'GET', '/db-servers')
       },
       targets: {

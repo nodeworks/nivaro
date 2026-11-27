@@ -483,6 +483,34 @@ export async function observeTick(
 }
 
 /**
+ * Task 43: what the observe job does once an hour, after observing: the health tick (budgets) and
+ * certificate renewals. Each is failure-isolated: an error is logged and never stops the other.
+ */
+export async function hourlyExtras(
+  log: (message: string) => void = () => {},
+  now: Date = new Date()
+): Promise<void> {
+  const { healthTick, healthTickDue } = await import('./health-tick.js')
+  if (!healthTickDue(now)) return
+  try {
+    const h = await healthTick()
+    if (h.asked || h.failed) log(`${OBSERVE_JOB}: health ${h.asked} asked, ${h.failed} failed`)
+  } catch (e) {
+    log(`${OBSERVE_JOB}: health tick failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+  try {
+    const { renewalTick } = await import('./hooks/renewal.js')
+    const r = await renewalTick()
+    if (r.due)
+      log(
+        `${OBSERVE_JOB}: renewals ${r.due} due, ${r.started} started, ${r.waiting} waiting, ${r.skipped} skipped, ${r.failed} failed`
+      )
+  } catch (e) {
+    log(`${OBSERVE_JOB}: renewal tick failed: ${e instanceof Error ? e.message : String(e)}`)
+  }
+}
+
+/**
  * Registers the 15-minute job. The cron plugin holds the one-leader Redis lease and ticks only
  * where cronTicksEnabled(); this adds the Hub-mode check. Call once from the Hub provider routes.
  */
@@ -498,12 +526,13 @@ export function registerResourceObserveCron(app: FastifyInstance): void {
         app.log.info(
           `${OBSERVE_JOB}: ${r.checked} checked, ${r.drifted} drifted, ${r.gone} gone, ${r.failed} failed`
         )
+      await hourlyExtras((m) => app.log.info(m))
     },
     {
       quiet: true,
       idempotent: 'safe',
       description:
-        'Every 15 minutes (Hub only) — reads every provider resource the Hub manages and stores what it sees plus a drift flag. Never changes anything at a provider; a person chooses Re-apply or Accept.'
+        'Every 15 minutes (Hub only) — reads every provider resource the Hub manages and stores what it sees plus a drift flag. Never re-applies drift (a person chooses Re-apply or Accept). Once an hour it also asks the health of budget resources (Azure / AWS budgets, so their over-budget notices fire) and plans the renewal of certificates the Hub ordered that end within 30 days (origin renewal: only the renew op).'
     }
   )
 }

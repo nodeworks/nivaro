@@ -10,6 +10,10 @@
 //       aws.rds_instance     an RDS instance (link it as a database server on Databases once it is
 //                            available; the environment's own database is the one the request
 //                            names);
+//       livekit.api_key      (Task 43) a LiveKit Cloud key pair, bound to the app's huddle settings
+//                            (huddle_livekit_url / _key / _secret) so nobody copies it;
+//       acme.certificate     (Task 43) a TLS certificate for the environment's name, on a Docker
+//                            driver whose names are made by hand (the planner refuses it elsewhere);
 //   - and, on a driver or target whose DNS mode is `route53`, the environment's name record in the
 //     hosted zone (create/dns-route53.ts), so the name step finds it resolving.
 //
@@ -28,7 +32,13 @@ import { hubActorForUser, runCarriedChange } from '../providers/hooks/carried.js
 import { type HubResourceRow, listResources } from '../providers/store.js'
 import { openSecret } from '../secrets.js'
 import { recordOp, route53Zone, zoneResourceIdOf } from './dns-route53.js'
-import { type CreateProviderPart, partFields, providerPartsOf } from './provider-parts.js'
+import {
+  type CreateProviderPart,
+  partBindings,
+  partFields,
+  partName,
+  providerPartsOf
+} from './provider-parts.js'
 import type { BaseStepContext, StepResult } from './steps.js'
 import { StepFailure } from './steps.js'
 
@@ -69,7 +79,7 @@ export async function stepProviders(
     )
   for (const p of parts) {
     const fields = partFields(p, ctx.env.base_url)
-    if (made(p.type, p.connection_id, fields.name)) continue
+    if (made(p.type, p.connection_id, partName({ ...p, fields }))) continue
     add(p.connection_id, { action: 'create', type: p.type, fields })
   }
 
@@ -128,8 +138,76 @@ export async function stepProviders(
     done.push(`#${out.changeId}`)
   }
   ctx.log(`provider parts: changes ${done.join(', ')} applied`)
+  // Task 43: the default bindings of the parts made (a LiveKit key → the huddle settings).
+  const bound = await bindParts(ctx, parts, actor).catch(() => [] as string[])
+  if (bound.length) ctx.log(`provider parts: bound ${bound.join(', ')}`)
   return {
     status: 'done',
     note: `${[...ops.values()].flat().length} provider part(s) made (changes ${done.join(', ')}).`
   }
+}
+
+/**
+ * Task 43: gives each made part its default bindings (provider-parts.ts partBindings), keeping any
+ * binding a person already set, then pushes them in the background (an app setting reaches the app
+ * once it answers on its hub link; until then the binding shows the push error and is pushed again
+ * with the next change of its outputs or from the resource page). A refusal (a destination another
+ * resource already feeds) is skipped, never a failed creation.
+ */
+async function bindParts(
+  ctx: BaseStepContext,
+  parts: CreateProviderPart[],
+  actor: { id: string; isAdmin: boolean }
+): Promise<string[]> {
+  const wanted = parts.filter((p) => partBindings(p.type).length)
+  if (!wanted.length) return []
+  const { listBindings, schedulePush, setBindings } = await import(
+    '../providers/engine/bindings.js'
+  )
+  const rows = await listResources({ appId: ctx.app.id, environmentId: ctx.env.id })
+  const out: string[] = []
+  for (const p of wanted) {
+    const name = partName({ ...p, fields: partFields(p, ctx.env.base_url) })
+    const row = rows.find(
+      (r) =>
+        r.type === p.type &&
+        r.connection_id === p.connection_id &&
+        (r.name === name || r.desired?.name === name || r.observed?.name === name || !name)
+    )
+    if (!row) continue
+    const have = await listBindings(row.id)
+    const add = partBindings(p.type)
+      .map((b) => ({ ...b, environment_id: ctx.env.id }))
+      .filter(
+        (b) =>
+          !have.some(
+            (h) =>
+              h.output_key === b.output_key &&
+              h.environment_id === b.environment_id &&
+              h.target === b.target &&
+              h.target_key === b.target_key
+          )
+      )
+    if (!add.length) continue
+    try {
+      await setBindings(
+        row,
+        [
+          ...have.map((h) => ({
+            output_key: h.output_key,
+            environment_id: h.environment_id,
+            target: h.target,
+            target_key: h.target_key
+          })),
+          ...add
+        ],
+        actor
+      )
+      schedulePush(row.id, { actorId: actor.id })
+      out.push(...add.map((b) => b.target_key))
+    } catch {
+      ctx.log(`provider parts: ${p.type} could not be bound (bind it on its resource page)`)
+    }
+  }
+  return out
 }
