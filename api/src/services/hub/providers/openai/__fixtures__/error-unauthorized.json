@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "Incorrect API key provided: test-secret-openai-admin-0001.",
+    "type": "invalid_request_error",
+    "code": "invalid_api_key"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "organization.user",
+      "id": "user-test0001",
+      "name": "Test Person",
+      "email": "Person@Example.com",
+      "role": "reader"
+    },
+    {
+      "object": "organization.user",
+      "id": "user-test0002",
+      "name": "Other",
+      "email": "other@example.com",
+      "role": "reader"
+    }
+  ],
+  "has_more": false
+}

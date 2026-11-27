@@ -7,6 +7,7 @@ import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
 import { gitlabAdapter } from './gitlab/index.js'
 import { neonAdapter } from './neon/index.js'
+import { openaiAdapter } from './openai/index.js'
 import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import { sentryAdapter } from './sentry/index.js'
@@ -36,6 +37,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   redisCloudAdapter,
   upstashAdapter,
   neonAdapter,
+  openaiAdapter,
   gitlabAdapter,
   vercelAdapter
 ]
