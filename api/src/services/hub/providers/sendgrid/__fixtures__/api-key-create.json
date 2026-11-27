@@ -1,0 +1,6 @@
+{
+  "api_key": "SG.FakeKeyIdDemoApp0000001.test-secret-sendgrid-new-key-0001",
+  "api_key_id": "FakeKeyIdDemoApp0000001",
+  "name": "demo-app-mail",
+  "scopes": ["mail.send"]
+}

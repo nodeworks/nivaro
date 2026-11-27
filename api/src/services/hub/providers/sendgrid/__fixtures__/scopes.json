@@ -1,0 +1,14 @@
+{
+  "scopes": [
+    "api_keys.create",
+    "api_keys.read",
+    "api_keys.update",
+    "api_keys.delete",
+    "mail.send",
+    "whitelabel.create",
+    "whitelabel.read",
+    "whitelabel.update",
+    "whitelabel.delete",
+    "access_settings.whitelist.read"
+  ]
+}

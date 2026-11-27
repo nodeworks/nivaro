@@ -1,0 +1,18 @@
+[
+  {
+    "id": 2001,
+    "subdomain": "em",
+    "domain": "example.com",
+    "default": false,
+    "automatic_security": true,
+    "valid": false
+  },
+  {
+    "id": 2002,
+    "subdomain": "mail",
+    "domain": "example.org",
+    "default": true,
+    "automatic_security": true,
+    "valid": true
+  }
+]
