@@ -380,6 +380,7 @@ import {
   hubProvidersSentryDocs,
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
+import { hubProvidersAcmeDocs } from './sections/hub-providers-acme.js'
 import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
@@ -1280,6 +1281,7 @@ export const navSections: NavGroup[] = [
       hubProvidersSendgridDocs,
       hubProvidersTeamsDocs,
       hubProvidersAnthropicDocs,
+      hubProvidersAcmeDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]
