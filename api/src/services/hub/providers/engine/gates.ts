@@ -65,6 +65,12 @@ export interface AccessAnswer {
   env: { id: number; key: string } | null
   /** Production per THE rule (null for a change with no environment). */
   production: boolean | null
+  /**
+   * True when an owner passed only through the carried per-resource grant (the connection is not
+   * on the app's allowed list). The planned ops must then stay on those resources:
+   * `assertCarriedGrantOps` after the adapter has planned, and again at start/resume.
+   */
+  viaCarriedGrant?: boolean
 }
 
 /** Actions that only touch a resource the Hub already manages. */
@@ -123,6 +129,7 @@ export async function judgeAccess(input: AccessInput, actor: HubActor): Promise<
     if ((r.environment_id ?? null) !== (env?.id ?? null))
       throw refuse('INVALID_FIELDS', `Resource ${r.id} belongs to another environment of this app.`)
   }
+  let viaCarriedGrant = false
   if (!actor.isAdmin) {
     if (!(await isAppOwner(Number(app.id), actor.id)))
       throw refuse(
@@ -141,7 +148,8 @@ export async function judgeAccess(input: AccessInput, actor: HubActor): Promise<
           o.resourceId > 0 &&
           rowIds.has(o.resourceId)
       )
-    const allowed = carriedOnOwnResources ? [] : await appAllowedConnections(Number(app.id))
+    const allowed = await appAllowedConnections(Number(app.id))
+    viaCarriedGrant = carriedOnOwnResources && !allowed.includes(connection.id)
     if (!carriedOnOwnResources && !allowed.includes(connection.id))
       throw refuse(
         'CONNECTION_NOT_ALLOWED',
@@ -164,7 +172,7 @@ export async function judgeAccess(input: AccessInput, actor: HubActor): Promise<
         'Production resources are changed by Hub administrators on this app. A Hub administrator can let owners deploy production.'
       )
   }
-  return { app: { id: Number(app.id), key: String(app.key) }, env, production }
+  return { app: { id: Number(app.id), key: String(app.key) }, env, production, viaCarriedGrant }
 }
 
 /** The write refusal for an actor who may plan but never apply (MCP, View-as / run-as). */
@@ -444,4 +452,30 @@ export async function hubRecordBlockers(
     })
   }
   return out
+}
+
+/**
+ * After the adapter has planned (and again at start/resume): a change that passed only through
+ * the carried per-resource grant may not make anything new at the provider. Any planned create or
+ * replace, or an op with no stored resource of this change, needs the app's allowed list.
+ */
+export function assertCarriedGrantOps(
+  access: Pick<AccessAnswer, 'viaCarriedGrant'>,
+  ops: ReadonlyArray<{ kind: string }>,
+  resourceIds: ReadonlyArray<number | null>,
+  rowIds: ReadonlySet<number>
+): void {
+  if (!access.viaCarriedGrant) return
+  const bad = ops.some(
+    (o, i) =>
+      o.kind === 'create' ||
+      o.kind === 'replace' ||
+      resourceIds[i] == null ||
+      !rowIds.has(Number(resourceIds[i]))
+  )
+  if (bad)
+    throw refuse(
+      'CONNECTION_NOT_ALLOWED',
+      'This change would make something new through a connection this app is not allowed — a Hub administrator can allow it.'
+    )
 }

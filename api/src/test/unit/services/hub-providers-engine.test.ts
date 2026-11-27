@@ -989,6 +989,26 @@ describe('gates', () => {
     await expect(
       judgeAccess({ ...base, rows: [row], carriedBy: 'creation', requestOps: upd }, OWNER)
     ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
+    // Planned ops are judged too: a grant answer never lets a create or replace through.
+    const { assertCarriedGrantOps } = await import(
+      '../../../services/hub/providers/engine/gates.js'
+    )
+    const via = { viaCarriedGrant: true }
+    const ids = new Set([row.id])
+    expect(() => assertCarriedGrantOps(via, [{ kind: 'update' }], [row.id], ids)).not.toThrow()
+    for (const kind of ['create', 'replace'])
+      expect(() => assertCarriedGrantOps(via, [{ kind }], [row.id], ids)).toThrow(
+        expect.objectContaining({ code: 'CONNECTION_NOT_ALLOWED' })
+      )
+    expect(() => assertCarriedGrantOps(via, [{ kind: 'update' }], [null], ids)).toThrow()
+    expect(() =>
+      assertCarriedGrantOps({ viaCarriedGrant: false }, [{ kind: 'create' }], [null], ids)
+    ).not.toThrow()
+    const granted = await judgeAccess(
+      { ...base, rows: [row], carriedBy: 'promotion', requestOps: upd },
+      OWNER
+    )
+    expect(granted.viaCarriedGrant).toBe(true)
     // The allowed list itself never grows.
     expect(await store.appAllowedConnections(appId)).toEqual([connId])
   })

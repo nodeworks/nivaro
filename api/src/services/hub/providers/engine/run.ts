@@ -40,6 +40,7 @@ import {
 import { engineDeps } from './deps.js'
 import { CREATE_CHANGE_TAG } from './discard.js'
 import {
+  assertCarriedGrantOps,
   assertMayWrite,
   claimResourceChecklist,
   judgeAccess,
@@ -360,6 +361,7 @@ async function judgeForRun(row: HubResourceChangeRow, actor: HubActor): Promise<
     },
     actor
   )
+  assertCarriedGrantOps(access, plan.ops, plan.resourceIds, new Set(rows.map((r) => r.id)))
   // Task 11a: a carried change resumes only while its run still carries it.
   if (plan.origin)
     await judgeOrigin(plan.origin, {

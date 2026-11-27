@@ -41,6 +41,7 @@ import {
 import { engineDeps } from './deps.js'
 import {
   type AccessAnswer,
+  assertCarriedGrantOps,
   hubRecordBlockers,
   judgeAccess,
   judgeChangeGates,
@@ -1189,6 +1190,14 @@ export async function computePlan(
       names.push({ op, name: nameOf(w.type, w.fields, observed, w.row, w.externalId) })
     }
   }
+
+  // A change let through only by the carried per-resource grant makes nothing new.
+  assertCarriedGrantOps(
+    access,
+    ops,
+    resourceIds,
+    new Set(opRows.filter((r): r is HubResourceRow => !!r).map((r) => r.id))
+  )
 
   // Adapter blockers + risk gates.
   const gates: ChangeGate[] = []
