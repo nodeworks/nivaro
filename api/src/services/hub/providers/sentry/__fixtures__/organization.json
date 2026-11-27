@@ -1,0 +1,6 @@
+{
+  "id": "1000001",
+  "slug": "test-org",
+  "name": "Test Org",
+  "access": ["org:read", "team:admin", "project:admin", "alerts:write", "project:releases"]
+}
