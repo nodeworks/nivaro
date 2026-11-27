@@ -36,8 +36,9 @@ import { ANALYTICS_BETA, anthropicCall, pageAll, seg } from './client.js'
  *  - `anthropic.spend_limit`      a workspace spend limit where the organization has the API
  *  - `anthropic.rate_limits`      read only (organization + per workspace)
  *
- * The plan's costs: `usageNow` answers the Usage and Cost Analytics API cost rows per workspace
- * (Task 44a); `costs()` is Task 34's and not built here.
+ * The plan's costs: `usageNow` (Task 44a) and the daily cost feed `costs()` (Task 34) both answer
+ * the Usage and Cost Analytics API cost rows per workspace. That API reads back at most 31 days,
+ * so a first feed read covers the last 31 days, not a year.
  */
 
 const T_WS = 'anthropic.workspace'
@@ -1379,6 +1380,11 @@ export const anthropicAdapter: ProviderAdapter = {
 
   /** What each workspace spent in `range` (cost rows, workspace id as the external id). */
   async usageNow(ctx, range) {
+    return costRows(ctx, range)
+  },
+
+  /** Task 34: the daily cost feed — the same cost rows (workspace id = the managed resource). */
+  async costs(ctx, range) {
     return costRows(ctx, range)
   }
 }

@@ -3,9 +3,9 @@ import type { DocSection } from '../types.js'
 // Hub third-party providers, Wave 3 framework (Task 34): the provider cost feed and the registrar
 // domain watch. Facts are from api/src/services/hub/providers/{costs,domains}.ts, migration
 // 586_hub_provider_costs.ts, routes/hub-placement.ts (/costs/outside, /chargeback.csv) and
-// routes/hub-security.ts (/security/certificates). No provider ships a cost feed or a registrar
-// type yet; the adapters that do (AWS Cost Explorer, Azure Cost Management, Anthropic, OpenAI,
-// Route 53 Domains, Cloudflare Registrar, Namecheap) come in later tasks.
+// routes/hub-security.ts (/security/certificates). Anthropic and OpenAI ship a cost feed; AWS Cost
+// Explorer, Azure Cost Management and the registrar types (Route 53 Domains, Cloudflare Registrar,
+// Namecheap) come in later tasks.
 
 export const hubProvidersCostsFeedDocs: DocSection = {
   id: 'hub-providers-costs-feed',
@@ -28,6 +28,10 @@ export const hubProvidersCostsFeedDocs: DocSection = {
     {
       type: 'p',
       text: 'Once a day at 06:10 UTC (job `hub-provider-costs`, one Hub process at a time, only where scheduled jobs tick) the Hub asks every connection whose provider has a cost feed what it billed per day. The first read of a connection goes back 365 days; later reads go back 35 days, because providers revise recent days and close the previous month late. A disabled connection is skipped.'
+    },
+    {
+      type: 'p',
+      text: 'Feeds today: Anthropic (cost per workspace from the Usage and Cost Analytics API, which reads back at most 31 days, so the first read covers 31 days) and OpenAI (cost per project from the organization costs report). AWS Cost Explorer and Azure Cost Management follow.'
     },
     {
       type: 'ul',

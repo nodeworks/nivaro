@@ -102,7 +102,7 @@ export default function HubOutsideSpend() {
       title='Outside spend'
       description={
         s?.feeds.length
-          ? `What providers billed, read once a day from their cost feeds. 12 months = ${range}.`
+          ? `What providers billed, read once a day from their cost feeds. Last 12 months: ${range}.`
           : 'What providers billed, read once a day from their cost feeds.'
       }
     >
@@ -318,7 +318,8 @@ function Feeds({ feeds }: { feeds: SpendFeed[] }) {
             <span className='inline-flex min-w-0 basis-full items-start gap-1 text-amber-800 dark:text-amber-300'>
               <AlertTriangle className='mt-0.5 h-3 w-3 shrink-0' aria-hidden />
               <span className='min-w-0 break-words'>
-                The last read failed{f.error ? `: ${f.error}` : ''}. The Hub tries again tomorrow.
+                The last read failed{f.error ? `: ${f.error.replace(/[.\s]+$/, '')}` : ''}. The Hub
+                tries again tomorrow.
               </span>
             </span>
           )}
