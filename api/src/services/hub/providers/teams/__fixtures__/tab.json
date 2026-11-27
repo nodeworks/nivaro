@@ -1,0 +1,12 @@
+{
+  "id": "cccccccc-0000-4000-8000-00000000c1c1",
+  "displayName": "App",
+  "webUrl": "https://teams.microsoft.com/l/channel/tab",
+  "configuration": {
+    "entityId": "",
+    "contentUrl": "https://app.example.test/",
+    "websiteUrl": "https://app.example.test/",
+    "removeUrl": null
+  },
+  "teamsApp": { "id": "com.microsoft.teamspace.tab.web", "displayName": "Website" }
+}

@@ -1,0 +1,23 @@
+{
+  "notFound": {
+    "error": {
+      "code": "ResourceNotFound",
+      "message": "Resource not found for the segment 'teams'."
+    }
+  },
+  "forbidden": {
+    "error": {
+      "code": "Authorization_RequestDenied",
+      "message": "Insufficient privileges to complete the operation."
+    }
+  },
+  "users": {
+    "value": [
+      {
+        "id": "bbbbbbbb-0000-4000-8000-0000000000b3",
+        "mail": "new@example.test",
+        "userPrincipalName": "new@example.test"
+      }
+    ]
+  }
+}

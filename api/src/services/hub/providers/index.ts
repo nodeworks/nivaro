@@ -13,6 +13,7 @@ import { getProvider, registerProvider } from './registry.js'
 import { sendgridAdapter } from './sendgrid/index.js'
 import { sentryAdapter } from './sentry/index.js'
 import { slackAdapter } from './slack/index.js'
+import { teamsAdapter } from './teams/index.js'
 import type { ProviderAdapter } from './types.js'
 import { upstashAdapter } from './upstash/index.js'
 import { vercelAdapter } from './vercel/index.js'
@@ -36,6 +37,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   sendgridAdapter,
   sentryAdapter,
   slackAdapter,
+  teamsAdapter,
   redisCloudAdapter,
   upstashAdapter,
   neonAdapter,
