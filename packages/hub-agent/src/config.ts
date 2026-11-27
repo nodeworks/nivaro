@@ -81,6 +81,13 @@ export type AgentConfig = {
    * not set: stacks render and hash exactly as before.
    */
   caBundle: { pem: string; sha256: string } | null
+  /**
+   * HUB_AGENT_TRAEFIK_DYNAMIC_DIR (0.2.5): the folder (as the agent's container sees it) Traefik's
+   * file provider watches. The agent writes one `nvh-<stack>.yml` there for each stack that
+   * carries `edge_tls` (its own certificate). null = not set: a stack with edge_tls is refused
+   * (TLS_NOT_CONFIGURED). Traefik edge only (else TRAEFIK_DYNAMIC_DIR_BAD).
+   */
+  traefikDynamicDir: string | null
 }
 
 export const MIN_TOKEN_LENGTH = 32
@@ -403,6 +410,13 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
 
   const caBundle = readCaBundle(readFile, env.HUB_AGENT_CA_BUNDLE_FILE)
 
+  // 0.2.5: where Traefik's file provider reads stack certificates. Absolute, no `.`/`..`, at
+  // least two segments (never `/` or `/etc`), traefik edge only.
+  const dynamicRaw = env.HUB_AGENT_TRAEFIK_DYNAMIC_DIR?.trim() || null
+  if (dynamicRaw !== null && (edge !== 'traefik' || !extensionRootOk(dynamicRaw)))
+    throw new ConfigError('TRAEFIK_DYNAMIC_DIR_BAD')
+  const traefikDynamicDir = dynamicRaw ? dynamicRaw.replace(/\/+$/, '') : null
+
   return {
     token,
     hmacKey,
@@ -429,6 +443,7 @@ export function loadAgentConfig(env: NodeJS.ProcessEnv, readFile: ReadFile): Age
     extensionsShared,
     registryAuth,
     envPrefixes,
-    caBundle
+    caBundle,
+    traefikDynamicDir
   }
 }

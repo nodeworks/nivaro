@@ -28,7 +28,9 @@ holds the Docker socket for writes.
 - Bind a host path or device into an app service. Volume options with
   `o=bind` (also `rbind`, `remount`) or a `device` that is not an NFS export are
   refused at start.
-- Touch services, secrets or volumes it did not create.
+- Touch services, secrets or volumes it did not create. It never updates
+  Traefik's own service; in Traefik's dynamic folder it writes and deletes only
+  `nvh-<stack>.yml` files of its stacks (0.2.5).
 - Print or store a token, key or registry credential. A failed start prints only
   an error code (for example `TOKEN_MISSING`).
 
@@ -55,7 +57,8 @@ owned by root needs group access instead: run the service as `0:<docker gid>`
 and give the socket that group.
 
 The rootfs is read-only with a tmpfs on `/tmp`. The only writable mounts are the
-socket and the extensions folder.
+socket and the extensions folder (plus, when set, the NFS export mount and, from
+0.2.5, Traefik's dynamic folder `HUB_AGENT_TRAEFIK_DYNAMIC_DIR`).
 
 Some `docker stack deploy` versions silently ignore `security_opt`
 (`no-new-privileges`) and the short `tmpfs:` key. If ignored, the agent runs
@@ -96,6 +99,7 @@ Secrets are read from files only (`*_FILE`). All values are read once at start.
 | `HUB_AGENT_REGISTRY_AUTH_FILE` | none | A docker `config.json` with `auths`, for private registries. |
 | `HUB_AGENT_ENV_PREFIXES` | none | Comma list of env key prefixes a stack may set on top of the keys Nivaro reads, such as `EFP_` or `EFP_OPS_` for the EFP extension. Each entry is upper-case segments ending with `_` (`^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*_$`). |
 | `HUB_AGENT_CA_BUNDLE_FILE` | none | PEM file of extra CA certificates every app service trusts (see Company CA below). Read once at start; at most 256 KB, at least one `CERTIFICATE` block and no private key, else the agent refuses to start (`CA_BUNDLE_BAD`, never printing the file). |
+| `HUB_AGENT_TRAEFIK_DYNAMIC_DIR` | none | 0.2.5, traefik edge only: the folder, as the agent's container sees it, that Traefik's file provider watches. The agent writes one `nvh-<stack>.yml` there for each stack that has its own certificate (see Stack certificates below). Absolute, at least two segments, no `.` / `..`; on the publish edge, or malformed, the agent refuses to start (`TRAEFIK_DYNAMIC_DIR_BAD`). Unset: a stack with a certificate is refused (`TLS_NOT_CONFIGURED`). |
 | `HUB_AGENT_STORAGE_PATH` | none | LOCAL volumes only: absolute path where the agent sees the node's `/var/lib/docker/volumes`, mounted READ-ONLY, for storage health (see Storage health below). Refused with NFS volume options (`STORAGE_PATH_BAD`): storage health reads `HUB_AGENT_VOLUME_EXPORT_MOUNT` there. A relative path or a `..` segment stops the agent (`STORAGE_PATH_BAD`). |
 | `HUB_AGENT_STORAGE_WALK` | on (local), off (NFS) | `on` / `off`: whether bytes and file count under the path are walked (anything else stops the agent, `STORAGE_WALK_BAD`). Off by default on NFS: a hung mount would pin the agent's I/O threads. |
 
@@ -312,6 +316,93 @@ Every service gets the new stack hash (`202 {spec_hash, changed, unchanged}`).
 an older agent (`AGENT_TOO_OLD`). Stack hashes of stacks nobody scales do not
 change.
 
+**0.2.5 (stack certificates).** A stack spec may carry `edge_tls`
+(`{cert, key}`: a PEM chain and its unencrypted private key, from an ACME
+certificate the Hub holds) and `GET /v1/health` answers `edge_tls` (whether
+`HUB_AGENT_TRAEFIK_DYNAMIC_DIR` is set). See Stack certificates below. Stack
+hashes do not change for stacks without one, so upgrading needs no re-apply.
+The Hub sends `edge_tls` only to a 0.2.5 agent that answers `edge_tls: true`
+(else the plan stops with `AGENT_TOO_OLD` or `EDGE_TLS_NOT_CONFIGURED`).
+
+## Stack certificates (ACME, 0.2.5)
+
+For names Traefik cannot get a certificate for on its own (DNS made by hand,
+a CA Traefik's resolver does not speak), the Hub orders one (the
+`acme.certificate` provider), binds its chain and key to the stack secrets
+`EDGE_TLS_CERT` / `EDGE_TLS_KEY`, and sends them to the agent as the stack's
+`edge_tls`. The app containers never get them.
+
+What the agent does with it:
+
+- It writes `nvh-<stack>.yml` (mode 0600) into `HUB_AGENT_TRAEFIK_DYNAMIC_DIR`,
+  before any Docker write of the apply: a `tls.certificates` entry with the
+  chain and key inline (Traefik's `certFile` / `keyFile` take a path or the
+  PEM itself). It writes a temporary `.tmp` file (Traefik reads only `.yml`,
+  `.yaml` and `.toml`) and renames it over the old one, so Traefik never sees
+  a new certificate beside an old key. An unchanged certificate is not
+  rewritten. The first two lines are comments naming the stack and the
+  chain's sha256.
+- The stack's routers get `tls=true` with **no** `tls.certresolver` (on v2 and
+  v3 alike, still exactly one network label): Traefik picks the certificate
+  from its store by SNI.
+- **A renewal restarts nothing.** The new chain and key change the stack hash
+  (it holds the chain's sha256 and a keyed digest of the key, never the key),
+  so the Hub's Apply now sends them; the agent rewrites the file and only
+  relabels the services with the new hash. No task template changes, so no
+  task of the stack restarts, and Traefik itself is never updated: its file
+  provider reloads the certificate store on the file event.
+- A spec without `edge_tls` (the binding was removed) puts the routers back on
+  `HUB_AGENT_CERT_RESOLVER` first, then deletes the file. Removing the stack
+  deletes it after the services.
+- Refusals (400 `SPEC_INVALID`, field codes only, never the PEM):
+  `TLS_NOT_CONFIGURED` (no folder), `TLS_NEEDS_TRAEFIK` (publish edge),
+  `TLS_NOT_FOR_SHARED` (a shared deployment's wildcard name stays on the
+  resolver), `TLS_BAD` (not 1-10 `CERTIFICATE` blocks, not exactly one
+  unencrypted `PRIVATE KEY` / `RSA PRIVATE KEY` / `EC PRIVATE KEY`, any text
+  around the blocks, or not parseable), `TLS_KEY_MISMATCH`, and
+  `TLS_NAME_NOT_COVERED` on each `hostnames[i]` the leaf does not cover. A file
+  that cannot be written is `500 EDGE_TLS_WRITE_FAILED`, before any Docker
+  write.
+
+Setting it up:
+
+1. Make a folder on the node(s) Traefik runs on, owned by root, mode 0700, for
+   example `/srv/traefik/dynamic`. Nothing else should write there.
+2. Mount it into Traefik and turn on the directory provider with watching:
+   ```yaml
+   # traefik service
+   command:
+     - --providers.file.directory=/etc/traefik/dynamic
+     - --providers.file.watch=true
+   volumes:
+     - /srv/traefik/dynamic:/etc/traefik/dynamic:ro
+   ```
+   Traefik reads the files as root (its default). If your Traefik runs as
+   another user, it cannot read the agent's 0600 root-owned files.
+3. Mount the same folder into the agent (read-write) and set
+   `HUB_AGENT_TRAEFIK_DYNAMIC_DIR` to where the agent sees it (see
+   `stack.example.yml`). The agent writes only `nvh-<stack>.yml` files and its
+   own `.tmp` files there.
+4. Restart the agent. `GET /v1/health` answers `edge_tls: true`.
+
+Traefik reads its own copy of the folder: when Traefik runs on several nodes,
+the folder must be the same on each (shared storage), or Traefik is pinned to
+the agent's node.
+
+### Upgrading the agent to 0.2.5
+
+1. Publish/pull the 0.2.5 image and point the agent's stack at it. Nothing
+   else is required: stacks without a certificate keep their hash, routers and
+   labels, so no stack needs Apply now and Restart keeps working.
+2. Only to serve Hub-ordered certificates: do the four setup steps above (a
+   folder, Traefik's directory provider on it, the folder mounted into the
+   agent, `HUB_AGENT_TRAEFIK_DYNAMIC_DIR`), then restart the agent.
+3. In the Hub, bind the certificate's `fullchain` → stack secret
+   `EDGE_TLS_CERT` and `private_key` → `EDGE_TLS_KEY` (Create app does it for
+   its ACME part) and press Apply now. That first apply relabels the web
+   (and realtime) service once (its routers drop the resolver); no task
+   restarts.
+
 ## Secrets in the app
 
 Secret files the agent creates for an app are owned by uid and gid 1000 with
@@ -387,7 +478,9 @@ loaded host). `GET /v1/health` needs the token and is what the Hub uses. It
 answers `traefik_version` too, so a shared deployment's upgrade plan refuses a
 host pattern on a Traefik v2 agent before anything is applied. `ca_bundle` says
 whether `HUB_AGENT_CA_BUNDLE_FILE` is set (never its contents). From 0.2.4
-`scale` carries the bounds the scale endpoint holds every role to.
+`scale` carries the bounds the scale endpoint holds every role to. From 0.2.5
+`edge_tls` says whether `HUB_AGENT_TRAEFIK_DYNAMIC_DIR` is set (never the
+path).
 
 ## Storage health
 

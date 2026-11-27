@@ -36,6 +36,7 @@
  */
 import { createHash } from 'node:crypto'
 import type { AgentConfig } from './config.js'
+import { type EdgeTlsFs, ensureEdgeTlsFile, removeEdgeTlsFile } from './edge-tls.js'
 import type { Engine } from './engine.js'
 import { engineFailed, StackError } from './errors.js'
 import {
@@ -134,9 +135,20 @@ export type StackDeps = {
   /** Remove retries for objects still in use while tasks shut down. */
   removeAttempts?: number
   removeDelayMs?: number
+  /** The Traefik dynamic folder (edge_tls, 0.2.5); tests pass a fake. */
+  edgeTlsFs?: EdgeTlsFs
 }
 
-export type ApplyResult = { spec_hash: string; changed: string[]; unchanged: string[] }
+export type ApplyResult = {
+  spec_hash: string
+  changed: string[]
+  unchanged: string[]
+  /**
+   * 0.2.5, only when the agent has HUB_AGENT_TRAEFIK_DYNAMIC_DIR and the stack has (or had) its
+   * own certificate: what this apply did to its file in that folder. Never the file's text.
+   */
+  edge_tls?: 'written' | 'unchanged' | 'removed'
+}
 
 export type ServiceUpdateState =
   | 'none'
@@ -793,6 +805,21 @@ export async function applyStack(
     )
   }
 
+  // 1c. The stack's own certificate (0.2.5): the file Traefik's file provider reads, written
+  // before any Docker write and before the routers switch to it (step 6), so a router never
+  // points at a certificate that is not there yet. A renewal changes only this file and the stack
+  // hash on the service labels: no task restarts, Traefik reloads its store on the file event.
+  let edgeTls: ApplyResult['edge_tls']
+  if (spec.edge_tls !== undefined) {
+    if (!cfg.traefikDynamicDir)
+      throw new StackError(
+        409,
+        'TLS_NOT_CONFIGURED',
+        'This agent has no HUB_AGENT_TRAEFIK_DYNAMIC_DIR: it cannot serve a stack certificate'
+      )
+    edgeTls = await ensureEdgeTlsFile(cfg.traefikDynamicDir, name, spec.edge_tls, deps.edgeTlsFs)
+  }
+
   // 2. The stack network.
   if (myNetwork.length === 0) {
     const r = await engine.call('POST', '/networks/create', {
@@ -907,7 +934,18 @@ export async function applyStack(
   // 8. Old secrets nothing needs any more.
   await pruneSecrets(engine, name, updated, deps.log)
 
-  return { spec_hash: hash, changed: changed.sort(), unchanged: unchanged.sort() }
+  // 9. A stack whose certificate binding went away: its routers are back on the cert resolver
+  // (step 6), so the file goes last.
+  if (spec.edge_tls === undefined && cfg.traefikDynamicDir) {
+    if (await removeEdgeTlsFile(cfg.traefikDynamicDir, name, deps.edgeTlsFs)) edgeTls = 'removed'
+  }
+
+  return {
+    spec_hash: hash,
+    changed: changed.sort(),
+    unchanged: unchanged.sort(),
+    ...(edgeTls ? { edge_tls: edgeTls } : {})
+  }
 }
 
 // ── restart ─────────────────────────────────────────────────────────────
@@ -1349,6 +1387,8 @@ export async function removeStack(
   }
 
   await removeExtensionFolders(cfg, name)
+  // 0.2.5: the stack's certificate file, once no service of it routes any more.
+  if (cfg.traefikDynamicDir) await removeEdgeTlsFile(cfg.traefikDynamicDir, name, deps.edgeTlsFs)
   // The answer names stay sorted (the order removed in is Redis last, above).
   removed.services.sort()
   return kept.length ? { removed, kept_volumes: kept } : { removed }
