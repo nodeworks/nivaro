@@ -1,0 +1,14 @@
+[
+  {
+    "id": 42,
+    "sha": "acb5820ced9479c074f688cc328bf03f341a511d",
+    "ref": "main",
+    "task": "deploy",
+    "environment": "staging",
+    "description": "",
+    "created_at": "2026-11-26T12:00:01Z",
+    "updated_at": "2026-11-26T12:00:01Z",
+    "statuses_url": "https://api.github.com/repos/acme/web/deployments/42/statuses",
+    "repository_url": "https://api.github.com/repos/acme/web"
+  }
+]

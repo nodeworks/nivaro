@@ -347,6 +347,19 @@ export const TYPES: ResourceTypeSpec[] = [
         kind: 'boolean',
         help: 'Starts one workflow_dispatch run on the next apply.',
         trigger: true
+      },
+      {
+        key: 'approve_environment',
+        label: 'Approve deployments to',
+        kind: 'string',
+        help: 'The GitHub environment whose waiting deployment Approve now approves.'
+      },
+      {
+        key: 'approve',
+        label: 'Approve now',
+        kind: 'boolean',
+        help: 'Approves the newest run of this workflow that waits for review on that environment.',
+        trigger: true
       }
     ],
     capabilities: NO_CREATE_CAPS,

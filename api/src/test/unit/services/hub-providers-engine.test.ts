@@ -1366,6 +1366,43 @@ describe('a create that never reached the provider (Task 3b D)', () => {
     })
   })
 
+  it('AUTH_FAILED stays refused while the keys are the same (Task 11c)', async () => {
+    const { changeId, row } = await failedCreate(
+      'same-keys',
+      new PE('AUTH_FAILED', 'Vercel refused the token.', { status: 401 })
+    )
+    const conn = await store.readConnection(connId)
+    const ch = await store.readChange(changeId)
+    expect(ch?.steps[0].connectionFingerprint).toBe(conn?.secret_fingerprint)
+    expect(discard.pendingCreateOf(row, ch, conn?.secret_fingerprint)?.resumable).toBe(false)
+    await expect(engine.resumeResourceChange(changeId, ADMIN)).rejects.toMatchObject({
+      code: 'BAD_STATUS'
+    })
+    expect((await store.readChange(changeId))?.status).toBe('failed')
+  })
+
+  it('AUTH_FAILED resumes once the connection keys changed (Task 11c)', async () => {
+    const { changeId, row } = await failedCreate(
+      'new-keys',
+      new PE('AUTH_FAILED', 'Vercel refused the token.', { status: 401 })
+    )
+    const before = await store.readConnection(connId)
+    await store.updateConnection(connId, { secrets: { apiKey: 'test-secret-rotated-key' } })
+    try {
+      const now = await store.readConnection(connId)
+      expect(now?.secret_fingerprint).not.toBe(before?.secret_fingerprint)
+      const ch = await store.readChange(changeId)
+      expect(discard.pendingCreateOf(row, ch, now?.secret_fingerprint)?.resumable).toBe(true)
+      // Unknown fingerprint (a caller that did not read the connection) never lets it through.
+      expect(discard.pendingCreateOf(row, ch)?.resumable).toBe(false)
+      const done = await engine.resumeResourceChange(changeId, ADMIN)
+      expect(done.status).toBe('applied')
+      expect((await store.readResource(row.id))?.external_id).toBeTruthy()
+    } finally {
+      await store.updateConnection(connId, { secrets: { apiKey: 'test-secret-connection-key' } })
+    }
+  })
+
   it('a retryable failure is resumable, and the resumed create clears the mark', async () => {
     const { changeId, row } = await failedCreate(
       'later',

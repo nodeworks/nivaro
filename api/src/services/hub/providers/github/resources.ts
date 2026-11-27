@@ -759,6 +759,67 @@ export async function dispatchWorkflow(
   })
 }
 
+/**
+ * Task 11c: environment approval. Finds the newest runs of the workflow that wait for a review
+ * (status `waiting`, on `branch` when given), lists each run's pending deployments, and approves
+ * the one for `environment` (GitHub environment names compare case-insensitively). Refuses when
+ * the connection's account may not approve it (FORBIDDEN) and answers NOTHING_WAITING (retryable:
+ * the run may not have reached the review yet) when no run waits on that environment.
+ */
+export async function approvePendingDeployment(
+  ctx: ProviderContext,
+  ext: string,
+  environment: string,
+  branch: string
+): Promise<{ runId: number; environmentId: number; environment: string }> {
+  const { repo, rest: file } = splitChild(ext)
+  const { owner, repo: r } = splitRepo(repo)
+  const envName = checkEnvName(environment)
+  const query = new URLSearchParams({ status: 'waiting', per_page: '10' })
+  if (branch) {
+    branchPath(branch)
+    query.set('branch', branch)
+  }
+  const runs = await gh<Json>(ctx, 'GET', `${workflowPath(repo, file)}/runs?${query}`, {
+    what: 'list the waiting workflow runs'
+  })
+  const list = Array.isArray(runs.json?.workflow_runs) ? (runs.json.workflow_runs as Json[]) : []
+  for (const run of list.slice(0, 5)) {
+    const runId = checkNumericId(String(run.id ?? ''))
+    if (branch && text(run.head_branch) && text(run.head_branch) !== branch) continue
+    const path = `/repos/${seg(owner)}/${seg(r)}/actions/runs/${seg(runId)}/pending_deployments`
+    const pending = await gh<Json[]>(ctx, 'GET', path, {
+      what: 'list the run’s pending deployments'
+    })
+    const hit = (Array.isArray(pending.json) ? pending.json : []).find(
+      (p) => text(p?.environment?.name).toLowerCase() === envName.toLowerCase()
+    )
+    if (!hit) continue
+    const envId = Number(hit.environment?.id)
+    if (!Number.isSafeInteger(envId) || envId < 1)
+      bad('PROVIDER_ERROR', 'GitHub answered a pending deployment without an environment id.')
+    if (hit.current_user_can_approve !== true)
+      bad(
+        'FORBIDDEN',
+        `The connection’s account may not approve deployments to ${envName} — add it as a required reviewer of that environment.`
+      )
+    await gh(ctx, 'POST', path, {
+      body: {
+        environment_ids: [envId],
+        state: 'approved',
+        comment: 'Approved by a Nivaro Hub promotion.'
+      },
+      what: 'approve the deployment'
+    })
+    return { runId: Number(runId), environmentId: envId, environment: text(hit.environment.name) }
+  }
+  throw new ProviderError(
+    'NOTHING_WAITING',
+    `No run of ${file}${branch ? ` on ${branch}` : ''} waits for approval to ${envName} — start it first, then promote again.`,
+    { retryable: true, status: 409 }
+  )
+}
+
 const workflow: Handler = {
   key: 'github.workflow',
   async existing() {

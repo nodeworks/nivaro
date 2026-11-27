@@ -951,6 +951,100 @@ describe('github adapter: apply is idempotent (read-before-write)', () => {
   })
 })
 
+describe('github adapter: environment approval (Task 11c)', () => {
+  const RUNS = 'GET /repos/acme/web/actions/workflows/deploy.yml/runs'
+  const PENDING = '/repos/acme/web/actions/runs/30433642/pending_deployments'
+  const o = observedOf(
+    'github.workflow',
+    'acme/web#deploy.yml',
+    { enabled: true },
+    { status: 'active' }
+  )
+  const d = (over: Record<string, unknown> = {}) =>
+    desired('github.workflow', {
+      workflow: 'deploy.yml',
+      enabled: true,
+      ref: 'main',
+      approve_environment: 'staging',
+      approve: true,
+      ...over
+    })
+
+  it('plans a named op naming the environment and branch; a re-plan without the trigger is a noop', () => {
+    const p = githubAdapter.plan(null as any, d(), o)
+    expect(p).toHaveLength(1)
+    expect(p[0]).toMatchObject({
+      kind: 'update',
+      action: 'approve_deployment',
+      data: { environment: 'staging', ref: 'main' },
+      changes: [{ field: 'approve', from: false, to: true }]
+    })
+    expect(githubAdapter.plan(null as any, d({ approve: false }), o)[0].kind).toBe('noop')
+  })
+
+  it('approves the matching environment of the newest waiting run, with variables from desired', async () => {
+    const f = fake({
+      [RUNS]: { body: fx('workflow_runs_waiting') },
+      [`GET ${PENDING}`]: { body: fx('pending_deployments') },
+      [`POST ${PENDING}`]: { body: fx('approved_deployments') },
+      'GET /repos/acme/web/actions/workflows/deploy.yml': { body: fx('workflow') }
+    })
+    const op = githubAdapter.plan(null as any, d(), o)[0]
+    const r = await githubAdapter.apply(ctxFor(f.impl), op, d())
+    expect(r.answer).toMatchObject({ approved: true, run_id: 30433642, environment: 'staging' })
+    const runs = f.calls.find((c) => `${c.method} ${c.path}` === RUNS)
+    expect(runs).toBeTruthy()
+    const post = f.calls.find((c) => c.method === 'POST')
+    expect(post?.path).toBe(PENDING)
+    expect(post?.body).toMatchObject({ environment_ids: [161088068], state: 'approved' })
+  })
+
+  it('refuses another workflow, another environment than planned, and changed op data', async () => {
+    const f = fake({})
+    const op = githubAdapter.plan(null as any, d(), o)[0]
+    const other = desired(
+      'github.workflow',
+      { workflow: 'deploy.yml', approve: true, approve_environment: 'staging', ref: 'main' },
+      { refs: { repository: 'acme/other' } }
+    )
+    await expect(githubAdapter.apply(ctxFor(f.impl), op, other)).rejects.toMatchObject({
+      code: 'TARGET_MISMATCH'
+    })
+    await expect(
+      githubAdapter.apply(ctxFor(f.impl), op, d({ approve_environment: 'production' }))
+    ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
+    await expect(
+      githubAdapter.apply(
+        ctxFor(f.impl),
+        { ...op, data: { environment: 'production', ref: 'main' } },
+        d()
+      )
+    ).rejects.toMatchObject({ code: 'TARGET_MISMATCH' })
+    await expect(githubAdapter.apply(ctxFor(f.impl), op, null)).rejects.toMatchObject({
+      code: 'TARGET_MISMATCH'
+    })
+    expect(f.calls).toEqual([])
+  })
+
+  it('nothing waiting is retryable; an account that may not approve is refused, nothing posted', async () => {
+    const op = githubAdapter.plan(null as any, d(), o)[0]
+    const none = fake({ [RUNS]: { body: { total_count: 0, workflow_runs: [] } } })
+    await expect(githubAdapter.apply(ctxFor(none.impl), op, d())).rejects.toMatchObject({
+      code: 'NOTHING_WAITING',
+      retryable: true
+    })
+    const pending = fx('pending_deployments') as any[]
+    const cannot = fake({
+      [RUNS]: { body: fx('workflow_runs_waiting') },
+      [`GET ${PENDING}`]: { body: [{ ...pending[0], current_user_can_approve: false }] }
+    })
+    await expect(githubAdapter.apply(ctxFor(cannot.impl), op, d())).rejects.toMatchObject({
+      code: 'FORBIDDEN'
+    })
+    expect(cannot.calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+})
+
 describe('github adapter: maps 429 to retryable', () => {
   const op: PlannedOp = {
     kind: 'delete',

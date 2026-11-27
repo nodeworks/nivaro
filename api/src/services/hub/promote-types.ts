@@ -326,6 +326,8 @@ export interface PromotionStep {
     resourceId: number
     ref: string
     refLabel: string
+    /** Task 11c, github_actions environment approval: the GitHub environment it approves. */
+    approveEnvironment?: string
   }
   /** Task 11a, provider steps: the resource change that made it live (written by the runner). */
   deployedChangeId?: number | null

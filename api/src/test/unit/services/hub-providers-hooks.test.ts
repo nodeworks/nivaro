@@ -752,6 +752,149 @@ describe('promote through provider components', () => {
     })
   })
 
+  it('github_actions environment approval: mode, fact, hash, and one carried approve (Task 11c)', async () => {
+    expect(promoteProviders.githubActionsMode(null)).toEqual({ mode: 'dispatch' })
+    expect(promoteProviders.githubActionsMode('approve')).toEqual({
+      mode: 'approve',
+      environment: null
+    })
+    expect(promoteProviders.githubActionsMode('approve:prod-gh')).toEqual({
+      mode: 'approve',
+      environment: 'prod-gh'
+    })
+    expect(promoteProviders.githubActionsModeText('dispatch')).toBeNull()
+    expect(promoteProviders.githubActionsModeText('approve:prod gh')).toBe('approve:prod gh')
+    expect(promoteProviders.githubActionsModeText('approve:../x')).toBeUndefined()
+    expect(promoteProviders.githubActionsModeText('deploy')).toBeUndefined()
+
+    world.seed('github.workflow', 'acme/shop#release.yml', { workflow: 'release.yml' })
+    const wf = await adopt('github', 'github.workflow', 'acme/shop#release.yml', null)
+    const target = { id: production, key: 'production' } as never
+    const fact = async (c: HubComponent, kind: 'promote' | 'rollback' = 'promote') =>
+      (
+        await promoteProviders.gatherProviderFacts({
+          kind,
+          target,
+          components: [c],
+          previousComponents: [],
+          recorded: () => null
+        })
+      )[c.position]
+    const named = component({
+      kind: 'github_actions',
+      resource_id: wf.id,
+      source_branch: 'main',
+      deploy_job: 'approve:prod-gh'
+    })
+    expect(await fact(named)).toMatchObject({
+      ref: 'main',
+      approveEnvironment: 'prod-gh',
+      problem: null
+    })
+    // No name: the GitHub environment named like the Hub environment.
+    expect(
+      await fact(component({ kind: 'github_actions', resource_id: wf.id, deploy_job: 'approve' }))
+    ).toMatchObject({ approveEnvironment: 'production' })
+    expect((await fact(named, 'rollback')).problem).toMatch(/cannot roll back/)
+
+    const f = await fact(named)
+    const step = promoteProviders.providerStepFor(named, f, '1.3.0')
+    expect(step.provider).toMatchObject({ approveEnvironment: 'prod-gh', ref: 'main' })
+    const dispatchStep = promoteProviders.providerStepFor(
+      component({ kind: 'github_actions', resource_id: wf.id, source_branch: 'main' }),
+      { ...f, approveEnvironment: undefined },
+      '1.3.0'
+    )
+    const req = promoteProviders.providerChangeRequest(step, {
+      appId,
+      envId: null,
+      kind: 'promote',
+      version: '1.3.0'
+    })
+    expect(req.ops[0].fields).toEqual({
+      ref: 'main',
+      approve_environment: 'prod-gh',
+      approve: true
+    })
+    expect(
+      promoteProviders.providerChangeRequest(dispatchStep, {
+        appId,
+        envId: null,
+        kind: 'promote',
+        version: '1.3.0'
+      }).ops[0].fields
+    ).toMatchObject({ dispatch: true })
+
+    const deployId = await insertId('nivaro_hub_deploys', {
+      app_id: appId,
+      environment_id: production,
+      kind: 'promote',
+      version: '1.3.0',
+      status: 'running',
+      started_by: ADMIN_ID
+    })
+    const r = await promoteRun.providerStepRun(
+      step,
+      {
+        deployId,
+        version: '1.3.0',
+        kind: 'promote',
+        targetKey: 'production',
+        gitCtx: async () => ({}) as never
+      },
+      { signal: new AbortController().signal, log: () => undefined }
+    )
+    expect(r.changeId).toBeGreaterThan(0)
+    expect(world.calls.at(-1)).toMatchObject({
+      type: 'github.workflow',
+      action: 'approve_deployment',
+      ext: 'acme/shop#release.yml',
+      data: { environment: 'prod-gh', ref: 'main' }
+    })
+  })
+
+  it('the approval environment is part of the plan hash and the plan lines (Task 11c)', () => {
+    const base = {
+      app: { id: appId, key: 'shop' },
+      target: { id: production, key: 'production', hub_managed: true, base_url: null },
+      previous: { id: staging, key: 'staging' },
+      components: [component({ kind: 'github_actions', resource_id: 5, deploy_job: 'approve' })],
+      kind: 'promote',
+      version: '1.2.0',
+      targetVersion: '1.1.0',
+      previousVersion: '1.2.0',
+      previousDeployedVersions: ['1.2.0'],
+      targetDeployedVersions: ['1.1.0'],
+      sources: {},
+      frontendServed: {},
+      frontendOnSource: {},
+      sourceOnTarget: {},
+      digest: null,
+      slimDigest: null,
+      running: false,
+      targetState: 'ok',
+      drivers: {}
+    }
+    const fact = (env?: string) => ({
+      1: {
+        connectionId: 3,
+        resourceId: 5,
+        ref: 'main',
+        refLabel: env ? `the waiting run on main, environment ${env}` : 'branch main',
+        problem: null,
+        ...(env ? { approveEnvironment: env } : {})
+      }
+    })
+    const a = buildPromotionPlan({ ...base, providers: fact('production') } as unknown as PlanInput)
+    const b = buildPromotionPlan({ ...base, providers: fact('prod-gh') } as unknown as PlanInput)
+    const d = buildPromotionPlan({ ...base, providers: fact() } as unknown as PlanInput)
+    expect(a.blockers).toEqual([])
+    expect(a.plan_hash).not.toBe(b.plan_hash)
+    expect(a.plan_hash).not.toBe(d.plan_hash)
+    expect(a.lines.join('\n')).toMatch(/approve the waiting run on main, environment production/)
+    expect(d.lines.join('\n')).toMatch(/run its GitHub Actions workflow/)
+  })
+
   it('a provider component names a managed resource of its type and of the placement’s app', async () => {
     const placement = await insertId('nivaro_hub_placements', {
       kind: 'dedicated',

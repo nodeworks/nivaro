@@ -13,6 +13,7 @@ import { type ChangeStatus, type HubActor, ResourceChangeError } from './contrac
 import { engineDeps } from './deps.js'
 import { assertMayWrite } from './gates.js'
 import { holdResourceLocks, hubResourceChangeLockKey, hubResourceLockKey } from './locks.js'
+import { changeResumable } from './resume-rule.js'
 
 /**
  * A create that never reached the provider (Task 3b item D). A create inserts its resource row
@@ -41,22 +42,19 @@ export function createChangeIdOf(row: Pick<HubResourceRow, 'tags'>): number | nu
   return raw && /^\d+$/.test(raw) ? Number(raw) : null
 }
 
-const lastFailed = (change: HubResourceChangeRow) =>
-  [...change.steps].reverse().find((s) => s.status === 'failed') ?? null
-
 /**
  * What the UI shows for a row with no provider id: its create's change and whether resume can
  * run it. null for a row that exists at the provider (or is deleted).
  */
 export function pendingCreateOf(
   row: Pick<HubResourceRow, 'external_id' | 'deleted_at' | 'tags'>,
-  change: HubResourceChangeRow | null
+  change: HubResourceChangeRow | null,
+  /** The change connection's secret fingerprint now (Task 11c: AUTH_FAILED resumes once it moved). */
+  connectionFingerprint?: string | null
 ): PendingCreate | null {
   if (row.external_id || row.deleted_at) return null
   const status = change?.status ?? null
-  const resumable =
-    status === 'interrupted' ||
-    (status === 'failed' && change != null && lastFailed(change)?.error?.retryable === true)
+  const resumable = change != null && changeResumable(change, connectionFingerprint)
   return { change_id: createChangeIdOf(row), status, resumable }
 }
 

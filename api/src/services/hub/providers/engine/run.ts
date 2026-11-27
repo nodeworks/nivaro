@@ -72,6 +72,7 @@ import {
   type SealedSecrets,
   withDefaults
 } from './plan.js'
+import { AUTH_FAILED, changeResumable } from './resume-rule.js'
 
 /**
  * Hub provider changes, steps 2–4 — confirm, apply, after (spec "The change engine"):
@@ -385,12 +386,19 @@ export async function resumeChange(changeId: number, actor: HubActor): Promise<C
   assertMayWrite(actor)
   await healResourceChanges(changeId)
   const row = await mustRead(changeId)
-  const retryable = row.status === 'failed' && lastFailed(row)?.error?.retryable === true
-  if (row.status !== 'interrupted' && !retryable)
+  // Task 11c: a change that failed on the connection's keys resumes once those keys changed.
+  const { readConnection: readConn } = await import('../store.js')
+  const fingerprint =
+    row.status === 'failed' && lastFailed(row)?.error?.code === AUTH_FAILED
+      ? ((await readConn(row.connection_id))?.secret_fingerprint ?? null)
+      : undefined
+  if (!changeResumable(row, fingerprint))
     throw refuse(
       'BAD_STATUS',
       row.status === 'failed'
-        ? 'This change failed on something a retry will not fix — plan the change again.'
+        ? lastFailed(row)?.error?.code === AUTH_FAILED
+          ? 'The provider refused this connection’s keys. Change the keys under Connections, then resume.'
+          : 'This change failed on something a retry will not fix — plan the change again.'
         : `This change is ${row.status}; only an interrupted (or retryable failed) change can be resumed.`
     )
   if (!actor.isAdmin && row.requested_by !== actor.id)
@@ -996,7 +1004,11 @@ async function execute(changeId: number, runKey: string, hold: ResourceHold): Pr
         ...steps[i],
         status: 'failed',
         error,
-        finishedAt: new Date(deps.now()).toISOString()
+        finishedAt: new Date(deps.now()).toISOString(),
+        // Task 11c: the keys the provider refused, so resume can tell when they changed.
+        ...(error.code === AUTH_FAILED
+          ? { connectionFingerprint: conn.row.secret_fingerprint ?? null }
+          : {})
       }
       await persist().catch(() => undefined)
       throw new Stop('failed', error.code, error.message, error.retryable)

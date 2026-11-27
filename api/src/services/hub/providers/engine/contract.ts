@@ -164,6 +164,12 @@ export interface ChangeStep {
    * sealed as StoredSecretField — never plain) — what an undo plans back to.
    */
   beforeDesired?: Record<string, unknown> | null
+  /**
+   * Task 11c: on a step that failed AUTH_FAILED, the connection's `secret_fingerprint` at the
+   * failure (null = it had no secret). Resume lets the change through once the keys changed
+   * (engine/resume-rule.ts). Absent on every other step.
+   */
+  connectionFingerprint?: string | null
 }
 
 // ── Errors ──

@@ -71,6 +71,38 @@ describe('GraphQL hub provider fields', () => {
     ])
   })
 
+  it('reads the provider hook routes: targets by kind, components, database servers (Task 11c)', async () => {
+    const { res, calls } = await run(
+      `{ hub {
+        all: targets
+        github: targets(kind: "github")
+        components(placementId: 4)
+        databaseServers
+      } }`,
+      (url) =>
+        url === '/api/hub/targets'
+          ? {
+              body: {
+                data: [
+                  { id: 1, kind: 'gitlab', name: 'Lab' },
+                  { id: 2, kind: 'github', name: 'Repos', connection_id: 7 }
+                ]
+              }
+            }
+          : { body: { data: [{ url }] } }
+    )
+    expect(res.errors).toBeUndefined()
+    const hub = (res.data as { hub: Record<string, unknown> }).hub
+    expect((hub.all as unknown[]).length).toBe(2)
+    expect(hub.github).toEqual([{ id: 2, kind: 'github', name: 'Repos', connection_id: 7 }])
+    // One REST read per request serves both aliases.
+    expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+      'GET /api/hub/targets',
+      'GET /api/hub/placements/4/components',
+      'GET /api/hub/db-servers'
+    ])
+  })
+
   it('plans through a mutation and sends the input untouched', async () => {
     const { res, calls } = await run(
       `mutation { hub { planResourceChanges(input: {connectionId: 7, scope: "app", appId: 3, environmentId: 9, ops: []}) } }`,
