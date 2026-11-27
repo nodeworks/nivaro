@@ -140,7 +140,9 @@ export function makeHandlers(engine: Engine, cfg: AgentConfig, deps: HandlerDeps
           op: 'apply',
           stack: name,
           changed: r.changed.length,
-          unchanged: r.unchanged.length
+          unchanged: r.unchanged.length,
+          // 0.2.5: what happened to the stack's certificate file (a fixed word, never its text).
+          ...(r.edge_tls ? { edge_tls: r.edge_tls } : {})
         })
         return { status: 202, body: r }
       }),

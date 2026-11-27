@@ -364,7 +364,7 @@ describe('POST /v1/stacks/:name/scale', () => {
 
   it('health answers the scale caps', async () => {
     const h = await req('GET', '/v1/health')
-    expect(h.body.agent_version).toBe('0.2.4')
+    expect(h.body.agent_version).toBe('0.2.5')
     expect(h.body.scale).toEqual({
       max_replicas: 10,
       max_total_replicas: 30,

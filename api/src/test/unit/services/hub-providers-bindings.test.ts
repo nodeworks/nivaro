@@ -648,6 +648,138 @@ describe('bindings', () => {
   })
 })
 
+// Gap G-D: EDGE_TLS_CERT / EDGE_TLS_KEY decide which names Traefik answers for. Only a Hub-managed
+// acme.certificate of the SAME app and environment writes them (chain → CERT, key → KEY, stack
+// secrets); a person never types them, no other type binds them, a binding row is re-judged at push.
+describe('the stack certificate (EDGE_TLS_*)', () => {
+  const CHAIN = 'test-secret-fake-chain-not-pem-0001'
+  const PRIV = 'test-secret-fake-private-key-0002'
+  const certType: ResourceTypeSpec = {
+    ...dbType,
+    key: 'acme.certificate',
+    outputs: [
+      { key: 'fullchain', label: 'Certificate chain (PEM)', secret: false },
+      { key: 'private_key', label: 'Private key (PEM)', secret: true, onceOnly: true }
+    ]
+  }
+  const acmeAdapter: ProviderAdapter = { ...fakeAdapter, key: 'acme', types: [certType] }
+  let acmeConn: number
+
+  beforeEach(async () => {
+    registry.registerProvider(acmeAdapter)
+    if (!acmeConn)
+      acmeConn = (
+        await store.createConnection({
+          provider: 'acme',
+          name: 'Fake CA',
+          config: {},
+          secrets: { apiKey: 'test-secret-acme-connection' }
+        })
+      ).id
+    await stack.saveStackSettings(devEnv, {
+      size: 'small',
+      redis: 'bundled',
+      publish_port: null,
+      settings: {},
+      secrets: null
+    })
+  })
+
+  let n = 0
+  async function cert(over: { environment_id?: number | null; app_id?: number } = {}) {
+    const row = await store.insertResource({
+      connection_id: acmeConn,
+      provider: 'acme',
+      type: 'acme.certificate',
+      external_id: `cert-${++n}`,
+      name: `dev.example.com-${n}`,
+      scope: 'app',
+      app_id: over.app_id ?? appId,
+      environment_id: over.environment_id === undefined ? devEnv : over.environment_id
+    })
+    await bindings.storeOutputs(row.id, { fullchain: CHAIN, private_key: PRIV })
+    return row
+  }
+  const edge = (envId: number, key: 'EDGE_TLS_CERT' | 'EDGE_TLS_KEY', output = '') => ({
+    output_key: output || (key === 'EDGE_TLS_CERT' ? 'fullchain' : 'private_key'),
+    environment_id: envId,
+    target: 'stack_secret' as const,
+    target_key: key
+  })
+
+  it('its own ACME certificate writes both as stack secrets', async () => {
+    const row = await cert()
+    await bindings.setBindings(
+      row,
+      [edge(devEnv, 'EDGE_TLS_CERT'), edge(devEnv, 'EDGE_TLS_KEY')],
+      ADMIN
+    )
+    const out = await bindings.pushBindings(row.id)
+    expect(out.every((o) => o.ok)).toBe(true)
+    const map = stack.openSealedMap((await stack.readStackSettings(devEnv))?.secrets ?? null)
+    expect(openSecret(map.EDGE_TLS_CERT)).toBe(CHAIN)
+    expect(openSecret(map.EDGE_TLS_KEY)).toBe(PRIV)
+  })
+
+  it('another resource type may not bind them (EDGE_TLS_BINDING_ONLY)', async () => {
+    const row = await created()
+    await expect(
+      bindings.setBindings(row, [edge(devEnv, 'EDGE_TLS_KEY', 'dsn')], ADMIN)
+    ).rejects.toMatchObject({ code: 'EDGE_TLS_BINDING_ONLY' })
+    await expect(
+      bindings.setBindings(row, [edge(devEnv, 'EDGE_TLS_CERT', 'url')], ADMIN)
+    ).rejects.toMatchObject({ code: 'EDGE_TLS_BINDING_ONLY' })
+  })
+
+  it('the wrong output, a plain setting, another environment or app: refused', async () => {
+    const row = await cert()
+    for (const b of [
+      edge(devEnv, 'EDGE_TLS_CERT', 'private_key'),
+      edge(devEnv, 'EDGE_TLS_KEY', 'fullchain'),
+      { ...edge(devEnv, 'EDGE_TLS_CERT'), target: 'stack_setting' as const },
+      // A certificate made for dev never feeds production's names.
+      edge(prodEnv, 'EDGE_TLS_CERT')
+    ])
+      await expect(bindings.setBindings(row, [b], ADMIN)).rejects.toMatchObject({
+        code: 'EDGE_TLS_BINDING_ONLY'
+      })
+    await expect(
+      bindings.setBindings(row, [edge(otherEnv, 'EDGE_TLS_CERT')], ADMIN)
+    ).rejects.toMatchObject({ code: 'ENV_NOT_OF_APP' })
+  })
+
+  it('a binding row of another type found at push time is refused, nothing written', async () => {
+    const row = await created()
+    // A row that never went through setBindings (written before the rule, or by hand).
+    await db('nivaro_hub_resource_bindings').insert({
+      resource_id: row.id,
+      output_key: 'dsn',
+      environment_id: devEnv,
+      target: 'stack_secret',
+      target_key: 'EDGE_TLS_KEY',
+      created_at: new Date(),
+      updated_at: new Date()
+    })
+    const [res] = await bindings.pushBindings(row.id)
+    expect(res).toMatchObject({ ok: false })
+    expect(res.error).toContain('stack certificate')
+    const map = stack.openSealedMap((await stack.readStackSettings(devEnv))?.secrets ?? null)
+    expect(map.EDGE_TLS_KEY).toBeUndefined()
+  })
+
+  it('a person cannot type them in the stack settings', async () => {
+    const env = { id: devEnv } as never
+    for (const k of ['EDGE_TLS_CERT', 'EDGE_TLS_KEY'])
+      expect(
+        await stack.validateStackSettings(
+          { secrets: { [k]: 'typed-by-a-person' } },
+          await stack.readStackSettings(devEnv),
+          { driver: {} as never, env }
+        )
+      ).toMatchObject({ ok: false, code: 'EDGE_TLS_BINDING_ONLY' })
+  })
+})
+
 describe('routes', () => {
   it('answer outputs without values, only to people who may see the resource', async () => {
     const prev = process.env.HUB

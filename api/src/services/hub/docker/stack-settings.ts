@@ -8,6 +8,7 @@ import { hubTokenColumns } from '../link-token.js'
 import type { HubEnvironmentRow } from '../promote-types.js'
 import { HUB_MASK, HubSecretError, nextSecret, openSecret, sealSecret } from '../secrets.js'
 import type { DockerDriverConfig } from './driver-config.js'
+import { isEdgeTlsKey } from './edge-tls.js'
 import { environmentNames } from './render-spec.js'
 import {
   type AgentEnvPrefixRead,
@@ -330,6 +331,14 @@ function settingKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail 
       named('setting', k)
     )
   }
+  // Gap G-D: the stack certificate's two keys are secrets the renderer sends as `edge_tls`.
+  if (isEdgeTlsKey(k)) {
+    return fail(
+      'SECRET_IN_SETTINGS',
+      `${k} is the stack certificate: it can only be a secret (bind an ACME certificate's output to it).`,
+      named('setting', k)
+    )
+  }
   // Ruling X-2: a credential that may only ever be a secret (the agent refuses it as env).
   if (secretOnlyEnvKey(k)) {
     return fail(
@@ -402,6 +411,9 @@ function secretKeyProblem(k: string, redis: StackRedis, allow: EnvAllow): Fail |
       named('secret', k)
     )
   }
+  // Gap G-D: not an app key — the renderer sends these two as the spec's `edge_tls` (Traefik's
+  // certificate for the stack), never to the app.
+  if (isEdgeTlsKey(k)) return null
   return notAllowed(k, 'secret', allow)
 }
 
@@ -429,7 +441,8 @@ async function envAllowFor(
     ...Object.keys(existing?.settings ?? {}),
     ...stored
   ]
-  if (!keys.some((k) => ENV_KEY_RE.test(k) && !knownEnvKey(k))) return NO_PREFIXES
+  if (!keys.some((k) => ENV_KEY_RE.test(k) && !knownEnvKey(k) && !isEdgeTlsKey(k)))
+    return NO_PREFIXES
   let read: AgentEnvPrefixRead | null = null
   try {
     read = load ? await load() : null
@@ -478,7 +491,8 @@ const isGenerated = (k: string) => (GENERATED_SECRET_KEYS as readonly string[]).
  * Refusal codes: BAD_SIZE, BAD_REDIS, BAD_KEY, BAD_VALUE, SETTING_INVALID (a line break in a
  * one-line key, or a key outside the allow-list: neither a key Nivaro reads nor under the agent's
  * HUB_AGENT_ENV_PREFIXES, ruling P4-23), SECRET_IN_SETTINGS, RESERVED_SETTING,
- * SECRET_REQUIRED, BAD_DB_CLIENT, SQLITE_ONE_PROCESS, BAD_PUBLISH_PORT, BAD_EXTENSION_PIN.
+ * SECRET_REQUIRED, BAD_DB_CLIENT, SQLITE_ONE_PROCESS, BAD_PUBLISH_PORT, BAD_EXTENSION_PIN,
+ * EDGE_TLS_BINDING_ONLY (a typed EDGE_TLS_CERT / EDGE_TLS_KEY: only its ACME binding writes it).
  */
 export async function validateStackSettings(
   body: unknown,
@@ -491,6 +505,13 @@ export async function validateStackSettings(
     driver: DockerDriverConfig
     env: HubEnvironmentRow
     envPrefixes?: () => Promise<AgentEnvPrefixRead | null>
+    /**
+     * Gap G-D: set ONLY by the binding push of an ACME certificate of this same app and
+     * environment (providers/engine/bindings.ts, edgeTlsBindingProblem). Without it a new
+     * EDGE_TLS_CERT / EDGE_TLS_KEY value is refused (EDGE_TLS_BINDING_ONLY): a person never types
+     * the certificate Traefik serves for a stack's names.
+     */
+    edgeTlsWriter?: boolean
   }
 ): Promise<Validation<StackSettingsInput>> {
   const b = isPlainObject(body) ? body : {}
@@ -601,6 +622,15 @@ export async function validateStackSettings(
         }
         const bad = secretKeyProblem(k, redis, allow)
         if (bad) return bad
+        // Gap G-D: a new stack certificate value comes from its ACME binding only. Clearing one
+        // (null / '', above) stays open: it only puts the routers back on the cert resolver.
+        if (isEdgeTlsKey(k) && !ctx.edgeTlsWriter) {
+          return fail(
+            'EDGE_TLS_BINDING_ONLY',
+            `${k} is the stack certificate: it is written only by binding an ACME certificate of this environment (its Outputs card), never typed.`,
+            named('secret', k)
+          )
+        }
         if (typeof v !== 'string') {
           return fail('BAD_VALUE', `Secret ${k} must be text.`, named('secret', k))
         }

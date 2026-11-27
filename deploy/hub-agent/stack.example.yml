@@ -43,6 +43,9 @@ services:
       # HUB_AGENT_VOLUME_EXPORT_MOUNT: /var/lib/nivaro-hub-agent/export
       # Optional: bundled Redis only on nodes you labelled (docker node update --label-add).
       # HUB_AGENT_REDIS_PIN_LABEL: nivaro.redis=1
+      # Agent 0.2.5: serve Hub-ordered (ACME) certificates through Traefik's file provider.
+      # The same folder Traefik reads with --providers.file.directory + --providers.file.watch.
+      # HUB_AGENT_TRAEFIK_DYNAMIC_DIR: /srv/traefik/dynamic
     secrets:
       - hub_agent_token
       - hub_agent_tls_cert
@@ -51,6 +54,8 @@ services:
       # The agent's one privileged mount: the Docker socket.
       - /var/run/docker.sock:/var/run/docker.sock
       - /srv/nivaro-hub/extensions:/srv/nivaro-hub/extensions
+      # With HUB_AGENT_TRAEFIK_DYNAMIC_DIR: Traefik's dynamic folder (root-owned, 0700).
+      # - /srv/traefik/dynamic:/srv/traefik/dynamic
       # With an NFS export: the same export, where HUB_AGENT_VOLUME_EXPORT_MOUNT says.
       # - type: volume
       #   source: hub_agent_export

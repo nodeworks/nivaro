@@ -17,7 +17,7 @@ import { createServer, type HandlerResult, type Handlers } from './server.js'
 import { createStorageProbe, type StorageProbe, storageOptionsFrom } from './storage.js'
 import { isNfsOpts, nfsExport } from './volumes.js'
 
-export const AGENT_VERSION = '0.2.4'
+export const AGENT_VERSION = '0.2.5'
 export const MIN_ENGINE_API = [1, 44] as const
 
 export type StartResult =
@@ -132,7 +132,10 @@ export function baseHandlers(
         // Enhancement 20: how full the volume storage is; the last reading, never waited on.
         storage: await storage.report(),
         // 0.2.4: POST /v1/stacks/:name/scale and the bounds it holds every role to.
-        scale: { ...SCALE_CAPS, fixed_replica_roles: [...FIXED_REPLICA_ROLES] }
+        scale: { ...SCALE_CAPS, fixed_replica_roles: [...FIXED_REPLICA_ROLES] },
+        // 0.2.5: HUB_AGENT_TRAEFIK_DYNAMIC_DIR is set, so a stack may carry its own certificate
+        // (edge_tls). Never the folder's path.
+        edge_tls: cfg.traefikDynamicDir !== null
       }
     }),
     listStacks: notYet,

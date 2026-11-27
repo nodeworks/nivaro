@@ -66,11 +66,21 @@ function canonical(value: unknown): unknown {
   return value
 }
 
-/** The exact text the spec hash is taken over: secret values replaced by their hmac12. */
+/**
+ * The exact text the spec hash is taken over: secret values replaced by their hmac12; an
+ * `edge_tls` (0.2.5) by the chain's sha256 (public) and the key's hmac12 — never the key. A spec
+ * without one hashes exactly as before (an undefined key is dropped).
+ */
 export function specHashInput(spec: StackSpec, hmacKey: string): string {
   const secrets: Record<string, string> = {}
   for (const [k, v] of Object.entries(spec.secrets)) secrets[k] = secretDigest(k, v, hmacKey)
-  return JSON.stringify(canonical({ ...spec, secrets }))
+  const edge = spec.edge_tls
+    ? {
+        cert: createHash('sha256').update(spec.edge_tls.cert).digest('hex'),
+        key: hmac12(hmacKey, ['edge-tls-key', spec.edge_tls.key])
+      }
+    : undefined
+  return JSON.stringify(canonical({ ...spec, secrets, edge_tls: edge }))
 }
 
 /** sha256 hex of the canonical spec; a secret change changes it, it reveals no secret. */

@@ -219,16 +219,20 @@ function traefikLabels(
   role: Role,
   hostnames: string[],
   pattern: string | undefined,
-  cfg: RenderConfig
+  cfg: RenderConfig,
+  fileCert: boolean
 ): Record<string, string> {
   if (cfg.edge !== 'traefik' || (hostnames.length === 0 && !pattern)) return {}
   const hosts = hostnames.map((h) => `Host(\`${h}\`)`).join(' || ')
+  // 0.2.5: with the stack's own certificate (edge_tls, served from Traefik's file provider) the
+  // routers carry `tls=true` and no resolver: Traefik takes the certificate from its store by SNI.
+  const resolver = fileCert ? undefined : cfg.certResolver
   const tls = (router: string): Record<string, string> => {
     const out: Record<string, string> = {
       [`traefik.http.routers.${router}.entrypoints`]: cfg.entrypoints.join(','),
       [`traefik.http.routers.${router}.tls`]: 'true'
     }
-    if (cfg.certResolver) out[`traefik.http.routers.${router}.tls.certresolver`] = cfg.certResolver
+    if (resolver) out[`traefik.http.routers.${router}.tls.certresolver`] = resolver
     return out
   }
   // Exactly one provider spelling (ruling P6-34): Traefik v3 skips a service carrying both
@@ -323,6 +327,9 @@ export function renderServices(
     if (!HOST_PATTERN_RE.test(spec.host_pattern)) {
       throw new Error('renderServices: bad host pattern')
     }
+  }
+  if (spec.edge_tls !== undefined && !('app' in spec.owner)) {
+    throw new Error('renderServices: edge TLS is for an app stack only')
   }
   const bundled = spec.redis === 'bundled'
   if (bundled && !cfg.redisImage) throw new Error('renderServices: no redis image configured')
@@ -423,7 +430,14 @@ export function renderServices(
       Name: serviceName(stack, r.role),
       Labels: {
         ...labels,
-        ...traefikLabels(stack, r.role, spec.hostnames, spec.host_pattern, cfg),
+        ...traefikLabels(
+          stack,
+          r.role,
+          spec.hostnames,
+          spec.host_pattern,
+          cfg,
+          spec.edge_tls !== undefined
+        ),
         // The host claim the template's forced command reads (LABEL_HOSTS), on the service that
         // serves the names, whatever the edge.
         ...((r.role === 'web' || r.role === 'all') && spec.hostnames.length > 0

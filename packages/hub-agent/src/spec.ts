@@ -4,6 +4,7 @@
 // capabilities, no host network, no images outside the allow-list.
 // Pure: no I/O. Answers never echo a value, only field paths and codes.
 import { Buffer } from 'node:buffer'
+import { checkEdgeTls, type EdgeTls } from './edge-tls.js'
 import { parsePinned } from './image-ref.js'
 import { KNOWN_ENV_KEYS } from './known-env.js'
 import { ENV_KEY_RE } from './names.js'
@@ -54,6 +55,13 @@ export type StackSpec = {
    * the container can do nothing on the files. Absent = the image decides (it steps down to 1000).
    */
   run_as?: 'app'
+  /**
+   * 0.2.5: the certificate Traefik serves for this stack's names (an ACME certificate the Hub
+   * holds): the PEM chain and its unencrypted private key. Written to the stack's file in
+   * HUB_AGENT_TRAEFIK_DYNAMIC_DIR (edge-tls.ts); the routers then carry `tls=true` and no cert
+   * resolver. App owners on the traefik edge only; the leaf must cover every hostname.
+   */
+  edge_tls?: EdgeTls
 }
 
 /** The part of AgentConfig validation reads (a full AgentConfig satisfies it). */
@@ -72,6 +80,8 @@ export type SpecConfig = {
   traefikVersion?: 2 | 3
   /** The uploads volume options: an NFS `device` makes `uploads_folder` possible. */
   volumeOpts?: Record<string, string> | null
+  /** 0.2.5 HUB_AGENT_TRAEFIK_DYNAMIC_DIR: set = a stack may carry `edge_tls`. */
+  traefikDynamicDir?: string | null
 }
 
 export type FieldCode =
@@ -98,6 +108,13 @@ export type FieldCode =
   | 'FOLDER_BAD'
   | 'NO_NFS_EXPORT'
   | 'RUN_AS_BAD'
+  | 'TLS_BAD'
+  | 'TLS_KEY_MISMATCH'
+  | 'TLS_NAME_NOT_COVERED'
+  | 'TLS_NAME_OUTSIDE_STACK'
+  | 'TLS_NOT_FOR_SHARED'
+  | 'TLS_NEEDS_TRAEFIK'
+  | 'TLS_NOT_CONFIGURED'
 
 export type FieldError = { field: string; code: FieldCode }
 
@@ -130,7 +147,8 @@ const TOP_FIELDS = new Set([
   'host_pattern',
   'uploads_folder',
   'files_subfolder',
-  'run_as'
+  'run_as',
+  'edge_tls'
 ])
 const ROLE_FIELDS = new Set(['role', 'replicas', 'cpus', 'memory_mb', 'env'])
 
@@ -675,6 +693,23 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     else runAs = 'app'
   }
 
+  // edge_tls (0.2.5): an app stack's own certificate, served by Traefik's file provider.
+  let edgeTls: EdgeTls | undefined
+  if (has('edge_tls')) {
+    if (sharedKey !== null) bad('edge_tls', 'TLS_NOT_FOR_SHARED')
+    else if (cfg.edge !== 'traefik') bad('edge_tls', 'TLS_NEEDS_TRAEFIK')
+    else if (!cfg.traefikDynamicDir) bad('edge_tls', 'TLS_NOT_CONFIGURED')
+    else {
+      // Names are checked against the certificate only once every one passed (indices match).
+      const namesOk = Array.isArray(body.hostnames) && hostnames.length === body.hostnames.length
+      const c = checkEdgeTls(body.edge_tls, namesOk ? hostnames : [], {
+        hostSuffixes: cfg.hostSuffixes
+      })
+      if (c.ok) edgeTls = c.tls
+      else for (const f of c.fields) bad(f.field, f.code)
+    }
+  }
+
   if (errs.length > 0 || !owner) return { ok: false, fields: errs }
 
   const spec: StackSpec = {
@@ -693,5 +728,6 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
   if (uploadsFolder !== undefined) spec.uploads_folder = uploadsFolder
   if (filesSubfolder !== undefined) spec.files_subfolder = filesSubfolder
   if (runAs !== undefined) spec.run_as = runAs
+  if (edgeTls !== undefined) spec.edge_tls = edgeTls
   return { ok: true, spec }
 }

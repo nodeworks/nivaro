@@ -379,6 +379,7 @@ export async function prepareStackSpec(
       agentVersion: health.agent_version,
       agentVolumeNfs: health.volume_nfs,
       agentExportMount: health.export_mount,
+      agentEdgeTls: health.edge_tls,
       // Hub scaling: the replicas and limits the Hub keeps on top of the size template.
       scale: deps.scale !== undefined ? deps.scale : await readScaleShape('environment', envId)
     })

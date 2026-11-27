@@ -85,10 +85,26 @@ export const hubProvidersAcmeDocs: DocSection = {
         'Both types are free (`confidence: exact`); no type has a cost class.'
       ]
     },
-    { type: 'h2', id: 'hub-providers-acme-bindings', text: 'Bindings: Traefik’s file provider' },
+    {
+      type: 'h2',
+      id: 'hub-providers-acme-bindings',
+      text: 'Serving it from Traefik (Docker drivers)'
+    },
     {
       type: 'p',
-      text: 'Bind `fullchain` and `private_key` to **stack secrets** of the Traefik stack (for example `TLS_FULLCHAIN` and `TLS_PRIVATE_KEY`). The Hub agent mounts a stack’s secrets under `/run/secrets/<KEY>` (64 KB each), so Traefik’s dynamic file configuration can name them: `tls.certificates: [{certFile: /run/secrets/TLS_FULLCHAIN, keyFile: /run/secrets/TLS_PRIVATE_KEY}]`. A binding marks the stack “needs apply”; it never applies by itself. After a renewal the new values are pushed to the same bindings, and you apply the stack (a rolling restart of Traefik picks them up). `private_key` is a once-only output: if the Hub’s sealed copy is lost, use **Make a new key and certificate**.'
+      text: 'On a Docker driver the Hub agent serves the certificate for the stack’s own names. Bind `fullchain` to the stack secret `EDGE_TLS_CERT` and `private_key` to `EDGE_TLS_KEY` (Create app does both for its ACME part). The renderer never hands those two to the app: it sends them to the agent as the stack’s certificate (`edge_tls`), and the agent writes one file, `nvh-<stack>.yml`, into the folder Traefik’s file provider watches (`HUB_AGENT_TRAEFIK_DYNAMIC_DIR`), with the chain and key inline. The stack’s routers then carry `tls=true` and no certificate resolver: Traefik picks the certificate from its store by the name the browser asks for. Without the two bindings a stack keeps the agent’s resolver, exactly as before.'
+    },
+    {
+      type: 'ul',
+      items: [
+        '**Renewal without downtime.** A renewal pushes the new chain and key to the same bindings and the stack shows it needs **Apply now** (the Hub never deploys by itself). The apply rewrites only that file (a new file renamed over the old, so Traefik never reads a new certificate with an old key) and the stack hash on the service labels. No task restarts, Traefik’s included: Traefik reloads its certificate store when the file changes.',
+        'Unbinding goes back to the resolver first, then removes the file. Removing the stack removes it too.',
+        'The plan refuses before an apply when it cannot work: `EDGE_TLS_INCOMPLETE` (only one of the two is bound), `EDGE_TLS_NEEDS_TRAEFIK` (a publish-edge agent), `AGENT_TOO_OLD` (an agent before 0.2.5), `EDGE_TLS_NOT_CONFIGURED` (no `HUB_AGENT_TRAEFIK_DYNAMIC_DIR` on the agent), `EDGE_TLS_NAME_NOT_COVERED` (an environment name the certificate does not cover: reissue it with that name), `EDGE_TLS_NAME_OUTSIDE_STACK` (the certificate also answers for a name that is not the environment’s own — another host, a wildcard, an IP address: Traefik keeps one certificate store for every stack, so such a certificate could take over another app’s TLS; order it for exactly the environment’s names), `EDGE_TLS_KEY_MISMATCH`, `EDGE_TLS_INVALID`. The agent checks the same again (`TLS_NAME_OUTSIDE_STACK`).',
+        '**Only its own ACME certificate writes the two secrets.** A binding to `EDGE_TLS_CERT` / `EDGE_TLS_KEY` is taken only from an `acme.certificate` of the same app and environment (its `fullchain` into `EDGE_TLS_CERT`, its `private_key` into `EDGE_TLS_KEY`, as stack secrets); any other resource, output, target or environment is refused `EDGE_TLS_BINDING_ONLY`, and a binding row is judged again at every push. Typing either one in the Stack panel or a Create app request is refused the same way; clearing them is allowed (the routers go back to the resolver).',
+        'The key never reaches an app container, a log, an answer or the stack hash text (the hash takes a keyed digest of it). `EDGE_TLS_CERT` / `EDGE_TLS_KEY` can only be stack secrets written by that binding, never plain settings (`SECRET_IN_SETTINGS`). Shared deployments do not take one (their wildcard name uses the resolver).',
+        '`private_key` is a once-only output: if the Hub’s sealed copy is lost, use **Make a new key and certificate**, then apply the stack.',
+        'Outside a Hub-managed stack (your own Traefik stack, say) you can still bind the outputs to stack secrets of that stack and name `/run/secrets/<KEY>` in your own dynamic configuration; that path restarts Traefik on each change.'
+      ]
     },
     {
       type: 'p',

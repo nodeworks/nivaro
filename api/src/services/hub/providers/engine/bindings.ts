@@ -3,6 +3,7 @@ import { runInBackgroundPool } from '../../../../db/pool-context.js'
 import { logActivity } from '../../../activity.js'
 import { appSettingAllowed, appSettingIsSecret } from '../../../hub-link/settings-allow.js'
 import { getApp } from '../../../io-holder.js'
+import { edgeTlsBindingProblem, isEdgeTlsKey } from '../../docker/edge-tls.js'
 import { GENERATED_SECRET_KEYS } from '../../docker/stack-settings.js'
 import { envPolicy } from '../../owner-access.js'
 import { openSecret, sealSecret } from '../../secrets.js'
@@ -387,6 +388,10 @@ export async function setBindings(
         400,
         'A resource of an app is bound only to that app’s environments.'
       )
+    // Gap G-D: EDGE_TLS_CERT / EDGE_TLS_KEY decide which names Traefik answers for: only an ACME
+    // certificate of this same app and environment writes them (its chain / key, stack secrets).
+    const edge = edgeTlsBindingProblem(row, b, app)
+    if (edge) throw new BindingError('EDGE_TLS_BINDING_ONLY', 400, edge)
   }
   if (!actor.isAdmin)
     for (const envId of envApp.keys()) {
@@ -450,7 +455,8 @@ async function writeStack(
   envId: number,
   target: 'stack_setting' | 'stack_secret',
   key: string,
-  value: string
+  value: string,
+  edgeTlsWriter = false
 ): Promise<void> {
   const ss = await import('../../docker/stack-settings.js')
   const existing = await ss.readStackSettings(envId)
@@ -472,7 +478,8 @@ async function writeStack(
   // prefixes are read, so only keys Nivaro knows bind (fail closed).
   const v = await ss.validateStackSettings(body, existing, {
     driver: {} as never,
-    env: {} as never
+    env: {} as never,
+    ...(edgeTlsWriter ? { edgeTlsWriter: true } : {})
   })
   if (!v.ok) throw new BindingError(v.code, 400, v.message)
   await ss.saveStackSettings(envId, v.row.fields)
@@ -554,7 +561,15 @@ export async function pushBindings(
       continue
     }
     try {
-      await writeStack(b.environment_id, b.target, b.target_key, value)
+      // Gap G-D: re-judged at every push (a binding row is data): only an ACME certificate of the
+      // same app and environment may write the stack certificate.
+      const envApp = (await db('nivaro_hub_environments')
+        .where({ id: b.environment_id })
+        .first('app_id')) as { app_id: number } | undefined
+      const edgeOk =
+        isEdgeTlsKey(b.target_key) &&
+        edgeTlsBindingProblem(row, b, envApp ? Number(envApp.app_id) : null) === null
+      await writeStack(b.environment_id, b.target, b.target_key, value, edgeOk)
       await record(b, null)
     } catch (e) {
       await record(b, e instanceof Error ? e.message : 'The stack setting could not be saved.')

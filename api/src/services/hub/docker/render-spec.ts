@@ -3,6 +3,13 @@ import type { HubEnvironmentRow } from '../promote-types.js'
 import { applyScaleShape, type ScaleShape } from '../scale/shape.js'
 import type { StackSpec } from './agent-types.js'
 import type { DockerDriverConfig } from './driver-config.js'
+import {
+  EDGE_TLS_CERT_KEY,
+  EDGE_TLS_KEY_KEY,
+  edgeTlsAgentProblem,
+  edgeTlsCertProblem,
+  isEdgeTlsKey
+} from './edge-tls.js'
 import { type DatabaseRecordEnv, databaseEnvFor, databaseKey } from './stack-env.js'
 import { DEFAULT_STACK_FILES, type StackSettingsRow, stackFilesSet } from './stack-settings.js'
 import { agentVersionAtLeast, STACK_FILES_AGENT_MIN_VERSION, stackRoles } from './templates.js'
@@ -49,6 +56,13 @@ export interface RenderStackInput {
   agentExportMount?: boolean | null
   /** Hub scaling: the replicas and limits kept on top of the size template (scale/shape.ts). */
   scale?: ScaleShape | null
+  /** The target agent serves stack certificates (GET /v1/health `edge_tls`, 0.2.5). */
+  agentEdgeTls?: boolean | null
+  /**
+   * The secrets are masks (a plan's dry render): the stack certificate's content is not judged,
+   * only that both keys are there and the agent can serve one.
+   */
+  maskedSecrets?: boolean
 }
 
 export type StackRenderCode =
@@ -59,6 +73,13 @@ export type StackRenderCode =
   | 'AGENT_TOO_OLD'
   | 'UPLOADS_FOLDER_NEEDS_NFS'
   | 'EXPORT_MOUNT_MISSING'
+  | 'EDGE_TLS_INCOMPLETE'
+  | 'EDGE_TLS_INVALID'
+  | 'EDGE_TLS_KEY_MISMATCH'
+  | 'EDGE_TLS_NAME_NOT_COVERED'
+  | 'EDGE_TLS_NAME_OUTSIDE_STACK'
+  | 'EDGE_TLS_NEEDS_TRAEFIK'
+  | 'EDGE_TLS_NOT_CONFIGURED'
 
 export class StackRenderError extends Error {
   code: StackRenderCode
@@ -165,7 +186,8 @@ export function renderStackSpec(input: RenderStackInput): StackSpec {
   if (input.hubPublicUrl) env.HUB_URL = noTrailingSlash(input.hubPublicUrl)
 
   const secrets: Record<string, string> = {}
-  for (const [k, v] of Object.entries(input.secrets)) if (!databaseKey(k)) secrets[k] = v
+  for (const [k, v] of Object.entries(input.secrets))
+    if (!databaseKey(k) && !isEdgeTlsKey(k)) secrets[k] = v
   Object.assign(secrets, database.secrets)
   secrets.HUB_TOKEN = input.hubToken
 
@@ -190,6 +212,28 @@ export function renderStackSpec(input: RenderStackInput): StackSpec {
   }
   // The agent takes a published port only on the publish edge.
   if (edge === 'publish' && row.publish_port != null) spec.publish_port = row.publish_port
+
+  // Gap G-D (agent 0.2.5): the stack's own certificate (an ACME certificate bound to the stack
+  // secrets EDGE_TLS_CERT + EDGE_TLS_KEY) goes as `edge_tls`, never as app secrets. Sent only when
+  // bound, so every other stack gets exactly the spec (and hash) it had.
+  const cert = input.secrets[EDGE_TLS_CERT_KEY]
+  const key = input.secrets[EDGE_TLS_KEY_KEY]
+  if (cert !== undefined || key !== undefined) {
+    if (!cert || !key)
+      throw new StackRenderError(
+        'EDGE_TLS_INCOMPLETE',
+        `A stack certificate needs both ${EDGE_TLS_CERT_KEY} and ${EDGE_TLS_KEY_KEY}: bind the certificate's fullchain and private_key, or remove the one that is set.`
+      )
+    const agent = edgeTlsAgentProblem({
+      agent_version: input.agentVersion ?? null,
+      edge,
+      ...(input.agentEdgeTls != null ? { edge_tls: input.agentEdgeTls } : {})
+    })
+    if (agent) throw new StackRenderError(agent.code, agent.message)
+    const bad = input.maskedSecrets ? null : edgeTlsCertProblem(cert, key, hostnames)
+    if (bad) throw new StackRenderError(bad.code, bad.message)
+    spec.edge_tls = { cert, key }
+  }
 
   // L3: an agent with uploads on an NFS export that cannot see the export refuses every stack
   // (EXPORT_MOUNT_MISSING): say so in the plan, not only when the run reaches the agent.

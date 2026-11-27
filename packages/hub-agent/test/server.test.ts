@@ -149,14 +149,14 @@ function req(
 }
 
 describe('the version the agent reports', () => {
-  it('is 0.2.4 (the scale endpoint) and matches package.json', () => {
+  it('is 0.2.5 (edge TLS) and matches package.json', () => {
     const pkg = JSON.parse(
       fs.readFileSync(
         path.join(path.dirname(new URL(import.meta.url).pathname), '../package.json'),
         'utf8'
       )
     ) as { version: string }
-    expect(AGENT_VERSION).toBe('0.2.4')
+    expect(AGENT_VERSION).toBe('0.2.5')
     expect(pkg.version).toBe(AGENT_VERSION)
   })
 })
