@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "error": {
+    "type": "permission_error",
+    "message": "Admin API key required. Got test-secret-anthropic-admin-0001"
+  }
+}

@@ -1,3 +1,4 @@
+import { anthropicAdapter } from './anthropic/index.js'
 import { auth0Provider } from './auth0/index.js'
 import { awsProvider } from './aws/adapter.js'
 import { cloudflareProvider } from './cloudflare/index.js'
@@ -28,6 +29,7 @@ import { vercelAdapter } from './vercel/index.js'
 
 export const CORE_PROVIDERS: ProviderAdapter[] = [
   // github, aws, vercel, auth0, expo adapters are appended here.
+  anthropicAdapter,
   auth0Provider,
   awsProvider,
   cloudflareProvider,

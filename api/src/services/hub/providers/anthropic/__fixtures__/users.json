@@ -1,0 +1,13 @@
+{
+  "data": [
+    {
+      "type": "user",
+      "id": "user_test0001",
+      "email": "dev@example.com",
+      "name": "Dev One",
+      "role": "developer",
+      "added_at": "2026-10-01T00:00:00Z"
+    }
+  ],
+  "has_more": false
+}
