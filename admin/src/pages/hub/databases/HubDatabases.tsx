@@ -1,5 +1,5 @@
 import { type ErrorDescription, ErrorNotice, QueryErrorState } from '@nivaro/shared'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, Database, Plus, Server } from 'lucide-react'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
@@ -8,6 +8,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { countLabel, ghostButton, ListPaneHeader, listPaneClass } from '../hub-parts'
+import { fetchResources, providerKeys } from '../providers/providers-api'
+import { resourceLabel } from '../providers/ResourcePickers'
 import { AdoptDatabaseForm, DatabaseDetail, DbStatusChip, environmentWords } from './DatabaseDetail'
 import { DbServerForm } from './DbServerForm'
 import {
@@ -15,6 +17,7 @@ import {
   dbError,
   dbKeys,
   ENGINE_LABEL,
+  linkWords,
   MODE_LABEL,
   useDatabases,
   useDbServers
@@ -47,6 +50,16 @@ const status = (e: unknown) => (e as { response?: { status?: number } } | null)?
 function DatabasesAdmin() {
   const servers = useDbServers()
   const dbs = useDatabases()
+  // Linked servers say what they are ("Neon branch main"); a failed read just leaves the chip off.
+  const linked = useQuery({
+    queryKey: providerKeys.resources({}),
+    queryFn: () => fetchResources({}),
+    enabled: !!servers.data?.some((s) => s.resource_id != null)
+  })
+  const linkOf = (s: { resource_id?: number | null }) => {
+    const r = s.resource_id == null ? null : linked.data?.find((x) => x.id === s.resource_id)
+    return r && !r.deleted_at ? linkWords(r.type, resourceLabel(r)) : null
+  }
   const [params, setParams] = useSearchParams()
   const serverId = Number(params.get('server')) || null
   const dbId = Number(params.get('db')) || null
@@ -111,6 +124,7 @@ function DatabasesAdmin() {
                   <span className='rounded-full border border-slate-200 px-1.5 py-px text-[10px] dark:border-border'>
                     {MODE_LABEL[s.provision_mode]}
                   </span>
+                  {linkOf(s) && <span className='truncate'>{linkOf(s)}</span>}
                 </span>
               </Row>
             ))}
