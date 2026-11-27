@@ -23,7 +23,7 @@ import { NotificationBell } from '@/components/notification-bell'
 import { ThemeSwitcher } from '@/components/theme-switcher'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import type { NavItem } from '@/layouts/nav-config'
+import { hubSystemPageForEveryone, type NavItem } from '@/layouts/nav-config'
 import { logout, useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { HubGlyph, HubWordmark } from './HubMark'
@@ -93,7 +93,7 @@ export function HubTopBar({
     [permitted, disabled, admin]
   )
   const current = activeSection(sections, pathname)
-  const system = useMemo(() => systemItems(items), [items])
+  const system = useMemo(() => systemItems(items, { admin }), [items, admin])
   const [menuOpen, setMenuOpen] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
 
@@ -243,12 +243,18 @@ export function HubTopBar({
   )
 }
 
-/** Pages the Hub keeps that are not Hub pages (Users, Roles, Settings…), each once, in nav order. */
-export function systemItems(items: NavItem[]): NavItem[] {
+/**
+ * Pages the Hub keeps that are not Hub pages (Users, Roles, Settings…), each once, in nav order.
+ * `admin: false` = signed in and not an administrator (an app owner): the pages only an
+ * administrator can use are left out, so System offers an owner only what they can use. With
+ * nothing left the bar shows no System menu at all.
+ */
+export function systemItems(items: NavItem[], opts: { admin?: boolean } = {}): NavItem[] {
   const seen = new Set<string>()
   const out: NavItem[] = []
   for (const it of items) {
     if (seen.has(it.to) || it.to === '/hub' || it.to.startsWith('/hub/')) continue
+    if (opts.admin === false && !hubSystemPageForEveryone(it.to)) continue
     seen.add(it.to)
     out.push(it)
   }

@@ -51,7 +51,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { HUB_ONLY_NAV } from '@/layouts/nav-config'
+import { HUB_ONLY_NAV, hubSystemPageForEveryone } from '@/layouts/nav-config'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { showContrastAudit } from '@/lib/contrast-audit'
@@ -539,7 +539,11 @@ export function CommandPalette() {
   const allPages = hubLook
     ? [
         ...hubPages,
-        ...PAGES.filter((pg) => HUB_ONLY_NAV.has(`/${pg.path.split('/')[1] ?? ''}`)),
+        ...PAGES.filter(
+          (pg) =>
+            HUB_ONLY_NAV.has(`/${pg.path.split('/')[1] ?? ''}`) &&
+            (hubAdmin !== false || hubSystemPageForEveryone(pg.path))
+        ),
         ...extPages
       ]
     : [...PAGES, ...extPages, ...hubPages]

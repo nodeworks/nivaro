@@ -4,6 +4,13 @@ import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  HUB_ADMIN_ONLY_NAV,
+  HUB_ONLY_NAV,
+  hubSystemPageForEveryone,
+  navCategories
+} from '@/layouts/nav-config'
+import { permittedCategories } from '@/layouts/nav-layout'
 import { applyHubProduct } from '@/lib/hub-product'
 import { trackLabel } from '@/pages/hub/HubPromotePanel'
 import { envTone, isProductionEnv } from './env-tone'
@@ -264,6 +271,36 @@ describe('top bar sections and fleet strip', () => {
       { icon: Icon, label: 'Users', to: '/users' }
     ]
     expect(systemItems(items).map((i) => i.to)).toEqual(['/', '/users', '/settings'])
+  })
+
+  it('System offers an app owner only the pages an owner can use', () => {
+    // The real map of a standalone Hub, as AppLayout hands it to the bar.
+    const items = permittedCategories(
+      navCategories,
+      new Set(),
+      new Set(['hub', 'hub_only'])
+    ).flatMap((c) => c.items)
+    const paths = (admin?: boolean) => systemItems(items, { admin }).map((i) => i.to)
+    // An administrator, and a person the app does not know yet, get everything the Hub keeps.
+    expect([...paths(true)].sort()).toEqual([...HUB_ONLY_NAV].filter((p) => p !== '/hub').sort())
+    expect(paths(undefined)).toEqual(paths(true))
+    // An owner: no Users, Roles, Settings or any other page that would only refuse them.
+    expect(paths(false)).toEqual(['/', '/issues', '/docs'])
+    for (const to of paths(true)) {
+      expect(hubSystemPageForEveryone(to), to).toBe(paths(false).includes(to))
+    }
+    // A tab inside an admin-only page is admin-only too.
+    expect(hubSystemPageForEveryone('/health/monitors')).toBe(false)
+    expect(hubSystemPageForEveryone('/docs/rest')).toBe(true)
+    // Nothing an owner can use = no System entries at all (the bar then shows no System menu).
+    const adminOnly = items.filter((i) => HUB_ADMIN_ONLY_NAV.has(i.to))
+    expect(adminOnly.length).toBeGreaterThan(0)
+    expect(systemItems(adminOnly, { admin: false })).toEqual([])
+    // Pages an extension or the cloud adds are theirs to gate: they stay.
+    const Icon = () => null
+    expect(
+      systemItems([{ icon: Icon, label: 'Billing', to: '/account' }], { admin: false })
+    ).toHaveLength(1)
   })
 
   it('groups the strip by app and maps state to health', () => {

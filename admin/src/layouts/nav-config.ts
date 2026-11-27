@@ -126,6 +126,31 @@ export const HUB_ONLY_NAV: ReadonlySet<string> = new Set([
   '/settings'
 ])
 
+/**
+ * Of those, the pages only an administrator can use: every read behind them answers 403 to anyone
+ * else. A standalone Hub leaves them out of its System menu, its All pages sheet, its phone menu
+ * and Find for a signed-in person who is not one (an app owner), the same rule the Hub's own
+ * pages follow (`adminOnly` in lib/hubs.ts). Overview, Issues and Docs stay: everyone reads those.
+ * The address still opens; server permissions are unchanged. The regular sidebar never reads this.
+ */
+export const HUB_ADMIN_ONLY_NAV: ReadonlySet<string> = new Set([
+  '/users',
+  '/roles',
+  '/security-center',
+  '/activity',
+  '/health',
+  '/jobs',
+  '/database',
+  '/api-keys',
+  '/settings'
+])
+
+/** The first path segment of a page, as the nav names it ('/health/monitors' → '/health'). */
+const navRoot = (to: string) => `/${to.split('/')[1] ?? ''}`
+
+/** May a person who is not an administrator use this page of a standalone Hub's System menu? */
+export const hubSystemPageForEveryone = (to: string) => !HUB_ADMIN_ONLY_NAV.has(navRoot(to))
+
 export const navCategories: NavCategory[] = [
   {
     id: 'home',
