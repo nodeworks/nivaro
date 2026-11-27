@@ -1,0 +1,8 @@
+{
+  "taskId": "task-0002",
+  "commandType": "fixedSubscriptionCreateRequest",
+  "status": "processing-completed",
+  "response": {
+    "resourceId": 1001
+  }
+}

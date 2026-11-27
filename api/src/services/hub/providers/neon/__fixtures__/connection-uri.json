@@ -1,0 +1,3 @@
+{
+  "uri": "postgresql://app_owner:test-secret-role-pass-7788@ep-test-stage-0001-pooler.us-east-2.example/appdb?sslmode=require"
+}

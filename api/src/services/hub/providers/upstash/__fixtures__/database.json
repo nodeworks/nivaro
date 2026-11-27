@@ -1,0 +1,18 @@
+{
+  "database_id": "11111111-2222-3333-4444-555555555555",
+  "database_name": "demo-cache",
+  "database_type": "Pay as You Go",
+  "region": "global",
+  "primary_region": "us-east-1",
+  "all_members_regions": ["us-east-1"],
+  "port": 6379,
+  "creation_time": 1760000000,
+  "state": "active",
+  "password": "test-secret-upstash-pw-0001",
+  "endpoint": "demo-cache-12345.upstash.io",
+  "tls": true,
+  "eviction": false,
+  "auto_upgrade": false,
+  "rest_token": "test-secret-rest-token-0001",
+  "read_only_rest_token": "test-secret-rest-token-ro-0001"
+}

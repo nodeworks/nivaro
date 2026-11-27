@@ -1,0 +1,14 @@
+{
+  "accountId": 4242,
+  "subscriptions": [
+    {
+      "id": 1001,
+      "name": "demo-sub",
+      "status": "active",
+      "planId": 5001,
+      "planName": "Essentials 250MB",
+      "provider": "AWS",
+      "region": "us-east-1"
+    }
+  ]
+}

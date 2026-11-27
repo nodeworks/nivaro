@@ -1,0 +1,6 @@
+{
+  "taskId": "task-0001",
+  "commandType": "fixedDatabaseCreateRequest",
+  "status": "received",
+  "description": "Task request received and is being queued for processing."
+}

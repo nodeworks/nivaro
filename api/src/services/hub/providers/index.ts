@@ -1,10 +1,16 @@
 import { auth0Provider } from './auth0/index.js'
 import { awsProvider } from './aws/adapter.js'
 import { cloudflareProvider } from './cloudflare/index.js'
+import { dockerhubAdapter } from './dockerhub/index.js'
+import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
+import { neonAdapter } from './neon/index.js'
+import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
+import { sentryAdapter } from './sentry/index.js'
 import type { ProviderAdapter } from './types.js'
+import { upstashAdapter } from './upstash/index.js'
 import { vercelAdapter } from './vercel/index.js'
 
 /**
@@ -19,8 +25,14 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   auth0Provider,
   awsProvider,
   cloudflareProvider,
+  dockerhubAdapter,
+  entraAdapter,
   expoAdapter,
   githubAdapter,
+  sentryAdapter,
+  redisCloudAdapter,
+  upstashAdapter,
+  neonAdapter,
   vercelAdapter
 ]
 

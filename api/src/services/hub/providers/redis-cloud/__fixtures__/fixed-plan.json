@@ -1,0 +1,13 @@
+{
+  "id": 5001,
+  "name": "Essentials 250MB",
+  "size": 250,
+  "sizeMeasurementUnit": "MB",
+  "provider": "AWS",
+  "region": "us-east-1",
+  "price": 5,
+  "priceCurrency": "USD",
+  "pricePeriod": "Month",
+  "supportDataPersistence": true,
+  "supportReplication": true
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "id": "3000001",
+    "slug": "test-app",
+    "name": "Test App",
+    "platform": "node",
+    "status": "active",
+    "organization": {
+      "slug": "test-org"
+    },
+    "teams": [
+      {
+        "slug": "test-team"
+      }
+    ]
+  }
+]

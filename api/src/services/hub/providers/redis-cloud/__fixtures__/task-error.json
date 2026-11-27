@@ -1,0 +1,12 @@
+{
+  "taskId": "task-0001",
+  "commandType": "fixedDatabaseCreateRequest",
+  "status": "processing-error",
+  "response": {
+    "error": {
+      "type": "DATABASE_NAME_TAKEN",
+      "status": "400 BAD_REQUEST",
+      "description": "A database with that name exists (test-secret-rc-key-0001)"
+    }
+  }
+}

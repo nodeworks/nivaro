@@ -1,0 +1,13 @@
+{
+  "id": "fedcba9876543210fedcba9876543210",
+  "name": "Hub key",
+  "isActive": true,
+  "rateLimit": {
+    "window": 60,
+    "count": 100
+  },
+  "dsn": {
+    "public": "https://fedcba9876543210fedcba9876543210@o1000001.ingest.sentry.io/3000001",
+    "secret": "https://fedcba9876543210fedcba9876543210:test-secret-sentry-key-0002@o1000001.ingest.sentry.io/3000001"
+  }
+}

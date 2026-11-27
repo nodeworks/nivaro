@@ -1,0 +1,16 @@
+{
+  "id": 1001,
+  "name": "demo-sub",
+  "status": "active",
+  "paymentType": "credit-card",
+  "paymentMethodId": 77,
+  "planId": 5001,
+  "planName": "Essentials 250MB",
+  "size": 250,
+  "sizeMeasurementUnit": "MB",
+  "provider": "AWS",
+  "region": "us-east-1",
+  "price": 5,
+  "pricePeriod": "Month",
+  "creationDate": "2026-10-01T10:00:00Z"
+}

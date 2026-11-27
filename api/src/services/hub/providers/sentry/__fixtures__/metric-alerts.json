@@ -1,0 +1,27 @@
+[
+  {
+    "id": "5000001",
+    "name": "Error spike",
+    "projects": ["test-app"],
+    "environment": null,
+    "dataset": "events",
+    "aggregate": "count()",
+    "query": "",
+    "timeWindow": 10,
+    "thresholdType": 0,
+    "triggers": [
+      {
+        "label": "critical",
+        "alertThreshold": 100,
+        "resolveThreshold": 50,
+        "actions": [
+          {
+            "type": "email",
+            "targetType": "team",
+            "targetIdentifier": "2000001"
+          }
+        ]
+      }
+    ]
+  }
+]

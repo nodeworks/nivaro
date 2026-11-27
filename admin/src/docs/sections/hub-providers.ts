@@ -499,6 +499,68 @@ export const hubProvidersExpoDocs: DocSection = {
   ]
 }
 
+export const hubProvidersSentryDocs: DocSection = {
+  id: 'hub-providers-sentry',
+  label: 'Provider: Sentry',
+  content: [
+    { type: 'h1', id: 'hub-providers-sentry', text: 'Provider: Sentry — Hub mode only' },
+    {
+      type: 'p',
+      text: 'Connection fields: `host` (`sentry.io`, `us.sentry.io`, `de.sentry.io`, or a self-hosted name: a plain lower-case host, https only, no IP address or localhost; private addresses pass only through `SSRF_ALLOW_HOSTS`), `organization` (the slug; pinned, every call is scoped to it) and a secret auth token (an organization-level internal integration is preferred). Test reads the organization and the token\u2019s scopes; a token that does not list its scopes is probed with a read and every write is reported missing.'
+    },
+    {
+      type: 'table',
+      head: ['Type', 'Provider id', 'What it does'],
+      rows: [
+        [
+          '`sentry.team`',
+          'slug',
+          'Shared (Hub admins only). A slug change is a replace; delete is `destructive`.'
+        ],
+        [
+          '`sentry.project`',
+          'slug',
+          'One per app. Name and platform change in place; the slug and the owning team are set at create. A project is made without Sentry\u2019s default alert rule, so the Hub\u2019s alerts are the only ones. Delete or replace is `destructive` + `data_loss`.'
+        ],
+        [
+          '`sentry.client_key`',
+          '`<project>/<key id>`',
+          'A DSN holder. Name, active switch and rate limit change in place. Delete is `destructive` + `downtime`; switching it off is `downtime`. Declares the output `dsn`.'
+        ],
+        [
+          '`sentry.issue_alert`',
+          '`<project>/<rule id>`',
+          'Conditions, filters and actions are lists of `{id, settings}` (the rule class id and its remaining values). Sentry\u2019s display names and uuids are ignored when comparing.'
+        ],
+        [
+          '`sentry.metric_alert`',
+          'rule id',
+          'Projects, measure, query, time window and one or two triggers (critical, warning) with their notify actions.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'hub-providers-sentry-dsn', text: 'The DSN is an output' },
+    {
+      type: 'p',
+      text: 'The client key hands out its public DSN as the output `dsn` (not secret, shown again by Sentry, so it is never once-only). It is sealed by the Hub and never appears in observed or desired state, a plan, a step or a log. Bind it to the environment so the app reports to its own project.'
+    },
+    {
+      type: 'warn',
+      text: 'Bind the DSN to a stack setting or stack secret named `SENTRY_DSN`, not to the app setting `sentry_dsn`. A Nivaro app has no `sentry_dsn` setting, so the hub link answers `409 SETTING_NOT_ON_THIS_APP` for it. A stack binding only saves the stack\u2019s settings: the stack then shows it needs Apply now, and nothing deploys by itself.'
+    },
+    { type: 'h2', id: 'hub-providers-sentry-releases', text: 'Releases and health' },
+    {
+      type: 'ul',
+      items: [
+        'A project may record a release and one deploy for an environment: fill `release_version`, `release_environment` (and optionally `release_url`) and set `record_release`. The named op `release` reads first, creates the release only if it does not exist for the project (Sentry answers 208 for an existing one) and the deploy only if that environment has none yet. The version and environment come from the resource, never from the plan data, and the op refuses a project that is not the resource\u2019s own (`TARGET_MISMATCH`). A promotion runs it once the promote hook is wired.',
+        'Health on a project: unresolved issues seen in the last 24 hours, in total and for up to five environments (warning from 50). A disabled client key reads as a warning. The figures sit beside the Hub Issues tab.',
+        'A create that finds a team or project with that slug, or a key or alert with that name, stops with `ALREADY_EXISTS`: adopt it instead. No type is costed: Sentry bills the organization plan, not each resource.',
+        'Needs a live check: endpoint paths, the token scopes each call needs, the alert rule shapes (including the newer detector-based alerts) and the `X-Hits` count are written from the Sentry API documentation and were not run against a real organization.'
+      ]
+    }
+  ]
+}
+
 export const hubProvidersHooksDocs: DocSection = {
   id: 'hub-providers-hooks',
   label: 'Outside services in Hub flows',
@@ -676,6 +738,49 @@ export const hubProvidersApiDocs: DocSection = {
     {
       type: 'p',
       text: 'Four read and plan tools, available to every signed-in person (the route decides what that person may see): `hub_list_connections`, `hub_list_resources`, `hub_read_resource_change` and `hub_plan_resources`. The plan answer has secret-looking keys stripped and links to `/hub/connections?change=<id>`, where a person starts it. Starting, resuming, cancelling, undoing, approving, declining and every connection write are refused for an agent with `HUB_WRITE_NOT_FOR_AGENTS`, and View-as and run-as keys never write either.'
+    }
+  ]
+}
+
+export const hubProvidersDockerhubDocs: DocSection = {
+  id: 'hub-providers-dockerhub',
+  label: 'Provider: Docker Hub',
+  content: [
+    { type: 'h1', id: 'hub-providers-dockerhub', text: 'Provider: Docker Hub — Hub mode only' },
+    {
+      type: 'p',
+      text: 'Connection fields: `username`, `namespace` (the user or organization whose repositories the Hub may manage; pinned on every read and write, anything else is `DOCKERHUB_OUT_OF_ACCOUNT`) and a secret `token` (a personal or organization access token). The hosts are `hub.docker.com`, `auth.docker.io` and `registry-1.docker.io`. The Hub trades the token for a short login token, keeps it in memory per connection and mints a new one once on a 401. Docker Hub cannot list a token’s scopes, so Test proves read access and whether the namespace is an organization; write and delete access is proven when a change is applied.'
+    },
+    {
+      type: 'table',
+      head: ['Type', 'Provider id', 'What it does'],
+      rows: [
+        [
+          '`dockerhub.repository`',
+          '`<namespace>/<name>`',
+          'Name (set at create only), private flag, short and long description. Private by default; a create as public, or private → public, is `public_exposure`. Delete is `destructive` + `data_loss` (every tag goes with it) and is refused (`REPO_PINNED`) for the repository that holds the Hub image while a Hub pin uses it. A create that finds a repository the Hub did not make is `ALREADY_EXISTS`: adopt it.'
+        ],
+        [
+          '`dockerhub.repo_team_permission`',
+          '`<namespace>/<repo>/<team>`',
+          'Gives an existing organization team read, write or admin on one repository. The team itself is read only (`TEAM_NOT_FOUND` when it does not exist). Organizations only. Delete is `destructive`.'
+        ],
+        [
+          '`dockerhub.tag`',
+          '`<namespace>/<repo>/<tag>`',
+          'List, adopt and delete only: tags are pushed with docker. Delete is `destructive` + `data_loss`. A tag a Hub image pin uses (an environment or shared deployment pinned to that version, or its `-slim` twin) is refused with `TAG_PINNED`; if the pins cannot be read the delete fails closed (`PINS_UNREADABLE`, retryable).'
+        ]
+      ]
+    },
+    {
+      type: 'ul',
+      items: [
+        'Health per repository: tag count, last push and pull count; a repository with no image yet warns.',
+        'The tag list is the read-only feed the image pin picker may use; the Hub’s own pin reads are unchanged.',
+        'Costs: Docker bills the account plan, not each repository. A public repository is free, the first private one is covered by the free plan, and more need Pro or Team (dated list prices shown in the estimate note). The estimate never adds a charge for the repository itself.',
+        'The adapter has no outputs and sends no messages.',
+        'Needs a live check: endpoint paths (`/v2/namespaces/…`, `/v2/repositories/…/groups`, `/v2/auth/token`) were written from the Docker Hub API reference and not run. Confirm the team-permission calls and the login-token endpoint on a throwaway organization.'
+      ]
     }
   ]
 }

@@ -1,0 +1,26 @@
+{
+  "accountId": 4242,
+  "subscription": [
+    {
+      "subscriptionId": 2002,
+      "numberOfDatabases": 1,
+      "databases": [
+        {
+          "databaseId": 4004,
+          "name": "pro-db",
+          "protocol": "redis",
+          "status": "active",
+          "dataEvictionPolicy": "volatile-lru",
+          "replication": true,
+          "dataPersistence": "aof-every-1-second",
+          "memoryLimitInGb": 1,
+          "publicEndpoint": "redis-14000.c2.us-east-1-1.ec2.cloud.redislabs.com:14000",
+          "security": {
+            "password": "test-secret-rc-pw-0002",
+            "enableDefaultUser": true
+          }
+        }
+      ]
+    }
+  ]
+}

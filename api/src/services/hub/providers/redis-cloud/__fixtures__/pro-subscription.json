@@ -1,0 +1,17 @@
+{
+  "id": 2002,
+  "name": "pro-sub",
+  "status": "active",
+  "paymentMethodId": 77,
+  "memoryStorage": "ram",
+  "cloudDetails": [
+    {
+      "provider": "AWS",
+      "regions": [
+        {
+          "region": "us-east-1"
+        }
+      ]
+    }
+  ]
+}

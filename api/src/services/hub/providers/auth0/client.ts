@@ -155,7 +155,7 @@ function errorFor(ctx: ProviderContext, status: number, body: unknown): Provider
     (typeof o.error_description === 'string' && o.error_description) ||
     (typeof body === 'string' && body) ||
     `Auth0 answered ${status}.`
-  return new ProviderError(statusCode(status), ctx.scrub(clip(raw)), {
+  return new ProviderError(statusCode(status), clip(ctx.scrub(raw)), {
     status,
     retryable: isRetryableStatus(status)
   })
