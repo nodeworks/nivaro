@@ -365,6 +365,7 @@ import {
   hubProvidersApiDocs,
   hubProvidersAuth0Docs,
   hubProvidersAwsDocs,
+  hubProvidersDockerhubDocs,
   hubProvidersDocs,
   hubProvidersExpoDocs,
   hubProvidersGithubDocs,
@@ -1246,6 +1247,7 @@ export const navSections: NavGroup[] = [
       hubProvidersSentryDocs,
       hubProvidersUpstashDocs,
       hubProvidersRedisCloudDocs,
+      hubProvidersDockerhubDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]

@@ -1,0 +1,25 @@
+{
+  "count": 2,
+  "next": null,
+  "previous": null,
+  "results": [
+    {
+      "name": "nivaro-app",
+      "namespace": "testorg",
+      "description": "Test image",
+      "is_private": true,
+      "pull_count": 42,
+      "star_count": 1,
+      "last_updated": "2026-11-20T10:00:00.000000Z"
+    },
+    {
+      "name": "public-docs",
+      "namespace": "testorg",
+      "description": "",
+      "is_private": false,
+      "pull_count": 7,
+      "star_count": 0,
+      "last_updated": "2026-11-01T10:00:00.000000Z"
+    }
+  ]
+}
