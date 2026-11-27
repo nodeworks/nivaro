@@ -1,0 +1,12 @@
+{
+  "token": "ghs_test-installation-token-0001",
+  "expires_at": "2026-11-26T13:00:00Z",
+  "permissions": {
+    "administration": "write",
+    "secrets": "write",
+    "variables": "read",
+    "actions": "write",
+    "repository_hooks": "write",
+    "contents": "read"
+  }
+}

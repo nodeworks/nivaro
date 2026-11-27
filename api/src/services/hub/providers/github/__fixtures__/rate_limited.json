@@ -1,0 +1,4 @@
+{
+  "message": "API rate limit exceeded for installation ghs_test-installation-token-0001",
+  "documentation_url": "https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"
+}

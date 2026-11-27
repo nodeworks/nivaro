@@ -1,0 +1,8 @@
+{
+  "id": 161335,
+  "name": "Deploy",
+  "path": ".github/workflows/deploy.yml",
+  "state": "active",
+  "updated_at": "2026-11-02T10:00:00Z",
+  "html_url": "https://github.com/acme/web/blob/main/.github/workflows/deploy.yml"
+}

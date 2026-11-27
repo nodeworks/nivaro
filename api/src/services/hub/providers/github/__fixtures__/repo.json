@@ -1,0 +1,15 @@
+{
+  "id": 1296269,
+  "name": "web",
+  "full_name": "acme/web",
+  "private": true,
+  "visibility": "private",
+  "html_url": "https://github.com/acme/web",
+  "description": "Marketing site",
+  "default_branch": "main",
+  "has_issues": true,
+  "has_wiki": false,
+  "archived": false,
+  "topics": ["nivaro", "web"],
+  "updated_at": "2026-11-20T10:00:00Z"
+}
