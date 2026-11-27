@@ -487,3 +487,41 @@ describe('tax and discounts', () => {
     expect(learned.monthlyCents).toBe(sum(learned))
   })
 })
+
+describe('auto-approve', () => {
+  const est = (monthlyCents: number): CostEstimate => ({
+    currency: 'USD',
+    monthlyCents,
+    oneTimeCents: 0,
+    yearlyCents: 0,
+    basis: 'price_list',
+    confidence: 'list_price',
+    lines: [],
+    priceAsOf: null
+  })
+  const op = (kind: string, before: number | null, after: number | null) =>
+    ({
+      kind,
+      risk: ['cost'],
+      cost: {
+        before: before == null ? null : est(before),
+        after: after == null ? null : est(after),
+        deltaMonthlyCents: (after ?? 0) - (before ?? 0)
+      }
+    }) as any
+
+  it('never lets a delete or saving offset a new costed op', async () => {
+    const { autoApproves, planCostTotal } = await import(
+      '../../../services/hub/providers/estimate.js'
+    )
+    const now = new Date('2026-11-27T00:00:00Z')
+    // New $500/mo thing plus a $490/mo delete: net +$10, but the increase is $500.
+    const ops = [op('create', null, 50_000), op('delete', 49_000, null)]
+    const total = planCostTotal(ops, now)
+    expect(total.deltaMonthlyCents).toBe(1_000)
+    expect(autoApproves(ops, total, 5_000)).toBe(false)
+    // A small increase alone still goes through under the limit.
+    const small = [op('create', null, 1_000)]
+    expect(autoApproves(small, planCostTotal(small, now), 5_000)).toBe(true)
+  })
+})

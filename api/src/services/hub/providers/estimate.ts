@@ -392,7 +392,8 @@ export function planCostTotal(ops: readonly PlannedOp[], now: Date): PlanCostTot
 /**
  * Whether an owner's costed change goes through without an administrator: a limit is set (> 0),
  * every costed op has a figure, and the monthly increase, the one-time total and the yearly
- * increase are each under the limit. Any op with the `cost` flag and no figure keeps it waiting.
+ * increase are each under the limit — summed over the ops that cost MORE, never netted against
+ * deletes or savings in the same change. Any op with the `cost` flag and no figure keeps it waiting.
  */
 export function autoApproves(
   ops: readonly PlannedOp[],
@@ -402,5 +403,16 @@ export function autoApproves(
   if (!(limit > 0)) return false
   if (total.unknownOps > 0) return false
   if (ops.some((o) => o.risk.includes('cost') && !o.cost)) return false
-  return total.deltaMonthlyCents < limit && total.oneTimeCents < limit && total.yearlyCents < limit
+  // Increases only: a delete or a saving in the same change never offsets a new costed op.
+  let monthlyUp = 0
+  let yearlyUp = 0
+  for (const op of ops) {
+    const c = op.cost
+    if (!c) continue
+    monthlyUp += Math.max(0, c.deltaMonthlyCents)
+    const a = c.after && c.after.confidence !== 'unknown' ? c.after.yearlyCents : 0
+    const b = c.before && c.before.confidence !== 'unknown' ? c.before.yearlyCents : 0
+    yearlyUp += Math.max(0, a - b)
+  }
+  return monthlyUp < limit && Math.max(0, total.oneTimeCents) < limit && yearlyUp < limit
 }
