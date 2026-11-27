@@ -9,6 +9,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { ghostButton, SectionCard, ToneChip } from '../hub-parts'
+import { LinkedChange } from './ChangeView'
 import {
   fetchConnections,
   fetchProviderTypes,
@@ -36,10 +37,13 @@ export default function SharedInfraTab() {
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
   if (!isAdmin)
     return (
-      <div className='flex flex-1 items-center justify-center bg-slate-50 p-8 text-center dark:bg-background'>
+      <div className='flex flex-1 flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center dark:bg-background'>
         <p className='m-0 max-w-[48ch] text-[13px] text-slate-600 dark:text-muted-foreground'>
           Shared infrastructure is managed by Hub administrators.
         </p>
+        <div className='w-full max-w-3xl text-left'>
+          <LinkedChange isAdmin={false} />
+        </div>
       </div>
     )
   return <SharedInfra />
@@ -89,6 +93,7 @@ export function SharedInfra() {
       />
       <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
+          <LinkedChange isAdmin />
           {pending ? (
             <div className='space-y-3'>
               <Skeleton className='h-24 w-full' />

@@ -22,7 +22,7 @@ import {
   SectionCard,
   ToneChip
 } from '../hub-parts'
-import { ChangesList } from './ChangeView'
+import { ChangesList, LinkedChange } from './ChangeView'
 import {
   adoptResource,
   CONNECTION_STATUS_COPY,
@@ -60,11 +60,14 @@ export default function HubConnectionsTab() {
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
   if (!isAdmin)
     return (
-      <div className='flex flex-1 items-center justify-center bg-slate-50 p-8 text-center dark:bg-background'>
+      <div className='flex flex-1 flex-col items-center justify-center gap-4 bg-slate-50 p-8 text-center dark:bg-background'>
         <p className='m-0 max-w-[48ch] text-[13px] text-slate-600 dark:text-muted-foreground'>
           Only administrators manage provider connections. Your app’s outside resources are on its
           page, under each environment.
         </p>
+        <div className='w-full max-w-3xl text-left'>
+          <LinkedChange isAdmin={false} />
+        </div>
       </div>
     )
   return <HubConnections />
@@ -114,6 +117,7 @@ export function HubConnections() {
 
       <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
+          <LinkedChange isAdmin />
           {(pending.data?.length ?? 0) > 0 && (
             <SectionCard
               title='Waiting for your approval'

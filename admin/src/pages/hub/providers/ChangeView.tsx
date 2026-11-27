@@ -11,13 +11,14 @@ import {
   X
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { HubRunTimeline, type RunStep } from '@/components/hub-brand/HubRunTimeline'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
-import { dangerArmed, dangerGhost, ghostButton, ToneChip } from '../hub-parts'
+import { dangerArmed, dangerGhost, ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import {
   CHANGE_STATUS_COPY,
   CHANGE_STATUS_TONE,
@@ -727,5 +728,65 @@ export function ChangesList({
         />
       )}
     </div>
+  )
+}
+
+/**
+ * The change named by `?change=<id>` (the link in a change notice): shown above the tab's own
+ * content as one panel with the usual change view, closed by dropping the parameter. An id that
+ * is not a whole number, or a change the person may not read, says so instead of going blank.
+ */
+export function LinkedChange({ isAdmin }: { isAdmin: boolean }) {
+  const [params, setParams] = useSearchParams()
+  const raw = params.get('change')
+  const id = raw && /^\d+$/.test(raw) ? Number(raw) : null
+  const row = useQuery({
+    queryKey: providerKeys.change(id ?? 0),
+    queryFn: () => fetchChange(id as number),
+    enabled: id != null,
+    retry: false
+  })
+  if (raw == null) return null
+  const close = () =>
+    setParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('change')
+        return next
+      },
+      { replace: true }
+    )
+  return (
+    <SectionCard
+      title={id != null ? `Change ${id}` : 'Change'}
+      actions={
+        <button type='button' className={ghostButton} onClick={close}>
+          <X className='h-3.5 w-3.5' aria-hidden /> Close
+        </button>
+      }
+    >
+      <div className='px-4 py-3'>
+        {id == null ? (
+          <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+            “{raw}” is not a change number.
+          </p>
+        ) : row.isPending ? (
+          <Skeleton className='h-16 w-full' />
+        ) : row.isError ? (
+          <ErrorNotice
+            description={providerError(row.error, 'Could not open that change')}
+            onRetry={() => void row.refetch()}
+          />
+        ) : (
+          <ChangeView
+            key={row.data.id}
+            initial={changeFromRow(row.data)}
+            isAdmin={isAdmin}
+            onClose={close}
+            onReplace={(next) => setParams({ change: String(next.changeId) }, { replace: true })}
+          />
+        )}
+      </div>
+    </SectionCard>
   )
 }
