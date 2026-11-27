@@ -69,11 +69,16 @@ function harness(routes: Route[]) {
 
 const noCalls = () => harness([])
 
-function desired(type: string, fields: Record<string, unknown>, refs = {}): DesiredResource {
+function desired(
+  type: string,
+  fields: Record<string, unknown>,
+  refs = {},
+  externalId: string | null = null
+): DesiredResource {
   return {
     resourceId: 7,
     type,
-    externalId: null,
+    externalId,
     scope: 'app',
     appId: 1,
     environmentId: 2,
@@ -404,7 +409,7 @@ describe('vercel adapter: plan', () => {
     }
     const promote = vercelAdapter.plan(
       ctx,
-      desired('vercel.deployment', { mode: 'promote' }),
+      desired('vercel.deployment', { mode: 'promote' }, { project: PRJ }),
       staged
     )
     expect(promote[0]).toMatchObject({
@@ -415,25 +420,25 @@ describe('vercel adapter: plan', () => {
     })
     const rollback = vercelAdapter.plan(
       ctx,
-      desired('vercel.deployment', { mode: 'rollback' }),
+      desired('vercel.deployment', { mode: 'rollback' }, { project: PRJ }),
       staged
     )
     expect(rollback[0].action).toBe('rollback')
     expect(
-      vercelAdapter.plan(ctx, desired('vercel.deployment', { mode: 'promote' }), {
+      vercelAdapter.plan(ctx, desired('vercel.deployment', { mode: 'promote' }, { project: PRJ }), {
         ...staged,
         fields: { ...staged.fields, production: true }
       })
     ).toEqual([])
-    expect(() => vercelAdapter.plan(ctx, desired('vercel.deployment', {}), null)).toThrow(
-      ProviderError
-    )
+    expect(() =>
+      vercelAdapter.plan(ctx, desired('vercel.deployment', {}, { project: PRJ }), null)
+    ).toThrow(ProviderError)
     expect(() => vercelAdapter.plan(ctx, null, staged)).toThrow(ProviderError)
   })
 })
 
 describe('vercel adapter: apply is idempotent (read before write)', () => {
-  it('project create: exists -> no POST; missing -> POST /v11/projects', async () => {
+  it('project create: a same-named project is refused ALREADY_EXISTS; a resumed run reuses it; missing -> POST', async () => {
     const want = desired('vercel.project', {
       name: 'web-app',
       framework: 'nextjs',
@@ -453,8 +458,17 @@ describe('vercel adapter: apply is idempotent (read before write)', () => {
     const have = harness([
       { method: 'GET', path: /^\/v9\/projects\/web-app$/, body: fx('project') }
     ])
-    const a = await vercelAdapter.apply(have.ctx, op, want)
-    expect(a.externalId).toBe(PRJ)
+    const refused = await vercelAdapter.apply(have.ctx, op, want).catch((e) => e)
+    expect(refused).toBeInstanceOf(ProviderError)
+    expect(refused.code).toBe('ALREADY_EXISTS')
+    expect(refused.retryable).toBe(false)
+    expect(have.calls.some((c) => c.method === 'POST')).toBe(false)
+    const resumed = await vercelAdapter.apply(
+      have.ctx,
+      op,
+      desired('vercel.project', { name: 'web-app' }, {}, PRJ)
+    )
+    expect(resumed.externalId).toBe(PRJ)
     expect(have.calls.some((c) => c.method === 'POST')).toBe(false)
     const fresh = harness([
       { method: 'POST', path: /^\/v11\/projects$/, status: 200, body: fx('project') }
@@ -508,7 +522,7 @@ describe('vercel adapter: apply is idempotent (read before write)', () => {
     expect(h.calls.some((c) => c.method === 'PATCH')).toBe(false)
   })
 
-  it('env var create: a same key+target already there is patched, not duplicated; value goes only in the body', async () => {
+  it('env var create: a variable the Hub did not create is refused ALREADY_EXISTS and untouched; a resumed run patches the value only', async () => {
     const want = desired(
       'vercel.env_var',
       {
@@ -534,10 +548,29 @@ describe('vercel adapter: apply is idempotent (read before write)', () => {
       { method: 'GET', path: /\/env$/, body: fx('env-list') },
       { method: 'PATCH', path: /\/env\/env_test0000000000000001$/, body: {} }
     ])
-    const a = await vercelAdapter.apply(dup.ctx, op, want)
+    const refused = await vercelAdapter.apply(dup.ctx, op, want).catch((e) => e)
+    expect(refused).toBeInstanceOf(ProviderError)
+    expect(refused.code).toBe('ALREADY_EXISTS')
+    expect(refused.retryable).toBe(false)
+    expect(refused.message).not.toContain(NEW_VALUE)
+    expect(dup.calls.some((c) => c.method === 'POST' || c.method === 'PATCH')).toBe(false)
+    // A resumed create (the resource already recorded this id) refreshes the value, never type/target.
+    const resumedWant = desired(
+      'vercel.env_var',
+      {
+        key: 'API_URL',
+        type: 'plain',
+        target: ['production'],
+        gitBranch: null,
+        value: secret(true, NEW_VALUE)
+      },
+      { project: PRJ },
+      `${PRJ}/env_test0000000000000001`
+    )
+    const a = await vercelAdapter.apply(dup.ctx, op, resumedWant)
     expect(a.externalId).toBe(`${PRJ}/env_test0000000000000001`)
     expect(dup.calls.some((c) => c.method === 'POST')).toBe(false)
-    expect(dup.calls.find((c) => c.method === 'PATCH')?.body.value).toBe(NEW_VALUE)
+    expect(dup.calls.find((c) => c.method === 'PATCH')?.body).toEqual({ value: NEW_VALUE })
     expect(JSON.stringify(a)).not.toContain(NEW_VALUE)
 
     const fresh = harness([
@@ -604,23 +637,37 @@ describe('vercel adapter: apply is idempotent (read before write)', () => {
     expect(r.ok).toBe(true)
   })
 
-  it('domain create: already added -> no POST', async () => {
+  it('domain create: already on the project -> ALREADY_EXISTS, no POST; resumed run reuses it', async () => {
     const h = harness([
       { method: 'GET', path: /\/domains\/app\.example\.com$/, body: fx('domain') }
     ])
+    const domainOp = {
+      kind: 'create',
+      type: 'vercel.domain',
+      resourceId: 7,
+      externalId: null,
+      reason: '',
+      changes: [],
+      preconditions: {},
+      risk: []
+    } as PlannedOp
+    const refused = await vercelAdapter
+      .apply(
+        h.ctx,
+        domainOp,
+        desired('vercel.domain', { name: 'app.example.com' }, { project: PRJ })
+      )
+      .catch((e) => e)
+    expect(refused.code).toBe('ALREADY_EXISTS')
     const r = await vercelAdapter.apply(
       h.ctx,
-      {
-        kind: 'create',
-        type: 'vercel.domain',
-        resourceId: 7,
-        externalId: null,
-        reason: '',
-        changes: [],
-        preconditions: {},
-        risk: []
-      },
-      desired('vercel.domain', { name: 'app.example.com' }, { project: PRJ })
+      domainOp,
+      desired(
+        'vercel.domain',
+        { name: 'app.example.com' },
+        { project: PRJ },
+        `${PRJ}/app.example.com`
+      )
     )
     expect(r.externalId).toBe(`${PRJ}/app.example.com`)
     expect(h.calls.some((c) => c.method === 'POST')).toBe(false)
@@ -651,7 +698,7 @@ describe('vercel adapter: apply is idempotent (read before write)', () => {
     const r = await vercelAdapter.apply(
       h.ctx,
       op('promote'),
-      desired('vercel.deployment', { mode: 'promote' })
+      desired('vercel.deployment', { mode: 'promote' }, { project: PRJ })
     )
     expect(r.answer).toEqual({ requested: 'promote' })
     expect(h.calls.filter((c) => c.method === 'POST').map((c) => c.path)).toEqual([
@@ -660,7 +707,7 @@ describe('vercel adapter: apply is idempotent (read before write)', () => {
     await vercelAdapter.apply(
       h.ctx,
       op('rollback'),
-      desired('vercel.deployment', { mode: 'rollback' })
+      desired('vercel.deployment', { mode: 'rollback' }, { project: PRJ })
     )
     expect(h.calls.filter((c) => c.method === 'POST').pop()?.path).toBe(
       `/v9/projects/${PRJ}/rollback/dpl_test00000000000000001`
@@ -671,10 +718,84 @@ describe('vercel adapter: apply is idempotent (read before write)', () => {
     const again = await vercelAdapter.apply(
       live.ctx,
       { ...op('promote'), externalId: 'dpl_test00000000000000002' },
-      desired('vercel.deployment', { mode: 'promote' })
+      desired('vercel.deployment', { mode: 'promote' }, { project: PRJ })
     )
     expect(again.answer).toEqual({ already: 'production' })
     expect(live.calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+})
+
+describe('vercel adapter: deployment project binding', () => {
+  const op: PlannedOp = {
+    kind: 'update',
+    type: 'vercel.deployment',
+    resourceId: 7,
+    externalId: 'dpl_test00000000000000001',
+    action: 'promote',
+    reason: '',
+    changes: [],
+    preconditions: {},
+    risk: [],
+    data: { projectId: 'prj_other' }
+  }
+  const routes: Route[] = [
+    {
+      method: 'GET',
+      path: /^\/v13\/deployments\/dpl_test00000000000000001$/,
+      body: fx('deployment-staged')
+    },
+    { method: 'POST', path: /\/promote\//, status: 201, body: {} }
+  ]
+
+  it('apply refuses PROJECT_MISMATCH when Vercel reports another project, and writes nothing', async () => {
+    const h = harness(routes)
+    const err = await vercelAdapter
+      .apply(h.ctx, op, desired('vercel.deployment', { mode: 'promote' }, { project: 'prj_other' }))
+      .catch((e) => e)
+    expect(err.code).toBe('PROJECT_MISMATCH')
+    expect(err.retryable).toBe(false)
+    expect(h.calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  it('apply refuses when the desired project ref is missing (never trusts op.data)', async () => {
+    const h = harness(routes)
+    const err = await vercelAdapter
+      .apply(h.ctx, op, desired('vercel.deployment', { mode: 'promote' }, { project: null }))
+      .catch((e) => e)
+    expect(err.code).toBe('INVALID_FIELDS')
+    expect(h.calls.some((c) => c.method === 'POST')).toBe(false)
+  })
+
+  it('plan names the project in the reason and preconditions, and refuses a mismatch', () => {
+    const { ctx } = noCalls()
+    const observed: Observed = {
+      type: 'vercel.deployment',
+      externalId: 'dpl_test00000000000000001',
+      name: 'x',
+      fields: {
+        project: PRJ,
+        projectName: 'web-app',
+        state: 'READY',
+        target: 'production',
+        checks: 'succeeded',
+        production: false
+      },
+      tags: {}
+    }
+    const [planned] = vercelAdapter.plan(
+      ctx,
+      desired('vercel.deployment', { mode: 'promote' }, { project: PRJ }),
+      observed
+    )
+    expect(planned.reason).toContain('web-app')
+    expect(planned.preconditions).toMatchObject({ project: PRJ, projectName: 'web-app' })
+    expect(() =>
+      vercelAdapter.plan(
+        ctx,
+        desired('vercel.deployment', { mode: 'promote' }, { project: 'prj_other' }),
+        observed
+      )
+    ).toThrow(/not the one/)
   })
 })
 

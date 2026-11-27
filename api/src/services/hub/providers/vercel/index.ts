@@ -80,6 +80,16 @@ function iso(ms: unknown): string | null {
   return typeof ms === 'number' ? new Date(ms).toISOString() : null
 }
 
+function alreadyExists(what: string): ProviderError {
+  return new ProviderError(
+    'ALREADY_EXISTS',
+    `${what} at Vercel. Adopt it instead of creating it.`,
+    {
+      retryable: false
+    }
+  )
+}
+
 function refId(desired: DesiredResource | null, field: string): string {
   const v = desired?.refs?.[field]
   if (typeof v === 'string' && v) return v
@@ -169,6 +179,7 @@ function deploymentObserved(d: any): Observed {
     name: d.url ?? d.name ?? id,
     fields: {
       project: d.projectId ?? null,
+      projectName: d.name ?? null,
       deploymentId: id,
       state,
       target,
@@ -666,7 +677,16 @@ function planDeployment(desired: DesiredResource | null, observed: Observed | nu
       'CAPABILITY_MISSING',
       'Deployments are made by Git or CI: the Hub can adopt, promote or roll one back, not create or delete it.'
     )
+  const wantedProject = desired.refs?.project
+  if (typeof wantedProject !== 'string' || !wantedProject)
+    throw new ProviderError('INVALID_FIELDS', 'The project this deployment belongs to is not set.')
+  if (observed.fields.project !== wantedProject)
+    throw new ProviderError(
+      'PROJECT_MISMATCH',
+      `Deployment ${observed.externalId} belongs to project ${String(observed.fields.projectName ?? observed.fields.project)}, not the one this change names.`
+    )
   if (observed.fields.production === true) return []
+  const projectName = (observed.fields.projectName as string | null) ?? wantedProject
   const mode = desired.fields.mode === 'rollback' ? 'rollback' : 'promote'
   const checks = observed.fields.checks ?? null
   const state = observed.fields.state ?? null
@@ -683,10 +703,12 @@ function planDeployment(desired: DesiredResource | null, observed: Observed | nu
       resourceId: desired.resourceId,
       externalId: observed.externalId,
       action: mode,
-      reason: `${mode === 'rollback' ? 'Roll production back to' : 'Promote'} deployment ${observed.externalId} to production.${bad}`,
+      reason: `${mode === 'rollback' ? 'Roll production back to' : 'Promote'} deployment ${observed.externalId} of project ${projectName} to production.${bad}`,
       changes: [{ field: 'production', from: false, to: true }],
       preconditions: {
         production: false,
+        project: wantedProject,
+        projectName,
         state,
         checks,
         target: observed.fields.target ?? null
@@ -760,7 +782,12 @@ async function applyProject(
   if (op.kind === 'create') {
     const name = String(desired.fields.name)
     const existing = await readProject(ctx, name)
-    if (existing) return ok(existing.externalId, existing, { already: 'exists' })
+    if (existing) {
+      // Only a resumed run (this resource already recorded that id) may reuse it.
+      if (desired.externalId === existing.externalId)
+        return ok(existing.externalId, existing, { already: 'exists' })
+      throw alreadyExists(`A project named ${name} already exists`)
+    }
     const body: Record<string, unknown> = { name }
     for (const k of PROJECT_FIELDS.slice(1))
       if (norm(desired.fields[k]) !== null) body[k] = desired.fields[k]
@@ -809,12 +836,17 @@ async function applyEnv(
         sameValue(e.fields.gitBranch, desired.fields.gitBranch)
     )
     if (existing) {
+      if (desired.externalId !== existing.externalId)
+        throw alreadyExists(
+          `Environment variable ${String(desired.fields.key)} already exists for ${(existing.fields.target as string[]).join(', ')}`
+        )
+      // A resumed create: refresh the value only, never the type or the targets.
       const [, eid] = split(existing.externalId)
       const r = await vercelCall(
         ctx,
         'PATCH',
         `/v9/projects/${encodeURIComponent(pid)}/env/${encodeURIComponent(eid)}`,
-        { ...call, body: envBody(desired, true) }
+        { ...call, body: { value: envBody(desired, true).value } }
       )
       return ok(existing.externalId, envObserved(pid, r.body ?? existing.fields), {
         already: 'exists'
@@ -881,7 +913,11 @@ async function applyDomain(
     if (!desired) throw new ProviderError('INVALID_FIELDS', 'Nothing to write.')
     const name = String(desired.fields.name)
     const existing = await readDomain(ctx, pid, name)
-    if (existing) return ok(existing.externalId, existing, { already: 'exists' })
+    if (existing) {
+      if (desired.externalId === existing.externalId)
+        return ok(existing.externalId, existing, { already: 'exists' })
+      throw alreadyExists(`Domain ${name} is already on this project`)
+    }
     const body: Record<string, unknown> = { name }
     for (const k of ['redirect', 'gitBranch'])
       if (norm(desired.fields[k]) !== null) body[k] = desired.fields[k]
@@ -925,7 +961,11 @@ async function applyDomain(
   return ok(externalId, domainObserved(pid, r.body))
 }
 
-async function applyDeployment(ctx: ProviderContext, op: PlannedOp): Promise<OpResult> {
+async function applyDeployment(
+  ctx: ProviderContext,
+  op: PlannedOp,
+  desired: DesiredResource | null
+): Promise<OpResult> {
   const action = op.action
   if (action !== 'promote' && action !== 'rollback')
     throw new ProviderError(
@@ -937,8 +977,15 @@ async function applyDeployment(ctx: ProviderContext, op: PlannedOp): Promise<OpR
   if (!have)
     throw new ProviderError('NOT_FOUND', 'The deployment no longer exists.', { status: 404 })
   if (have.fields.production === true) return ok(id, have, { already: 'production' })
-  const pid = String(have.fields.project ?? op.data?.projectId ?? '')
-  if (!pid) throw new ProviderError('INVALID_FIELDS', 'The deployment has no project.')
+  const wanted = desired?.refs?.project
+  if (typeof wanted !== 'string' || !wanted)
+    throw new ProviderError('INVALID_FIELDS', 'The project this deployment belongs to is not set.')
+  const pid = String(have.fields.project ?? '')
+  if (pid !== wanted)
+    throw new ProviderError(
+      'PROJECT_MISMATCH',
+      `Deployment ${id} belongs to a different project than the one this change names. Nothing was changed.`
+    )
   const path =
     action === 'promote'
       ? `/v10/projects/${encodeURIComponent(pid)}/promote/${encodeURIComponent(id)}`
@@ -1099,7 +1146,7 @@ export const vercelAdapter: ProviderAdapter = {
     if (op.type === TYPE_PROJECT) return applyProject(ctx, op, desired)
     if (op.type === TYPE_ENV) return applyEnv(ctx, op, desired)
     if (op.type === TYPE_DOMAIN) return applyDomain(ctx, op, desired)
-    if (op.type === TYPE_DEPLOYMENT) return applyDeployment(ctx, op)
+    if (op.type === TYPE_DEPLOYMENT) return applyDeployment(ctx, op, desired)
     throw new ProviderError('UNKNOWN_TYPE', `Vercel has no ${op.type}.`)
   },
 
