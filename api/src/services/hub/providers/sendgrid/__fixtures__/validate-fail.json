@@ -1,0 +1,9 @@
+{
+  "id": 2001,
+  "valid": false,
+  "validation_results": {
+    "mail_cname": { "valid": false, "reason": "Expected CNAME not found." },
+    "dkim1": { "valid": true, "reason": null },
+    "dkim2": { "valid": false, "reason": "Expected CNAME not found." }
+  }
+}

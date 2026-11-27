@@ -1,0 +1,8 @@
+{
+  "id": 91,
+  "description": "Nightly",
+  "ref": "refs/heads/main",
+  "cron": "0 3 * * *",
+  "cron_timezone": "UTC",
+  "active": true
+}

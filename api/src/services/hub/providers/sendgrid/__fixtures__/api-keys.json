@@ -1,0 +1,6 @@
+{
+  "result": [
+    { "name": "demo-app-mail", "api_key_id": "FakeKeyIdDemoApp0000001" },
+    { "name": "hub-connection", "api_key_id": "FakeKeyIdConnection00002" }
+  ]
+}

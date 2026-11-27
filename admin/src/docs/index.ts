@@ -61,7 +61,9 @@ export * from './sections/hub-ops.js'
 export * from './sections/hub-people.js'
 export * from './sections/hub-placement.js'
 export * from './sections/hub-providers.js'
+export * from './sections/hub-providers-cloudflare.js'
 export * from './sections/hub-providers-entra.js'
+export * from './sections/hub-providers-gitlab.js'
 export * from './sections/hub-providers-redis.js'
 export * from './sections/hub-providers-twilio.js'
 export * from './sections/hub-releases.js'
@@ -375,13 +377,21 @@ import {
   hubProvidersSentryDocs,
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
+import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
+import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
+import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
 import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
 } from './sections/hub-providers-redis.js'
+<<<<<<< HEAD
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
+=======
+import { hubProvidersSendgridDocs } from './sections/hub-providers-sendgrid.js'
+import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
+>>>>>>> hub-providers/integration
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1245,17 +1255,25 @@ export const navSections: NavGroup[] = [
       hubSecurityDocs,
       hubProvidersDocs,
       hubProvidersGithubDocs,
+      hubProvidersGitlabDocs,
       hubProvidersAwsDocs,
       hubProvidersVercelDocs,
       hubProvidersAuth0Docs,
       hubProvidersExpoDocs,
+      hubProvidersCloudflareDocs,
       hubProvidersSentryDocs,
       hubProvidersUpstashDocs,
       hubProvidersRedisCloudDocs,
       hubProvidersDockerhubDocs,
       hubProvidersNeonDocs,
       hubProvidersEntraDocs,
+<<<<<<< HEAD
       hubProvidersTwilioDocs,
+=======
+      hubProvidersSlackDocs,
+      hubProvidersPagerdutyDocs,
+      hubProvidersSendgridDocs,
+>>>>>>> hub-providers/integration
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]

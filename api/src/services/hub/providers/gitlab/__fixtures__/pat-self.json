@@ -1,0 +1,6 @@
+{
+  "id": 5,
+  "scopes": ["read_api"],
+  "active": true,
+  "expires_at": "2099-01-01"
+}

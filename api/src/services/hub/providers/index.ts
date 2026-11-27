@@ -1,14 +1,22 @@
 import { auth0Provider } from './auth0/index.js'
 import { awsProvider } from './aws/adapter.js'
+import { cloudflareProvider } from './cloudflare/index.js'
 import { dockerhubAdapter } from './dockerhub/index.js'
 import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
+import { gitlabAdapter } from './gitlab/index.js'
 import { neonAdapter } from './neon/index.js'
+import { pagerdutyAdapter } from './pagerduty/index.js'
 import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
+import { sendgridAdapter } from './sendgrid/index.js'
 import { sentryAdapter } from './sentry/index.js'
+<<<<<<< HEAD
 import { twilioAdapter } from './twilio/index.js'
+=======
+import { slackAdapter } from './slack/index.js'
+>>>>>>> hub-providers/integration
 import type { ProviderAdapter } from './types.js'
 import { upstashAdapter } from './upstash/index.js'
 import { vercelAdapter } from './vercel/index.js'
@@ -24,15 +32,23 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   // github, aws, vercel, auth0, expo adapters are appended here.
   auth0Provider,
   awsProvider,
+  cloudflareProvider,
   dockerhubAdapter,
   entraAdapter,
   expoAdapter,
   githubAdapter,
+  sendgridAdapter,
   sentryAdapter,
+<<<<<<< HEAD
   twilioAdapter,
+=======
+  slackAdapter,
+>>>>>>> hub-providers/integration
   redisCloudAdapter,
   upstashAdapter,
   neonAdapter,
+  gitlabAdapter,
+  pagerdutyAdapter,
   vercelAdapter
 ]
 

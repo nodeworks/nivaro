@@ -1,0 +1,7 @@
+{
+  "id": 31,
+  "name": "production",
+  "external_url": "https://app.example.test",
+  "tier": "production",
+  "state": "stopped"
+}

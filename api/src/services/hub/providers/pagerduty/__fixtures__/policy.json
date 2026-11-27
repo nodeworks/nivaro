@@ -1,0 +1,36 @@
+{
+  "escalation_policy": {
+    "id": "PPOL001",
+    "type": "escalation_policy",
+    "name": "checkout escalation",
+    "description": "",
+    "num_loops": 2,
+    "html_url": "https://testco.pagerduty.com/escalation_policies/PPOL001",
+    "escalation_rules": [
+      {
+        "id": "PR1",
+        "escalation_delay_in_minutes": 30,
+        "targets": [
+          {
+            "id": "PSCH001",
+            "type": "schedule_reference"
+          },
+          {
+            "id": "PUSER01",
+            "type": "user_reference"
+          }
+        ]
+      },
+      {
+        "id": "PR2",
+        "escalation_delay_in_minutes": 30,
+        "targets": [
+          {
+            "id": "PUSER02",
+            "type": "user_reference"
+          }
+        ]
+      }
+    ]
+  }
+}

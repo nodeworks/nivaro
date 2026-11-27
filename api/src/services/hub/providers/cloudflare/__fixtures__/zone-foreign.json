@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "b0000000000000000000000000000002",
+    "name": "other.test",
+    "status": "active",
+    "paused": false,
+    "name_servers": [],
+    "plan": {
+      "name": "Free Website"
+    },
+    "account": {
+      "id": "c0000000000000000000000000000002",
+      "name": "Someone Else"
+    }
+  }
+}

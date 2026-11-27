@@ -1,0 +1,33 @@
+{
+  "schedule": {
+    "id": "PSCH001",
+    "type": "schedule",
+    "name": "checkout on-call",
+    "description": "",
+    "time_zone": "America/New_York",
+    "html_url": "https://testco.pagerduty.com/schedules/PSCH001",
+    "schedule_layers": [
+      {
+        "id": "PLAY001",
+        "name": "Nivaro Hub on-call rota",
+        "start": "2026-11-23T09:00:00-05:00",
+        "rotation_virtual_start": "2026-11-23T09:00:00-05:00",
+        "rotation_turn_length_seconds": 604800,
+        "users": [
+          {
+            "user": {
+              "id": "PUSER01",
+              "type": "user_reference"
+            }
+          },
+          {
+            "user": {
+              "id": "PUSER02",
+              "type": "user_reference"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

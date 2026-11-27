@@ -1,0 +1,12 @@
+{
+  "id": 2002,
+  "name": "stranger",
+  "path": "stranger",
+  "path_with_namespace": "elsewhere/stranger",
+  "namespace": {
+    "id": 200,
+    "full_path": "elsewhere"
+  },
+  "visibility": "private",
+  "archived": false
+}

@@ -1,0 +1,21 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "name": "Staging dashboard",
+    "domain": "admin.example.test",
+    "type": "self_hosted",
+    "aud": "aud-test-0000000000000000000000000000000000000000000000000000000001",
+    "session_duration": "24h",
+    "auto_redirect_to_identity": false,
+    "policies": [
+      {
+        "id": "33333333-3333-4333-8333-333333333333",
+        "precedence": 1,
+        "name": "Staff"
+      }
+    ]
+  }
+}

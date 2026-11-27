@@ -1,0 +1,9 @@
+{
+  "id": 2001,
+  "valid": true,
+  "validation_results": {
+    "mail_cname": { "valid": true, "reason": null },
+    "dkim1": { "valid": true, "reason": null },
+    "dkim2": { "valid": true, "reason": null }
+  }
+}
