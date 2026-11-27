@@ -179,7 +179,7 @@ export async function rereadOutputs(row: HubResourceRow): Promise<string[]> {
   const conn = await openConnection(row.connection_id)
   if (!conn.adapter.readOutputs) return []
   const ctx = contextFor(conn, regionFor(conn.row.config, row.desired, row.observed))
-  const got = await conn.adapter.readOutputs(ctx, type.key, row.external_id)
+  const got = await conn.adapter.readOutputs(ctx, type.key, row.external_id, row.id)
   const keep: Record<string, string> = {}
   for (const o of want) {
     const v = got?.[o.key]

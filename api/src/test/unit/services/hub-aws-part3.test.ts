@@ -1168,7 +1168,7 @@ describe('aws part 3 Secrets Manager apply', () => {
 
   it('readOutputs: the value of a Hub-tagged secret only; an untagged one gets the ARN and nothing else', async () => {
     const h = harness({ ...secretReads(), 'secretsmanager:GetSecretValue': 'sm-get-value.json' })
-    expect(await awsProvider.readOutputs?.(h.ctx, 'aws.secret', SARN)).toEqual({
+    expect(await awsProvider.readOutputs?.(h.ctx, 'aws.secret', SARN, 41)).toEqual({
       arn: SARN,
       value: 'test-secret-value-from-sm'
     })
@@ -1176,13 +1176,17 @@ describe('aws part 3 Secrets Manager apply', () => {
       ...secretReads({ 'secretsmanager:DescribeSecret': 'sm-describe-untagged.json' }),
       'secretsmanager:GetSecretValue': 'sm-get-value.json'
     })
-    expect(await awsProvider.readOutputs?.(untagged.ctx, 'aws.secret', SARN)).toEqual({ arn: SARN })
+    expect(await awsProvider.readOutputs?.(untagged.ctx, 'aws.secret', SARN, 41)).toEqual({
+      arn: SARN
+    })
     expect(untagged.of('GetSecretValue')).toHaveLength(0)
     const pending = harness({
       ...secretReads({ 'secretsmanager:DescribeSecret': 'sm-describe-pending.json' }),
       'secretsmanager:GetSecretValue': 'sm-get-value.json'
     })
-    expect(await awsProvider.readOutputs?.(pending.ctx, 'aws.secret', SARN)).toEqual({ arn: SARN })
+    expect(await awsProvider.readOutputs?.(pending.ctx, 'aws.secret', SARN, 41)).toEqual({
+      arn: SARN
+    })
     expect(pending.of('GetSecretValue')).toHaveLength(0)
   })
 
@@ -1257,5 +1261,71 @@ describe('aws part 3 Secrets Manager apply', () => {
     })
     const err = await awsProvider.observe(h.ctx, 'aws.ecr_repository', 'shop/api').catch((e) => e)
     expect(err.message).not.toContain('test-secret-access-key-0001')
+  })
+})
+
+describe('aws part 3 row binding (security review)', () => {
+  it('another row’s Hub-tagged secret is never read: {arn} only, no GetSecretValue', async () => {
+    const h = harness({ ...secretReads(), 'secretsmanager:GetSecretValue': 'sm-get-value.json' })
+    // The fixture secret carries nivaro-hub:resource=41; this is row 99 (or no row at all).
+    expect(await awsProvider.readOutputs?.(h.ctx, 'aws.secret', SARN, 99)).toEqual({ arn: SARN })
+    expect(await awsProvider.readOutputs?.(h.ctx, 'aws.secret', SARN)).toEqual({ arn: SARN })
+    expect(h.of('GetSecretValue')).toHaveLength(0)
+  })
+
+  it('an adopted secret is never tagged managed or with a resource id', async () => {
+    const h = harness({
+      ...secretReads({ 'secretsmanager:DescribeSecret': 'sm-describe-untagged.json' }),
+      'secretsmanager:UpdateSecret': 'sm-ok.json',
+      'secretsmanager:TagResource': 'sm-ok.json',
+      'secretsmanager:PutSecretValue': 'sm-put-value.json',
+      'secretsmanager:GetSecretValue': 'sm-get-value.json'
+    })
+    const d = desired('aws.secret', secretWant, { externalId: SARN })
+    await awsProvider.apply(h.ctx, op('update', 'aws.secret', { externalId: SARN }), d)
+    const keys = (JSON.parse(h.of('TagResource')[0].body).Tags as Array<{ Key: string }>).map(
+      (t) => t.Key
+    )
+    expect(keys).not.toContain('nivaro-hub:managed')
+    expect(keys).not.toContain('nivaro-hub:resource')
+    expect(keys).toContain('nivaro-hub:recovery-days')
+    // ...and its value is still never read for this row.
+    expect(await awsProvider.readOutputs?.(h.ctx, 'aws.secret', SARN, 41)).toEqual({ arn: SARN })
+    expect(h.of('GetSecretValue')).toHaveLength(0)
+  })
+
+  it('another row’s IAM user is refused for rotate, policy rewrite and delete', async () => {
+    const h = harness(
+      userReads({
+        'iam:ListAccessKeys': 'iam-list-keys-two.xml',
+        'iam:DeleteAccessKey': 'iam-ok.xml',
+        'iam:CreateAccessKey': 'iam-create-key.xml',
+        'iam:PutUserPolicy': 'iam-ok.xml',
+        'iam:DeleteUserPolicy': 'iam-ok.xml',
+        'iam:DeleteUser': 'iam-ok.xml',
+        'ses:GET /v2/email/identities/example.com': 'ses-get-identity.json'
+      })
+    )
+    // The fixture user carries nivaro-hub:resource=41; these are row 77.
+    const d = desired(
+      'aws.ses_smtp_user',
+      { ...userWant, [ROTATE_OUTPUTS_FIELD]: true },
+      { refs: userRefs, externalId: 'shop-smtp', resourceId: 77 }
+    )
+    await expect(
+      awsProvider.apply(
+        h.ctx,
+        op('update', 'aws.ses_smtp_user', { externalId: 'shop-smtp', resourceId: 77 }),
+        d
+      )
+    ).rejects.toMatchObject({ code: 'NOT_HUB_USER' })
+    await expect(
+      awsProvider.apply(
+        h.ctx,
+        op('delete', 'aws.ses_smtp_user', { externalId: 'shop-smtp', resourceId: 77 }),
+        null
+      )
+    ).rejects.toMatchObject({ code: 'NOT_HUB_USER' })
+    expect(h.calls.filter((c) => /^(Put|Create|Delete)/.test(c.action))).toEqual([])
   })
 })

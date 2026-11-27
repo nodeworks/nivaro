@@ -75,7 +75,12 @@ export interface AwsTypeDef {
     op: PlannedOp
   ): Promise<void | { outputs?: Record<string, string> }>
   /** Outputs the provider shows again (never a `onceOnly` one). */
-  readOutputs?(ctx: ProviderContext, id: string, region: string): Promise<Record<string, string>>
+  readOutputs?(
+    ctx: ProviderContext,
+    id: string,
+    region: string,
+    resourceId?: number
+  ): Promise<Record<string, string>>
   /** Type-specific health (scan findings, sandbox mode); else the status-based default. */
   health?(
     ctx: ProviderContext,
@@ -576,14 +581,15 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
       )
     },
 
-    async readOutputs(ctx, type, externalId) {
+    async readOutputs(ctx, type, externalId, resourceId) {
       const def = defOf(type)
       if (!def.readOutputs) return {}
       return guard(ctx, null, () =>
         (def.readOutputs as NonNullable<AwsTypeDef['readOutputs']>)(
           ctx,
           externalId,
-          resolveRegion(ctx, ctx.region)
+          resolveRegion(ctx, ctx.region),
+          resourceId
         )
       )
     },
