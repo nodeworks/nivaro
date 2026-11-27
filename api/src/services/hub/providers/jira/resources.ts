@@ -228,6 +228,35 @@ function needDataCenter(ctx: ProviderContext): void {
     )
 }
 
+/**
+ * Whether a person's JQL stays inside the group the Hub wraps it in (security review): quotes
+ * closed, parentheses balanced and never closing below the top, no ORDER BY, no line breaks
+ * (a stray `)` would let `x) OR (project = OTHER` escape the project limit). Pure.
+ */
+export function jqlIsContained(jql: string): boolean {
+  if (/[\r\n]/.test(jql)) return false
+  let depth = 0
+  let quote: string | null = null
+  let outside = ''
+  for (let i = 0; i < jql.length; i++) {
+    const c = jql[i]
+    if (quote) {
+      if (c === '\\') i++
+      else if (c === quote) quote = null
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      continue
+    }
+    if (c === '(') depth++
+    else if (c === ')' && --depth < 0) return false
+    outside += c
+  }
+  if (quote || depth !== 0) return false
+  return !/\border\s+by\b/i.test(outside)
+}
+
 /** The filter the Hub writes: limited to the allowed projects, the person's JQL wrapped inside. */
 export function limitedJql(ctx: ProviderContext, userJql: string | null): string | null {
   const keys = [...projectKeysOf(ctx.config)].sort()
@@ -235,6 +264,11 @@ export function limitedJql(ctx: ProviderContext, userJql: string | null): string
   if (keys.some((k) => !PROJECT_KEY_RE.test(k)))
     throw new ProviderError('INVALID_FIELDS', 'A project key of this connection is not valid.')
   const base = `project in (${keys.map((k) => `"${k}"`).join(', ')})`
+  if (userJql && !jqlIsContained(userJql))
+    throw new ProviderError(
+      'INVALID_FIELDS',
+      'The JQL filter must have balanced quotes and parentheses and no ORDER BY: the Hub wraps it inside the project limit.'
+    )
   return userJql ? `${base} AND (${userJql})` : base
 }
 
@@ -243,7 +277,10 @@ export function filterIsLimited(ctx: ProviderContext, jql: unknown): boolean {
   if (!projectKeysOf(ctx.config).length) return true
   const base = limitedJql(ctx, null) as string
   const s = typeof jql === 'string' ? jql : ''
-  return s === base || s.startsWith(`${base} AND (`)
+  if (s === base) return true
+  const head = `${base} AND (`
+  if (!s.startsWith(head) || !s.endsWith(')')) return false
+  return jqlIsContained(s.slice(head.length, -1))
 }
 
 async function readWebhookRaw(ctx: ProviderContext, id: string): Promise<Observed | null> {

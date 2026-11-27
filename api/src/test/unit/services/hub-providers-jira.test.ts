@@ -1285,3 +1285,20 @@ describe('jira adapter: injection and project limits', () => {
     expect((await jiraAdapter.observe(ok.ctx, 'jira.webhook', '3'))?.externalId).toBe('3')
   })
 })
+
+describe('JQL containment (security review)', () => {
+  it('refuses JQL that escapes the project group', async () => {
+    const { jqlIsContained } = await import('../../../services/hub/providers/jira/resources.js')
+    expect(jqlIsContained('status = "Open"')).toBe(true)
+    expect(jqlIsContained('summary ~ "a (b)" AND (priority = High)')).toBe(true)
+    for (const bad of [
+      'x) OR (project = OTHER',
+      'status = Open)',
+      '(status = Open',
+      'summary ~ "unclosed',
+      'status = Open ORDER BY created',
+      'a = 1\n) OR (b = 2'
+    ])
+      expect(jqlIsContained(bad), bad).toBe(false)
+  })
+})
