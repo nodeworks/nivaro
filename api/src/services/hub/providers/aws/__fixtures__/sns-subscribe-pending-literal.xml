@@ -1,0 +1,1 @@
+<SubscribeResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/"><SubscribeResult><SubscriptionArn>pending confirmation</SubscriptionArn></SubscribeResult><ResponseMetadata><RequestId>req-fake-sns</RequestId></ResponseMetadata></SubscribeResponse>

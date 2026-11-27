@@ -1,0 +1,1 @@
+{"NextPageToken": "page-token-fake", "ResultsByTime": [{"TimePeriod": {"Start": "2026-11-24", "End": "2026-11-25"}, "Groups": [{"Keys": ["nivaro-hub:app$shop", "Usage"], "Metrics": {"UnblendedCost": {"Amount": "1.00", "Unit": "USD"}}}]}]}

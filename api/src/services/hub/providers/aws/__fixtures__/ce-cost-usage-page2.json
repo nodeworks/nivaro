@@ -1,0 +1,1 @@
+{"ResultsByTime": [{"TimePeriod": {"Start": "2026-11-25", "End": "2026-11-26"}, "Groups": [{"Keys": ["nivaro-hub:app$shop", "Usage"], "Metrics": {"UnblendedCost": {"Amount": "2.00", "Unit": "USD"}}}]}]}

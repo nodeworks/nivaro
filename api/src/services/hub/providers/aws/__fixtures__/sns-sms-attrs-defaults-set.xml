@@ -1,0 +1,1 @@
+<GetSMSAttributesResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/"><GetSMSAttributesResult><attributes><entry><key>MonthlySpendLimit</key><value>1</value></entry><entry><key>DefaultSMSType</key><value>Promotional</value></entry></attributes></GetSMSAttributesResult><ResponseMetadata><RequestId>req-fake-sns</RequestId></ResponseMetadata></GetSMSAttributesResponse>

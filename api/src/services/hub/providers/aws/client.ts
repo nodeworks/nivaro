@@ -81,6 +81,10 @@ export type AwsService =
   | 'secretsmanager'
   | 'ses'
   | 'iam'
+  | 'sns'
+  | 'ce'
+  | 'budgets'
+  | 'route53domains'
 
 const SIGN_NAME: Record<AwsService, string> = {
   ec2: 'ec2',
@@ -95,7 +99,11 @@ const SIGN_NAME: Record<AwsService, string> = {
   ecr: 'ecr',
   secretsmanager: 'secretsmanager',
   ses: 'ses',
-  iam: 'iam'
+  iam: 'iam',
+  sns: 'sns',
+  ce: 'ce',
+  budgets: 'budgets',
+  route53domains: 'route53domains'
 }
 // Host label before `.<region>.amazonaws.com` (ECR's is `api.ecr`, SES v2's is `email`).
 const HOST_PREFIX: Record<AwsService, string> = {
@@ -109,7 +117,8 @@ const QUERY_VERSION: Record<string, string> = {
   elbv2: '2015-12-01',
   sts: '2011-06-15',
   monitoring: '2010-08-01',
-  iam: '2010-05-08'
+  iam: '2010-05-08',
+  sns: '2010-03-31'
 }
 
 /**
@@ -119,8 +128,24 @@ const QUERY_VERSION: Record<string, string> = {
 export const AWS_PRICING_REGION = 'us-east-1'
 export const AWS_PRICING_HOST = `api.pricing.${AWS_PRICING_REGION}.amazonaws.com`
 
+/**
+ * Task 40: services that answer from ONE fixed place whatever the connection's regions: Cost
+ * Explorer and Route 53 Domains (us-east-1 only), AWS Budgets (a global host). Signed for
+ * us-east-1.
+ */
+export const AWS_FIXED_REGION = 'us-east-1'
+export const AWS_FIXED_HOSTS = [
+  `ce.${AWS_FIXED_REGION}.amazonaws.com`,
+  `route53domains.${AWS_FIXED_REGION}.amazonaws.com`,
+  'budgets.amazonaws.com'
+]
+const FIXED_SERVICES = new Set<AwsService>(['ce', 'budgets', 'route53domains'])
+
 export function awsHost(service: AwsService, region: string): string {
   if (service === 'pricing') return AWS_PRICING_HOST
+  if (service === 'budgets') return 'budgets.amazonaws.com'
+  if (FIXED_SERVICES.has(service))
+    return `${HOST_PREFIX[service]}.${AWS_FIXED_REGION}.amazonaws.com`
   // Route 53 and IAM are global: one host, signed for us-east-1.
   if (service === 'route53' || service === 'iam') return `${HOST_PREFIX[service]}.amazonaws.com`
   return `${HOST_PREFIX[service]}.${region}.amazonaws.com`
@@ -170,12 +195,25 @@ export const awsConnection: ConnectionSpec = {
       kind: 'string',
       secret: true,
       help: 'Sent with the role assumption when the role requires one.'
+    },
+    {
+      key: 'sms_countries',
+      label: 'Countries the Hub may text',
+      kind: 'string',
+      default: 'US,CA',
+      placeholder: 'US,CA',
+      help: 'Two-letter country codes, comma separated. A Hub notification number in any other country is refused (COUNTRY_NOT_ALLOWED): texts to foreign or premium numbers are how a stolen login costs money.'
     }
   ],
   hosts(config) {
     // iam.amazonaws.com: only the SES SMTP user type calls it, and only for users under the
     // /nivaro-hub/ path (the adapter checks path + tag on every call).
-    const out = new Set<string>(['route53.amazonaws.com', 'iam.amazonaws.com', AWS_PRICING_HOST])
+    const out = new Set<string>([
+      'route53.amazonaws.com',
+      'iam.amazonaws.com',
+      AWS_PRICING_HOST,
+      ...AWS_FIXED_HOSTS
+    ])
     for (const r of regionsOf(config))
       for (const s of [
         'ec2',
@@ -187,7 +225,8 @@ export const awsConnection: ConnectionSpec = {
         'monitoring',
         'ecr',
         'secretsmanager',
-        'ses'
+        'ses',
+        'sns'
       ] as AwsService[])
         out.add(awsHost(s, r))
     return [...out]
@@ -254,7 +293,10 @@ async function rawSend(
         .join('&')
     : ''
   const url = `https://${host}${req.path}${qs ? `?${qs}` : ''}`
-  const signRegion = req.service === 'route53' || req.service === 'iam' ? 'us-east-1' : req.region
+  const signRegion =
+    req.service === 'route53' || req.service === 'iam' || FIXED_SERVICES.has(req.service)
+      ? 'us-east-1'
+      : req.region
   const headers = signAwsRequest(
     {
       method: req.method,
@@ -472,7 +514,7 @@ export interface QueryOptions {
 /** One Query API action; answers the action's result object. */
 export async function awsQuery(
   ctx: ProviderContext,
-  service: 'ec2' | 'rds' | 'elbv2' | 'sts' | 'monitoring' | 'iam',
+  service: 'ec2' | 'rds' | 'elbv2' | 'sts' | 'monitoring' | 'iam' | 'sns',
   action: string,
   params: Record<string, unknown> = {},
   opts: QueryOptions = {}
@@ -557,6 +599,46 @@ export async function awsPriceList(
       headers: {
         'content-type': 'application/x-amz-json-1.1',
         'x-amz-target': `AWSPriceListService.${target}`
+      },
+      body: JSON.stringify(body)
+    })
+  )
+  try {
+    return res.text ? (JSON.parse(res.text) as Record<string, unknown>) : {}
+  } catch {
+    throw new ProviderError('AWS_BAD_ANSWER', 'AWS sent an unreadable answer.', { retryable: true })
+  }
+}
+
+// ── Fixed-place JSON services: Cost Explorer, Budgets, Route 53 Domains (Task 40) ──
+
+const FIXED_TARGET: Record<'ce' | 'budgets' | 'route53domains', string> = {
+  ce: 'AWSInsightsIndexService',
+  budgets: 'AWSBudgetServiceGateway',
+  route53domains: 'Route53Domains_v20140515'
+}
+
+/**
+ * One JSON 1.1 call to a service that has a single endpoint (never the connection's regions): Cost
+ * Explorer (billed per request by AWS), AWS Budgets, Route 53 Domains. Signed for us-east-1.
+ */
+export async function awsFixedJson(
+  ctx: ProviderContext,
+  service: 'ce' | 'budgets' | 'route53domains',
+  target: string,
+  body: Record<string, unknown>
+): Promise<Record<string, any>> {
+  const creds = await credentials(ctx)
+  const res = okAnswer(
+    ctx,
+    await rawSend(ctx, creds, {
+      service,
+      region: AWS_FIXED_REGION,
+      method: 'POST',
+      path: '/',
+      headers: {
+        'content-type': 'application/x-amz-json-1.1',
+        'x-amz-target': `${FIXED_TARGET[service]}.${target}`
       },
       body: JSON.stringify(body)
     })

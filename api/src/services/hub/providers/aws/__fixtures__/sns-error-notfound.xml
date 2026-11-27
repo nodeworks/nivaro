@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/"><Error><Type>Sender</Type><Code>NotFound</Code><Message>Topic does not exist</Message></Error><RequestId>req-fake-sns</RequestId></ErrorResponse>
