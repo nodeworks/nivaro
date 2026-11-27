@@ -18,6 +18,7 @@ import {
 } from '../services/hub/providers/engine/contract.js'
 import {
   ensureCoreProviders,
+  forgetConnectionTokens,
   getProvider,
   listProviders,
   makeProviderContext,
@@ -338,6 +339,21 @@ function checkKeys(
   return problems
 }
 
+/** The hosts a config may call, as a set; an unreadable config counts as a different one. */
+function hostsChanged(
+  adapter: ProviderAdapter,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>
+): boolean {
+  try {
+    const a = new Set(adapter.connection.hosts(before))
+    const b = new Set(adapter.connection.hosts(after))
+    return a.size !== b.size || [...a].some((h) => !b.has(h))
+  } catch {
+    return true
+  }
+}
+
 function invalid(reply: FastifyReply, problems: string[]) {
   return fail(reply, 400, 'INVALID_FIELDS', problems.join(' '), { problems })
 }
@@ -574,6 +590,24 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         problems.push(...adapter.connection.validate(config, merged))
       }
       if (problems.length) return invalid(reply, problems)
+      // A stored credential is never sent to a host it was not entered for: changing the hosts
+      // the connection may call needs every secret field typed in again, in this same request.
+      if (b.config !== undefined && hostsChanged(adapter, row.config, config)) {
+        const need = new Set(row.secret_keys)
+        for (const f of adapter.connection.fields) if (f.secret && f.required) need.add(f.key)
+        const missing = [...need].filter((k) => {
+          const v = sent[k]
+          return typeof v !== 'string' || v === '' || v === HUB_MASK
+        })
+        if (missing.length)
+          return fail(
+            reply,
+            409,
+            'SECRET_REQUIRED_ON_HOST_CHANGE',
+            `This change moves the connection to other hosts. Enter the secrets again in the same request: ${missing.join(', ')}.`,
+            { secrets: missing }
+          )
+      }
       // New credentials or settings: what the last test said no longer holds.
       if (secretsTouched || b.config !== undefined) {
         patch.status = 'untested'
@@ -582,6 +616,7 @@ export async function hubProviderRoutes(app: FastifyInstance) {
       }
       const updated = await updateConnection(row.id, patch)
       if (!updated) return notFound(reply, 'connection')
+      if (secretsTouched || b.config !== undefined) forgetConnectionTokens(row.id)
       await activityLog(
         req,
         'hub-connection-update',
@@ -615,6 +650,7 @@ export async function hubProviderRoutes(app: FastifyInstance) {
           { resources: resources.length }
         )
       await deleteConnection(row.id)
+      forgetConnectionTokens(row.id)
       await activityLog(
         req,
         'hub-connection-delete',

@@ -74,6 +74,7 @@ const migrations = [
 const { hubProviderRoutes } = await import('../../../routes/hub-providers.js')
 const { installHubCredentialGate } = await import('../../../services/hub/api/gate.js')
 const registry = await import('../../../services/hub/providers/registry.js')
+const { makeProviderContext } = await import('../../../services/hub/providers/context.js')
 const store = await import('../../../services/hub/providers/store.js')
 const { ResourceChangeError } = await import('../../../services/hub/providers/engine/contract.js')
 const { HUB_ROUTES } = await import('../../../services/hub/api/catalog.js')
@@ -118,10 +119,11 @@ function demoAdapter(testConnection?: ProviderAdapter['testConnection']): Provid
     connection: {
       fields: [
         { key: 'org', label: 'Organisation', kind: 'string', required: true },
+        { key: 'note', label: 'Note', kind: 'string' },
         { key: 'token', label: 'Token', kind: 'string', secret: true, required: true },
         { key: 'hook', label: 'Hook secret', kind: 'string', secret: true }
       ],
-      hosts: () => ['api.demo.example'],
+      hosts: (c) => [`${String(c.org ?? 'x')}.demo.example`],
       describe: (c) => `Demo ${String(c.org ?? '')}`
     },
     types: [
@@ -269,6 +271,7 @@ describe('provider types', () => {
     const demo = data.providers.find((p: { key: string }) => p.key === 'demo')
     expect(demo.connection.fields.map((f: { key: string }) => f.key)).toEqual([
       'org',
+      'note',
       'token',
       'hook'
     ])
@@ -370,13 +373,75 @@ describe('connections', () => {
     expect((await store.openConnectionSecrets({ id: c.id })).token).toBe(SECRET)
     // An optional one can be cleared; config merges.
     const ok = await inject('PATCH', `/connections/${c.id}`, {
-      config: { org: 'acme2' },
+      config: { note: 'acme2' },
       secrets: { hook: null }
     })
     expect(ok.statusCode).toBe(200)
-    expect(ok.json().data.config.org).toBe('acme2')
+    expect(ok.json().data.config.note).toBe('acme2')
     expect(ok.json().data.secret_keys).toEqual(['token'])
     expect(ok.json().data.status).toBe('untested')
+  })
+
+  it('a host change needs every secret again; any change forgets the cached tokens', async () => {
+    const c = await makeConnection()
+    const adapter = registry.getProvider('demo') as ProviderAdapter
+    const seed = async () => {
+      const ctx = makeProviderContext({
+        adapter,
+        connectionId: c.id,
+        config: { org: 'acme' },
+        secrets: await store.openConnectionSecrets({ id: c.id })
+      })
+      ctx.tokens.set('t', 'test-token-0001', new Date(Date.now() + 3_600_000))
+      return ctx
+    }
+    const cached = async () => {
+      const ctx = makeProviderContext({
+        adapter,
+        connectionId: c.id,
+        config: { org: 'acme' },
+        secrets: await store.openConnectionSecrets({ id: c.id })
+      })
+      return ctx.tokens.get('t')
+    }
+    await seed()
+    // Other host, no secrets: refused, nothing changed, tokens kept.
+    const refused = await inject('PATCH', `/connections/${c.id}`, { config: { org: 'evil' } })
+    expect(refused.statusCode).toBe(409)
+    expect(refused.json().code).toBe('SECRET_REQUIRED_ON_HOST_CHANGE')
+    expect((await store.readConnection(c.id))?.config.org).toBe('acme')
+    expect(await cached()).toBe('test-token-0001')
+    // The mask does not count as re-sending.
+    const masked = await inject('PATCH', `/connections/${c.id}`, {
+      config: { org: 'evil' },
+      secrets: { token: '••••••' }
+    })
+    expect(masked.statusCode).toBe(409)
+    // With the secret typed again: 200, tokens forgotten.
+    const ok = await inject('PATCH', `/connections/${c.id}`, {
+      config: { org: 'other' },
+      secrets: { token: SECRET2 }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(ok.body).not.toContain(SECRET2)
+    expect(await cached()).toBeNull()
+    // A change that keeps the hosts: 200 without secrets, tokens forgotten.
+    await seed()
+    const plain = await inject('PATCH', `/connections/${c.id}`, { config: { note: 'hi' } })
+    expect(plain.statusCode).toBe(200)
+    expect(await cached()).toBeNull()
+    // Delete forgets too.
+    const d = await makeConnection('D')
+    const dctx = () =>
+      makeProviderContext({
+        adapter,
+        connectionId: d.id,
+        config: { org: 'acme' },
+        secrets: { token: SECRET }
+      })
+    dctx().tokens.set('t', 'test-token-0002', new Date(Date.now() + 3_600_000))
+    expect((await inject('DELETE', `/connections/${d.id}`)).statusCode).toBe(200)
+    expect(dctx().tokens.get('t')).toBeNull()
   })
 
   it('delete is refused while resources exist, then works', async () => {
