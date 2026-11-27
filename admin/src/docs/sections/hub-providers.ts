@@ -499,6 +499,49 @@ export const hubProvidersExpoDocs: DocSection = {
   ]
 }
 
+export const hubProvidersDockerhubDocs: DocSection = {
+  id: 'hub-providers-dockerhub',
+  label: 'Provider: Docker Hub',
+  content: [
+    { type: 'h1', id: 'hub-providers-dockerhub', text: 'Provider: Docker Hub — Hub mode only' },
+    {
+      type: 'p',
+      text: 'Connection fields: `username`, `namespace` (the user or organization whose repositories the Hub may manage; pinned on every read and write, anything else is `DOCKERHUB_OUT_OF_ACCOUNT`) and a secret `token` (a personal or organization access token). The hosts are `hub.docker.com`, `auth.docker.io` and `registry-1.docker.io`. The Hub trades the token for a short login token, keeps it in memory per connection and mints a new one once on a 401. Docker Hub cannot list a token’s scopes, so Test proves read access and whether the namespace is an organization; write and delete access is proven when a change is applied.'
+    },
+    {
+      type: 'table',
+      head: ['Type', 'Provider id', 'What it does'],
+      rows: [
+        [
+          '`dockerhub.repository`',
+          '`<namespace>/<name>`',
+          'Name (set at create only), private flag, short and long description. Private by default; a create as public, or private → public, is `public_exposure`. Delete is `destructive` + `data_loss` (every tag goes with it) and is refused (`REPO_PINNED`) for the repository that holds the Hub image while a Hub pin uses it. A create that finds a repository the Hub did not make is `ALREADY_EXISTS`: adopt it.'
+        ],
+        [
+          '`dockerhub.repo_team_permission`',
+          '`<namespace>/<repo>/<team>`',
+          'Gives an existing organization team read, write or admin on one repository. The team itself is read only (`TEAM_NOT_FOUND` when it does not exist). Organizations only. Delete is `destructive`.'
+        ],
+        [
+          '`dockerhub.tag`',
+          '`<namespace>/<repo>/<tag>`',
+          'List, adopt and delete only: tags are pushed with docker. Delete is `destructive` + `data_loss`. A tag a Hub image pin uses (an environment or shared deployment pinned to that version, or its `-slim` twin) is refused with `TAG_PINNED`; if the pins cannot be read the delete fails closed (`PINS_UNREADABLE`, retryable).'
+        ]
+      ]
+    },
+    {
+      type: 'ul',
+      items: [
+        'Health per repository: tag count, last push and pull count; a repository with no image yet warns.',
+        'The tag list is the read-only feed the image pin picker may use; the Hub’s own pin reads are unchanged.',
+        'Costs: Docker bills the account plan, not each repository. A public repository is free, the first private one is covered by the free plan, and more need Pro or Team (dated list prices shown in the estimate note). The estimate never adds a charge for the repository itself.',
+        'The adapter has no outputs and sends no messages.',
+        'Needs a live check: endpoint paths (`/v2/namespaces/…`, `/v2/repositories/…/groups`, `/v2/auth/token`) were written from the Docker Hub API reference and not run. Confirm the team-permission calls and the login-token endpoint on a throwaway organization.'
+      ]
+    }
+  ]
+}
+
 export const hubProvidersHooksDocs: DocSection = {
   id: 'hub-providers-hooks',
   label: 'Outside services in Hub flows',

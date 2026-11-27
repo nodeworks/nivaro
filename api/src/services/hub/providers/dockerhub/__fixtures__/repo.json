@@ -1,0 +1,10 @@
+{
+  "name": "nivaro-app",
+  "namespace": "testorg",
+  "description": "Test image",
+  "full_description": "Long test description",
+  "is_private": true,
+  "pull_count": 42,
+  "star_count": 1,
+  "last_updated": "2026-11-20T10:00:00.000000Z"
+}

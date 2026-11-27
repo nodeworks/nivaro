@@ -1,0 +1,5 @@
+{
+  "count": 1,
+  "next": null,
+  "results": [{ "group_id": 501, "group_name": "builders", "permission": "write" }]
+}
