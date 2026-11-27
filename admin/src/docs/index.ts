@@ -386,6 +386,7 @@ import { hubProvidersAcmeDocs } from './sections/hub-providers-acme.js'
 import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
 import { hubProvidersAwsPart3Docs } from './sections/hub-providers-aws-part3.js'
 import { hubProvidersAwsPart4Docs } from './sections/hub-providers-aws-part4.js'
+import { hubProvidersAzureDocs } from './sections/hub-providers-azure.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersCostsFeedDocs } from './sections/hub-providers-costs-feed.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
@@ -397,7 +398,6 @@ import { hubProvidersMailgunDocs } from './sections/hub-providers-mailgun.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
-import { hubProvidersAzureDocs } from './sections/hub-providers-azure.js'
 import { hubProvidersPortainerDocs } from './sections/hub-providers-portainer.js'
 import {
   hubProvidersRedisCloudDocs,
@@ -410,6 +410,7 @@ import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
 import { hubProvidersOutputsDocs, hubProvidersRulesDocs } from './sections/hub-providers-wave2.js'
+import { hubProvidersWave2HooksDocs } from './sections/hub-providers-wave2-hooks.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1308,6 +1309,7 @@ export const navSections: NavGroup[] = [
       hubProvidersAcmeDocs,
       hubProvidersCostsFeedDocs,
       hubProvidersHooksDocs,
+      hubProvidersWave2HooksDocs,
       hubProvidersApiDocs
     ]
   },

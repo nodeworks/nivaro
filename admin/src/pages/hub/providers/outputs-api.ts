@@ -61,6 +61,7 @@ export type NotifyEventKey =
   | 'deploy.finished'
   | 'deploy.failed'
   | 'incident.opened'
+  | 'incident.updated'
   | 'incident.resolved'
   | 'approval.needed'
   | 'drift.found'

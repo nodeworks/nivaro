@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { runInBackgroundPool } from '../../../db/pool-context.js'
@@ -26,6 +27,7 @@ export type HubNotifyEvent =
   | 'deploy.finished'
   | 'deploy.failed'
   | 'incident.opened'
+  | 'incident.updated'
   | 'incident.resolved'
   | 'approval.needed'
   | 'drift.found'
@@ -39,6 +41,7 @@ export const HUB_NOTIFY_EVENTS: readonly HubNotifyEvent[] = [
   'deploy.finished',
   'deploy.failed',
   'incident.opened',
+  'incident.updated',
   'incident.resolved',
   'approval.needed',
   'drift.found',
@@ -53,6 +56,7 @@ export const NOTIFY_EVENT_LABELS: Record<HubNotifyEvent, string> = {
   'deploy.finished': 'Deploy finished',
   'deploy.failed': 'Deploy failed',
   'incident.opened': 'Incident opened',
+  'incident.updated': 'Incident updated',
   'incident.resolved': 'Incident resolved',
   'approval.needed': 'Approval needed',
   'drift.found': 'Drift found',
@@ -67,6 +71,7 @@ const SEVERITY: Record<HubNotifyEvent, NotifySeverity> = {
   'deploy.finished': 'info',
   'deploy.failed': 'critical',
   'incident.opened': 'critical',
+  'incident.updated': 'warning',
   'incident.resolved': 'info',
   'approval.needed': 'warning',
   'drift.found': 'warning',
@@ -341,6 +346,132 @@ export async function updateNotifyRoute(
 
 export async function deleteNotifyRoute(id: number): Promise<void> {
   await db(NOTIFY_ROUTES).where({ id }).del()
+  await forgetRouteThreads(id)
+}
+
+// ── Thread memory (Task 33) ──
+//
+// A sender that threads (Slack) answers the id of the first message it posted for a dedupKey
+// (`answer.threadRef`); the Hub keeps it per route + dedupKey so an update or resolve after a Hub
+// restart still replies in that thread. Kept without a migration as `nivaro_extension_settings`
+// rows of extension `nivaro-hub` (the home of the `costs` setting too), key
+// `notify-thread:<route>:<sha256(dedupKey) first 24 hex>`, value `{"ref","key","at"}`. A resolve
+// forgets it; rows untouched for 30 days are dropped on the next write; deleting the route drops
+// its rows.
+
+export const THREAD_SETTINGS_EXT = 'nivaro-hub'
+const THREAD_PREFIX = 'notify-thread:'
+const THREAD_KEEP_MS = 30 * 24 * 3600_000
+const THREAD_REF_RE = /^[A-Za-z0-9._:-]{1,200}$/
+const SETTINGS = 'nivaro_extension_settings'
+
+export function threadKeyOf(routeId: number, dedupKey: string): string {
+  const h = createHash('sha256').update(dedupKey).digest('hex').slice(0, 24)
+  return `${THREAD_PREFIX}${routeId}:${h}`
+}
+
+/** The thread a route's earlier message for this dedupKey started, or null. Never throws. */
+export async function readThreadRef(routeId: number, dedupKey: string): Promise<string | null> {
+  try {
+    const row = (await db(SETTINGS)
+      .where({ extension_id: THREAD_SETTINGS_EXT, key: threadKeyOf(routeId, dedupKey) })
+      .first('value', 'updated_at')) as { value: string | null; updated_at: unknown } | undefined
+    if (!row?.value) return null
+    const v = JSON.parse(row.value) as { ref?: unknown; key?: unknown }
+    // The hash names the row; the stored key proves it is this dedupKey's thread, never another's.
+    if (v.key !== dedupKey || typeof v.ref !== 'string' || !THREAD_REF_RE.test(v.ref)) return null
+    const at = iso(row.updated_at)
+    if (at && Date.now() - Date.parse(at) > THREAD_KEEP_MS) return null
+    return v.ref
+  } catch {
+    return null
+  }
+}
+
+/** Remembers (or, with null, forgets) a route's thread for a dedupKey. Never throws. */
+export async function writeThreadRef(
+  routeId: number,
+  dedupKey: string,
+  ref: string | null
+): Promise<void> {
+  const key = threadKeyOf(routeId, dedupKey)
+  try {
+    if (ref == null || !THREAD_REF_RE.test(ref)) {
+      await db(SETTINGS).where({ extension_id: THREAD_SETTINGS_EXT, key }).del()
+      return
+    }
+    const now = new Date()
+    const value = JSON.stringify({ ref, key: dedupKey, at: now.toISOString() })
+    const n = await db(SETTINGS)
+      .where({ extension_id: THREAD_SETTINGS_EXT, key })
+      .update({ value, updated_at: now })
+    if (!n)
+      await db(SETTINGS)
+        .insert({ extension_id: THREAD_SETTINGS_EXT, key, value, updated_at: now })
+        .catch(() =>
+          // Another send of the same key won the insert: take its row.
+          db(SETTINGS)
+            .where({ extension_id: THREAD_SETTINGS_EXT, key })
+            .update({ value, updated_at: now })
+        )
+    await db(SETTINGS)
+      .where({ extension_id: THREAD_SETTINGS_EXT })
+      .where('key', 'like', `${THREAD_PREFIX}%`)
+      .where('updated_at', '<', new Date(now.getTime() - THREAD_KEEP_MS))
+      .del()
+  } catch {
+    // Memory only: the next message starts a new thread.
+  }
+}
+
+async function forgetRouteThreads(routeId: number): Promise<void> {
+  await db(SETTINGS)
+    .where({ extension_id: THREAD_SETTINGS_EXT })
+    .where('key', 'like', `${THREAD_PREFIX}${routeId}:%`)
+    .del()
+    .catch(() => undefined)
+}
+
+// ── Audience (Task 33) ──
+
+const MAX_AUDIENCE = 50
+const EMAIL_RE = /^[^\s@,;<>()"]+@[^\s@,;<>()"]+\.[^\s@,;<>()"]+$/
+
+/**
+ * The people an email sender mails for a route: a Hub-wide route → the active Hub administrators;
+ * an app route → the app's active owners (its Hub administrators when it has none, so the message
+ * reaches someone). People only (never machine accounts), valid addresses, no repeats, at most 50.
+ */
+export async function routeAudience(
+  route: Pick<NotifyRouteRow, 'scope' | 'app_id'>
+): Promise<string[]> {
+  const people = () =>
+    db('nivaro_users as u').where('u.status', 'active').whereNull('u.account_kind')
+  const admins = async () =>
+    (await people()
+      .join('nivaro_roles as r', 'r.id', 'u.role')
+      .where('r.admin_access', true)
+      .orderBy('u.email', 'asc')
+      .limit(100)
+      .select('u.email')) as Array<{ email: unknown }>
+  let rows: Array<{ email: unknown }>
+  if (route.scope === 'app' && route.app_id != null) {
+    rows = (await people()
+      .join('nivaro_hub_app_owners as o', 'o.user_id', 'u.id')
+      .where('o.app_id', route.app_id)
+      .orderBy('u.email', 'asc')
+      .limit(100)
+      .select('u.email')) as Array<{ email: unknown }>
+    if (!rows.length) rows = await admins()
+  } else rows = await admins()
+  const out: string[] = []
+  for (const r of rows) {
+    const e = typeof r.email === 'string' ? r.email.trim() : ''
+    if (!e || e.length > 254 || !EMAIL_RE.test(e)) continue
+    if (!out.some((o) => o.toLowerCase() === e.toLowerCase())) out.push(e)
+    if (out.length >= MAX_AUDIENCE) break
+  }
+  return out
 }
 
 // ── Sending ──
@@ -446,13 +577,24 @@ export async function sendToRoute(
     const send = conn.adapter.notify
     if (!send)
       return done({ routeId: route.id, ok: false, code: 'NOT_A_SENDER', error: 'Not a sender.' })
+    // Task 33: the route's audience for an email sender (its own list, when set, wins in the
+    // adapter); the remembered thread of this dedupKey on this route.
+    const type = conn.adapter.types.find((t) => t.key === res.type)
+    const out: OutboundMessage = { ...msg }
+    delete out.recipients
+    delete out.threadRef
+    if (type?.audience === 'email') out.recipients = await routeAudience(route)
+    if (out.dedupKey) {
+      const ref = await readThreadRef(route.id, out.dedupKey)
+      if (ref) out.threadRef = ref
+    }
     const timeout = new Promise<'timeout'>((resolve) => {
       timer = setTimeout(() => {
         ctl.abort()
         resolve('timeout')
       }, seams.timeoutMs)
     })
-    const answer = await Promise.race([send.call(conn.adapter, ctx, res, msg), timeout])
+    const answer = await Promise.race([send.call(conn.adapter, ctx, res, out), timeout])
     if (answer === 'timeout')
       return done({
         routeId: route.id,
@@ -467,6 +609,12 @@ export async function sendToRoute(
         code: answer?.error?.code ?? 'PROVIDER_ERROR',
         error: answer?.error?.message ?? 'The provider refused the message.'
       })
+    if (out.dedupKey) {
+      const ref = answer.answer?.threadRef
+      if (out.action === 'resolve') await writeThreadRef(route.id, out.dedupKey, null)
+      else if (typeof ref === 'string' && ref !== out.threadRef)
+        await writeThreadRef(route.id, out.dedupKey, ref)
+    }
     return done({ routeId: route.id, ok: true })
   } catch (e) {
     const code =

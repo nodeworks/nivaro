@@ -95,6 +95,12 @@ export interface CreationMade {
   variables?: Record<string, string>
   /** Task 11a: connection id → the resource change the providers step planned for it. */
   provider_changes?: Record<string, number>
+  /**
+   * Task 33: the sign-in issuer of the Entra tenant whose app registration the providers step
+   * made for this environment (its client id + secret are bound to the stack); the stack step
+   * writes it as OIDC_ISSUER.
+   */
+  entra_issuer?: string
 }
 
 /** The keys of `made` shared by every environment of an app (written to all its rows). */

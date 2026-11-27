@@ -412,7 +412,8 @@ export async function hubRecordBlockers(
   deleted: HubResourceRow[],
   appId: number | null
 ): Promise<Array<{ code: string; message: string }>> {
-  const rds = deleted.filter((r) => r.type === 'aws.rds_instance')
+  // Task 33: a Neon branch may be a database server too.
+  const rds = deleted.filter((r) => r.type === 'aws.rds_instance' || r.type === 'neon.branch')
   if (!rds.length) return []
   const out: Array<{ code: string; message: string }> = []
   try {
@@ -441,7 +442,7 @@ export async function hubRecordBlockers(
       if (foreign)
         out.push({
           code: 'SHARED_IN_USE',
-          message: `Database server ${s.name} is this RDS instance, and it still holds databases of other apps (or of no environment). Move or drop them first.`
+          message: `Database server ${s.name} is this ${rds.some((r) => r.type === 'neon.branch') ? 'database resource' : 'RDS instance'}, and it still holds databases of other apps (or of no environment). Move or drop them first.`
         })
     }
   } catch {

@@ -2786,7 +2786,7 @@ export const HUB_ROUTES: HubRoute[] = [
     'Security',
     'owner',
     'read',
-    'Pinned images and their open findings'
+    'Pinned images and their open findings, plus each managed ECR repository’s latest scan counts (`repositories`, source ecr)'
   ),
   r(
     'POST',

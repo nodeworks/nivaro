@@ -50,6 +50,8 @@ const MEMBER_PAGES = 5
 const MEMBER_EMAIL_CAP = 100
 const WORKSPACE_TTL_MS = 10 * 60 * 1000
 const THREAD_TTL_MS = 14 * 24 * 60 * 60 * 1000
+/** A Slack message timestamp (`1712345678.000100`). */
+const TS_RE = /^\d{9,12}\.\d{1,8}$/
 
 type Obj = Record<string, unknown>
 
@@ -789,7 +791,11 @@ async function notifyChannel(
     await assertWorkspace(ctx)
     const channel = channelSeg(resource.external_id)
     const threadKey = msg.dedupKey ? `thread:${channel}:${msg.dedupKey}`.slice(0, 250) : null
-    const threadTs = threadKey ? ctx.tokens.get(threadKey) : null
+    // Task 33: the thread the engine remembered (survives a Hub restart) first, else this
+    // process's own memory. Only a Slack message ts shape is ever sent back as thread_ts.
+    const remembered =
+      msg.dedupKey && msg.threadRef && TS_RE.test(msg.threadRef) ? msg.threadRef : null
+    const threadTs = remembered ?? (threadKey ? ctx.tokens.get(threadKey) : null)
     const text = `${msg.title}${msg.body ? `: ${msg.body}` : ''}`.slice(0, 3000)
     const r = await slackCall(ctx, 'chat.postMessage', {
       channel,
@@ -809,7 +815,14 @@ async function notifyChannel(
       ok: true,
       externalId: channel,
       observed: null,
-      answer: { ts, threaded: Boolean(threadTs) }
+      answer: {
+        ts,
+        threaded: Boolean(threadTs),
+        // The engine keeps the thread's first message per route + dedupKey (Task 33).
+        ...(msg.dedupKey && msg.action !== 'resolve' && (threadTs ?? ts)
+          ? { threadRef: threadTs ?? ts }
+          : {})
+      }
     }
   } catch (err) {
     if (err instanceof ProviderError)

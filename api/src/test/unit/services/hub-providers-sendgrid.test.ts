@@ -999,6 +999,29 @@ describe('sendgrid adapter: notify', () => {
     expect(post.body.content[0].value).toContain('https://hub.example.com/hub/releases')
   })
 
+  it('with no list of its own, mails the route audience the engine resolved (Task 33)', async () => {
+    const { ctx, calls } = harness([
+      { method: 'GET', path: /verified_senders$/, body: fx('verified-senders') },
+      { method: 'POST', path: /mail\/send$/, status: 202, body: '' }
+    ])
+    await sendgridAdapter.notify!(ctx, row({ desired: senderFields() }), {
+      ...msg,
+      recipients: ['ada@example.com', 'owen@example.com']
+    })
+    const post = calls.find((c) => c.method === 'POST')!
+    expect(post.body.personalizations).toEqual([
+      { to: [{ email: 'ada@example.com' }] },
+      { to: [{ email: 'owen@example.com' }] }
+    ])
+    // The audience is checked like the list: a bad address refuses the send.
+    await expect(
+      sendgridAdapter.notify!(ctx, row({ desired: senderFields() }), {
+        ...msg,
+        recipients: ['not an address']
+      })
+    ).rejects.toMatchObject({ code: 'INVALID_FIELDS' })
+  })
+
   it('maps 429 to retryable', async () => {
     const { ctx } = harness([
       { method: 'GET', path: /verified_senders$/, body: fx('verified-senders') },
