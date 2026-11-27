@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { PlanBeforeAfter } from '../costs/StackEstimate'
 import { hubToast } from '../hub-api'
 import {
   type ChipTone,
@@ -1031,6 +1032,7 @@ function PlanView({ plan }: { plan: ScalePlan }) {
       {plan.warnings.length > 0 && (
         <Notice tone='quiet' title='Good to know' items={plan.warnings} />
       )}
+      <PlanBeforeAfter cost={plan.cost} />
       <ConnectionsTable c={plan.connections} />
     </div>
   )

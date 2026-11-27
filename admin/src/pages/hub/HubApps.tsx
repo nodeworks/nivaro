@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+import { AppCostChip } from './costs/RowCosts'
 import { HubCreateApp } from './create/HubCreateApp'
 import { HubAdoptForm } from './HubAdoptForm'
 import { EnvStatusDot, HubAppDetail } from './HubAppDetail'
@@ -185,13 +186,12 @@ function AppListItem({
           {app.key}
         </code>
       </div>
-      {envs.length > 0 && (
-        <div className='mt-1.5 flex flex-wrap gap-1'>
-          {envs.map((e) => (
-            <EnvStatusDot key={e.id} env={e} />
-          ))}
-        </div>
-      )}
+      <div className='mt-1.5 flex flex-wrap items-center gap-1 empty:hidden'>
+        {envs.map((e) => (
+          <EnvStatusDot key={e.id} env={e} />
+        ))}
+        <AppCostChip appId={app.id} />
+      </div>
     </button>
   )
 }

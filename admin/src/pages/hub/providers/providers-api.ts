@@ -7,6 +7,7 @@ import {
 import type { DataTag } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import type { OpCost, PlanCostTotal } from '../costs/cost-api'
 import { HUB_MASK, hubError } from '../hub-api'
 
 /**
@@ -85,6 +86,8 @@ export interface ResourceTypeInfo {
   refs: ResourceTypeRef[]
   name_field: string
   has_cost_class: boolean
+  /** Task 44a: the type answers a cost estimate (absent on an older Hub). */
+  has_estimate?: boolean
   /** Task 13: values the provider hands out (absent on an older Hub). */
   outputs?: Array<{ key: string; label: string; secret: boolean; onceOnly?: boolean }>
   /** Task 13: its resources send messages (notify routes may name them). */
@@ -173,6 +176,8 @@ export interface PlannedOp {
   risk: RiskFlag[]
   action?: string
   data?: Record<string, unknown>
+  /** Task 44a: what it costs now → after this op (list prices; never part of the plan hash). */
+  cost?: OpCost
 }
 
 export interface SnapshotRef {
@@ -254,6 +259,7 @@ export interface ChangePlan {
   needsConfirm: string | null
   needsApproval: boolean
   blockers: ChangeBlocker[]
+  costTotal?: PlanCostTotal | null
 }
 
 export interface ChangeStep {
@@ -279,6 +285,8 @@ export interface StoredChangePlan {
   resourceIds: Array<number | null>
   /** Which request op each computed op came from (when the engine reordered them). */
   sources?: number[]
+  /** The estimate the plan showed, and when its prices were read. */
+  costTotal?: PlanCostTotal | null
 }
 
 // ─── Rows (store.ts, as the routes answer them) ──────────────────────────────
@@ -368,6 +376,8 @@ export interface ChangeModel {
   createdAt: string | null
   /** The server's answer to "would resume run it" (a stored change); undefined for a fresh plan. */
   resumable?: boolean
+  /** Task 44a: the plan's cost totals (null on an older Hub or a plan with no costed op). */
+  costTotal: PlanCostTotal | null
 }
 
 export function changeFromPlan(p: ChangePlan): ChangeModel {
@@ -388,7 +398,8 @@ export function changeFromPlan(p: ChangePlan): ChangeModel {
     scope: null,
     appId: null,
     environmentId: null,
-    createdAt: null
+    createdAt: null,
+    costTotal: p.costTotal ?? null
   }
 }
 
@@ -411,6 +422,7 @@ export function changeFromRow(r: HubResourceChange): ChangeModel {
     appId: r.app_id,
     environmentId: r.environment_id,
     createdAt: r.created_at,
+    costTotal: r.plan?.costTotal ?? null,
     ...(typeof r.resumable === 'boolean' ? { resumable: r.resumable } : {})
   }
 }

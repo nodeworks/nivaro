@@ -30,6 +30,11 @@ globalThis.ResizeObserver ??= class {
 
 const { ResourceForm } = await import('./ResourceForm')
 
+// The running cost estimate (Task 44c) also POSTs, to /hub/providers/estimate: the plan's own
+// calls are the ones to /hub/resources/plan.
+const planCalls = () =>
+  h.post.mock.calls.filter((c) => c[0] === '/hub/resources/plan') as Array<[string, unknown]>
+
 const type = {
   key: 'aws.security_group',
   label: 'Security group',
@@ -171,7 +176,7 @@ describe('ResourceForm', () => {
     mount()
     fireEvent.click(screen.getByRole('button', { name: 'Plan change' }))
     expect(await screen.findByText('Required')).toBeTruthy()
-    expect(h.post).not.toHaveBeenCalled()
+    expect(planCalls()).toHaveLength(0)
   })
 
   it('plans a create with the values typed, list items included', async () => {
@@ -185,8 +190,8 @@ describe('ResourceForm', () => {
     })
     fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'test-secret-k' } })
     fireEvent.click(screen.getByRole('button', { name: 'Plan change' }))
-    await waitFor(() => expect(h.post).toHaveBeenCalled())
-    const [url, body] = h.post.mock.calls[0] as [string, Record<string, unknown>]
+    await waitFor(() => expect(planCalls().length).toBeGreaterThan(0))
+    const [url, body] = planCalls()[0] as [string, Record<string, unknown>]
     expect(url).toBe('/hub/resources/plan')
     expect(body).toEqual({
       connectionId: 2,
@@ -232,8 +237,8 @@ describe('ResourceForm', () => {
     expect(plan1.disabled).toBe(true)
     fireEvent.change(screen.getByLabelText('Max rules'), { target: { value: '6' } })
     fireEvent.click(plan1)
-    await waitFor(() => expect(h.post).toHaveBeenCalled())
-    const body = h.post.mock.calls[0]?.[1] as { ops: Array<Record<string, unknown>> }
+    await waitFor(() => expect(planCalls().length).toBeGreaterThan(0))
+    const body = planCalls()[0]?.[1] as { ops: Array<Record<string, unknown>> }
     expect(body.ops).toEqual([{ action: 'update', resourceId: 9, fields: { max_rules: 6 } }])
   })
 
@@ -325,8 +330,8 @@ describe('a field that picks from the connection (Task 3b C)', () => {
     await waitFor(() => expect(region.textContent).toContain('eu-west-1'))
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'hub-shared-2' } })
     fireEvent.click(screen.getByRole('button', { name: 'Plan change' }))
-    await waitFor(() => expect(h.post).toHaveBeenCalled())
-    expect(h.post.mock.calls[0]?.[1]).toMatchObject({
+    await waitFor(() => expect(planCalls().length).toBeGreaterThan(0))
+    expect(planCalls()[0]?.[1]).toMatchObject({
       scope: 'shared',
       ops: [
         { action: 'create', type: 'aws.vpc', fields: { region: 'eu-west-1', name: 'hub-shared-2' } }

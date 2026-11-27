@@ -20,6 +20,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { UserCombobox } from '@/components/user-combobox'
 import { api } from '@/lib/api'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { EnvironmentCostChip } from './costs/RowCosts'
 import { HubCreationPanel } from './create/HubCreationPanel'
 import { HubStackPanel } from './docker/HubStackPanel'
 import {
@@ -742,12 +743,15 @@ function EnvRow({
         <td className='truncate px-4 py-2.5 font-mono text-[12px] font-medium text-slate-800 dark:text-foreground'>
           {env.key}
           <HubEnvTag envKey={env.key} className='ml-1.5 align-[1px]' />
-          {(row.placementText || row.badge) && (
-            <div className='mt-0.5 flex flex-wrap gap-1'>
-              <PlacementChip text={row.placementText} shared={row.isShared} />
-              <MoveBadgeChip env={env} row={row} />
-            </div>
-          )}
+          <div className='mt-0.5 flex flex-wrap gap-1 empty:hidden'>
+            {(row.placementText || row.badge) && (
+              <>
+                <PlacementChip text={row.placementText} shared={row.isShared} />
+                <MoveBadgeChip env={env} row={row} />
+              </>
+            )}
+            <EnvironmentCostChip appId={app.id} envId={env.id} />
+          </div>
         </td>
         <td className='max-w-[280px] px-4 py-2.5'>
           <a
@@ -875,12 +879,15 @@ function EnvItem({
         <HubEnvTag envKey={env.key} />
         <EnvStatus status={row.status} />
       </div>
-      {(row.placementText || row.badge) && (
-        <div className='mt-1 flex flex-wrap items-center gap-1'>
-          <PlacementChip text={row.placementText} shared={row.isShared} />
-          <MoveBadgeChip env={env} row={row} />
-        </div>
-      )}
+      <div className='mt-1 flex flex-wrap items-center gap-1 empty:hidden'>
+        {(row.placementText || row.badge) && (
+          <>
+            <PlacementChip text={row.placementText} shared={row.isShared} />
+            <MoveBadgeChip env={env} row={row} />
+          </>
+        )}
+        <EnvironmentCostChip appId={app.id} envId={env.id} />
+      </div>
       <p className='m-0 mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-slate-500 dark:text-muted-foreground'>
         <a
           href={env.base_url}

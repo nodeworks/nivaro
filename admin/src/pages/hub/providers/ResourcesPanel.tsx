@@ -8,6 +8,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { ResourceCostChip } from '../costs/RowCosts'
 import type { HubAppFull, HubEnvironment } from '../hub-api'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import { ChangesList, ChangeView } from './ChangeView'
@@ -429,6 +430,9 @@ export function ResourceRow({
           <ToneChip tone='neutral' compact tip='Made outside the Hub, then adopted'>
             Adopted
           </ToneChip>
+        )}
+        {!pending && r.external_id && (
+          <ResourceCostChip resourceId={r.id} appId={r.scope === 'app' ? r.app_id : null} />
         )}
         {!pending && extra}
       </div>

@@ -2,6 +2,7 @@ import { describeError, type ErrorDescription, errorToastOptions } from '@nivaro
 import { type DataTag, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import type { BeforeAfter } from '../costs/cost-api'
 import { BLOCKER_COPY, fetchDrivers, type HubDriver, hubError, hubKeys } from '../hub-api'
 import { fetchSharedList, type SharedListRow, sharedKeys } from '../shared/shared-api'
 
@@ -56,6 +57,8 @@ export interface MovePlan {
   warnings: MoveIssue[]
   checklist: MoveChecklistItem[]
   plan_hash: string
+  /** Task 44a: where it runs now → the target, at the Hub's rates (never in plan_hash). */
+  cost?: BeforeAfter | null
 }
 
 export type MoveStatus =

@@ -9,6 +9,8 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { UserCombobox } from '@/components/user-combobox'
 import type { User } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { withoutSecrets } from '../costs/cost-api'
+import { CreateEstimateCard } from '../costs/StackEstimate'
 import { dbKeys, ENGINE_LABEL, STATUS_LABEL, useDatabases, useDbServers } from '../databases/db-api'
 import { fetchDrivers, HUB_MASK, hubKeys } from '../hub-api'
 import {
@@ -19,7 +21,7 @@ import {
   segmentButton,
   segmentGroup
 } from '../hub-parts'
-import { fetchProviderTypes, providerKeys } from '../providers/providers-api'
+import { fetchProviderTypes, providerKeys, typeIndex } from '../providers/providers-api'
 import { fetchSharedList, sharedKeys } from '../shared/shared-api'
 import { countsLine, fetchTemplates, templateError, templateKeys } from '../templates/templates-api'
 import {
@@ -236,6 +238,42 @@ export function HubCreateApp({
     return { kind: 'gitlab', id: Number(targetId) || 0 }
   }, [kind, driverId, sharedId, targetId, size, redis, settingsMap, secrets, pinsMap, poolMax])
   const sharedSignin = kind === 'shared' && !issuer.trim() && !clientId.trim() && !clientSecret
+  // The estimate's body: where it runs and the provider parts — no sign-in secret, no stack
+  // secrets, every provider secret reduced to "set" (an estimate never carries a secret).
+  const estimateBody = useMemo(() => {
+    const t = targetInput
+    const target =
+      t.kind === 'docker'
+        ? { kind: 'docker', driver_id: t.driver_id, stack: { size: t.stack?.size ?? 'small' } }
+        : t.kind === 'shared'
+          ? { kind: 'shared', shared_id: t.shared_id }
+          : { kind: t.kind, id: t.id }
+    const idx = typeIndex(providerTypes.data)
+    return {
+      target,
+      environments: envs.map((e) => ({
+        key: e.key.trim(),
+        providers:
+          e.parts.length && kind !== 'shared'
+            ? (partsPayload(e.parts, providerTypes.data) ?? []).map((p) => {
+                const spec = idx.type(p.type)
+                return {
+                  connection_id: p.connection_id,
+                  type: p.type,
+                  fields: spec && p.fields ? withoutSecrets(spec.fields, p.fields) : {}
+                }
+              })
+            : []
+      }))
+    }
+  }, [targetInput, envs, kind, providerTypes.data])
+  const estimateReady =
+    envs.length > 0 &&
+    (targetInput.kind === 'docker'
+      ? targetInput.driver_id > 0
+      : targetInput.kind === 'shared'
+        ? targetInput.shared_id > 0
+        : targetInput.id > 0)
 
   const input: CreateAppInput = useMemo(
     () => ({
@@ -1249,6 +1287,8 @@ export function HubCreateApp({
             </Field>
           </div>
         </SectionCard>
+
+        <CreateEstimateCard input={estimateBody} ready={estimateReady} />
 
         <PreviewCard
           plan={fresh}
