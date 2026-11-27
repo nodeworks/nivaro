@@ -1,0 +1,15 @@
+{
+  "projects": [
+    {
+      "id": "prj_test000000000000000001",
+      "name": "web-app",
+      "framework": "nextjs",
+      "updatedAt": 1767225600000
+    }
+  ],
+  "pagination": {
+    "count": 1,
+    "next": 1767225500000,
+    "prev": null
+  }
+}

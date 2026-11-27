@@ -2,6 +2,7 @@ import { auth0Provider } from './auth0/index.js'
 import { expoAdapter } from './expo/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import type { ProviderAdapter } from './types.js'
+import { vercelAdapter } from './vercel/index.js'
 
 /**
  * Hub third-party providers: the framework's entry point. Core adapters are listed in
@@ -13,7 +14,8 @@ import type { ProviderAdapter } from './types.js'
 export const CORE_PROVIDERS: ProviderAdapter[] = [
   // github, aws, vercel, auth0, expo adapters are appended here.
   auth0Provider,
-  expoAdapter
+  expoAdapter,
+  vercelAdapter
 ]
 
 /** Registers every core adapter that is not registered yet. Safe to call more than once. */

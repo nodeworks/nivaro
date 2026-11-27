@@ -1,0 +1,18 @@
+{
+  "deployments": [
+    {
+      "uid": "dpl_test00000000000000002",
+      "name": "web-app",
+      "url": "web-app-def456.vercel.app",
+      "state": "READY",
+      "target": "production",
+      "aliasAssigned": 1767225650000,
+      "created": 1767225100000
+    }
+  ],
+  "pagination": {
+    "count": 1,
+    "next": null,
+    "prev": null
+  }
+}

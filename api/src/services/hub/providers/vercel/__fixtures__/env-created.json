@@ -1,0 +1,11 @@
+{
+  "created": {
+    "id": "env_test0000000000000009",
+    "key": "NEW_KEY",
+    "type": "sensitive",
+    "target": ["production"],
+    "gitBranch": null,
+    "updatedAt": 1767225700000
+  },
+  "failed": []
+}

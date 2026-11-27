@@ -1,0 +1,9 @@
+{
+  "id": "team_test0000000000000000",
+  "slug": "test-team",
+  "name": "Test Team",
+  "membership": {
+    "role": "VIEWER",
+    "confirmed": true
+  }
+}
