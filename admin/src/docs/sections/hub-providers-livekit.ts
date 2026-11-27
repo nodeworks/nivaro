@@ -49,9 +49,13 @@ export const hubProvidersLivekitDocs: DocSection = {
         [
           '`livekit.sip_trunk`',
           'the trunk id',
-          'Inbound or outbound phone trunk: create, update, delete. A create that finds the name already in the project is refused `ALREADY_EXISTS` (adopt it). Changing direction is a replace. An inbound trunk with no address limit (or 0.0.0.0/0) and no SIP login is open to the whole internet: `public_exposure`, Hub administrators only. The SIP password is write-only.'
+          'Inbound or outbound phone trunk: create, update, delete. A create that finds the name already in the project is refused `ALREADY_EXISTS` (adopt it). Masks with a leading zero are refused. Changing direction is a replace. An inbound trunk whose allowed addresses amount to everyone (none, an IPv4 prefix shorter than /8, an IPv6 prefix shorter than /16, an IPv4-mapped IPv6 range, an entry that does not parse, or ranges that together cover everything) and no SIP login is open to the whole internet: `public_exposure`, Hub administrators only. The SIP password is write-only.'
         ]
       ]
+    },
+    {
+      type: 'p',
+      text: 'Several apps can share one LiveKit project, and a room, an egress or a trunk belongs to the project, not to one app. So `livekit.project`, `livekit.room`, `livekit.egress` and `livekit.sip_trunk` are shared scope: Hub administrators only. An app owner cannot list, adopt, close or stop them. Only the API key is app scope. A per-app variant with a room prefix may come later.'
     },
     {
       type: 'p',

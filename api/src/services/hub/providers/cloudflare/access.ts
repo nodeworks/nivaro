@@ -1,4 +1,4 @@
-import { isIP } from 'node:net'
+import { coversFamily, ipTooWide, parseRange, type Range } from '../cidr.js'
 import type {
   DesiredResource,
   FieldSpec,
@@ -220,78 +220,6 @@ const rulesIn = (v: unknown): Rule[] =>
   }))
 
 const KNOWN_CF = new Set(Object.values(SIMPLE).map((d) => d.key))
-
-interface Range {
-  v: 4 | 6
-  start: bigint
-  end: bigint
-  prefix: number
-}
-
-/** An IPv6 address as a 128-bit number (null when it is not one). */
-function v6ToBig(addr: string): bigint | null {
-  if (isIP(addr) !== 6) return null
-  let a = addr.toLowerCase()
-  const zone = a.indexOf('%')
-  if (zone >= 0) a = a.slice(0, zone)
-  const dotted = /(\d+\.\d+\.\d+\.\d+)$/.exec(a)
-  if (dotted) {
-    const o = dotted[1].split('.').map(Number)
-    a = `${a.slice(0, -dotted[1].length)}${((o[0] << 8) | o[1]).toString(16)}:${((o[2] << 8) | o[3]).toString(16)}`
-  }
-  const [head, tail] = a.split('::')
-  const h = head ? head.split(':') : []
-  const t = tail === undefined ? [] : tail ? tail.split(':') : []
-  if (tail === undefined && h.length !== 8) return null
-  const parts = tail === undefined ? h : [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]
-  if (parts.length !== 8) return null
-  let n = 0n
-  for (const part of parts) n = (n << 16n) | BigInt(Number.parseInt(part || '0', 16))
-  return n
-}
-
-/** An address or CIDR as a numeric range; null when it does not parse (treated as unknown). */
-function parseRange(text: string): Range | null {
-  const [addr, len, extra] = text.trim().split('/')
-  if (extra !== undefined || !addr) return null
-  const fam = isIP(addr)
-  if (fam === 0) return null
-  const bits = fam === 4 ? 32 : 128
-  let prefix = bits
-  if (len !== undefined) {
-    if (!/^\d{1,3}$/.test(len)) return null
-    prefix = Number(len)
-    if (prefix > bits) return null
-  }
-  const n =
-    fam === 4
-      ? addr.split('.').reduce((acc, o) => (acc << 8n) | BigInt(Number(o)), 0n)
-      : v6ToBig(addr)
-  if (n === null) return null
-  const host = BigInt(bits - prefix)
-  const start = (n >> host) << host
-  return { v: fam as 4 | 6, start, end: start | ((1n << host) - 1n), prefix }
-}
-
-/** True when the ranges together cover every address of a family. */
-function coversFamily(ranges: Range[], v: 4 | 6): boolean {
-  const top = (1n << (v === 4 ? 32n : 128n)) - 1n
-  const sorted = ranges.filter((r) => r.v === v).sort((a, b) => (a.start < b.start ? -1 : 1))
-  let next = 0n
-  for (const r of sorted) {
-    if (r.start > next) return false
-    if (r.end + 1n > next) next = r.end + 1n
-    if (next > top) return true
-  }
-  return next > top
-}
-
-/** An IP rule so wide it is no restriction: IPv4 shorter than /8, IPv6 shorter than /16, or unparseable. */
-function ipTooWide(value: unknown): boolean {
-  const r = parseRange(String(value ?? ''))
-  if (!r) return true
-  return r.v === 4 ? r.prefix < 8 : r.prefix < 16
-}
 
 /** The rule as Cloudflare would receive it; a rule that cannot be translated is a bare unknown. */
 function translated(rule: unknown): Record<string, unknown> {

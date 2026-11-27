@@ -1,4 +1,4 @@
-import { isIP } from 'node:net'
+import { coversEveryone, parseRange } from '../cidr.js'
 import { fieldWords, typedName } from '../plan-words.js'
 import {
   type ConnectionTest,
@@ -673,8 +673,7 @@ function openInbound(f: Record<string, unknown>): boolean {
   if (directionOf(f) !== 'inbound') return false
   if (String(f.auth_username ?? '').trim()) return false
   const addrs = strList(f.allowed_addresses)
-  if (!addrs.length) return true
-  return addrs.some((a) => a === '0.0.0.0/0' || a === '::/0' || /\/0$/.test(a))
+  return !addrs.length || coversEveryone(addrs)
 }
 
 function validateTrunk(f: Record<string, unknown>, passwordGiven: boolean): void {
@@ -688,12 +687,8 @@ function validateTrunk(f: Record<string, unknown>, passwordGiven: boolean): void
     if (String(f.address ?? '').trim())
       throw new ProviderError('INVALID_FIELDS', 'An inbound trunk has no provider address.')
     for (const a of strList(f.allowed_addresses)) {
-      const [ip, mask] = a.split('/')
-      const maxMask = ip?.includes(':') ? 128 : 32
-      if (
-        !isIP(ip ?? '') ||
-        (mask !== undefined && !(/^\d{1,3}$/.test(mask) && Number(mask) <= maxMask))
-      )
+      // A numeric parse: a mask with a leading zero, a bad address or a bad length is refused.
+      if (!parseRange(a))
         throw new ProviderError('INVALID_FIELDS', `${a} is not an IP address or CIDR range.`)
     }
   } else {
@@ -927,7 +922,7 @@ const TYPES: ResourceTypeSpec[] = [
   {
     key: T.room,
     label: 'LiveKit room',
-    scope: 'app',
+    scope: 'shared',
     nameField: 'name',
     fields: ROOM_FIELDS,
     capabilities: { ...noCaps, update: true, adopt: true },
@@ -940,7 +935,7 @@ const TYPES: ResourceTypeSpec[] = [
   {
     key: T.egress,
     label: 'LiveKit egress',
-    scope: 'app',
+    scope: 'shared',
     nameField: 'id',
     fields: EGRESS_FIELDS,
     capabilities: { ...noCaps, update: true, adopt: true },
@@ -953,7 +948,7 @@ const TYPES: ResourceTypeSpec[] = [
   {
     key: T.sip,
     label: 'SIP trunk',
-    scope: 'app',
+    scope: 'shared',
     nameField: 'name',
     fields: SIP_FIELDS,
     capabilities: {
