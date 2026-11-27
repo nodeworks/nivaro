@@ -49,6 +49,14 @@ export interface AccessInput {
   environmentId: number | null
   types: ResourceTypeSpec[]
   rows: HubResourceRow[]
+  /**
+   * The run that carries this change (judged by `judgeOrigin` before any provider call), and how
+   * many of its ops create a resource. A promotion or retirement may act for an owner on THIS
+   * app's existing managed resources through a connection the app's allowed list does not name —
+   * the grant is per resource, never the whole connection. Creates still need the allowed list.
+   */
+  carriedBy?: 'promotion' | 'creation' | 'retirement' | null
+  createCount?: number
 }
 
 export interface AccessAnswer {
@@ -117,8 +125,12 @@ export async function judgeAccess(input: AccessInput, actor: HubActor): Promise<
         'ADMIN_ONLY',
         "Only Hub administrators and this app's owners can change its resources."
       )
-    const allowed = await appAllowedConnections(Number(app.id))
-    if (!allowed.includes(connection.id))
+    const carriedOnOwnResources =
+      (input.carriedBy === 'promotion' || input.carriedBy === 'retirement') &&
+      (input.createCount ?? 0) === 0 &&
+      rows.length > 0
+    const allowed = carriedOnOwnResources ? [] : await appAllowedConnections(Number(app.id))
+    if (!carriedOnOwnResources && !allowed.includes(connection.id))
       throw refuse(
         'CONNECTION_NOT_ALLOWED',
         'This connection is not allowed for this app — a Hub administrator can allow it.'

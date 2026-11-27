@@ -799,7 +799,9 @@ export async function computePlan(
       appId: scope === 'app' ? (req.appId ?? null) : null,
       environmentId: scope === 'app' ? (req.environmentId ?? null) : null,
       types: opTypes,
-      rows: opRows.filter((r): r is HubResourceRow => !!r)
+      rows: opRows.filter((r): r is HubResourceRow => !!r),
+      carriedBy: opts.origin?.kind ?? null,
+      createCount: opRows.filter((r) => !r).length
     },
     actor
   )

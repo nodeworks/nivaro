@@ -730,6 +730,10 @@ export const BLOCKER_COPY: Record<string, { title: string; hint?: string }> = {
     title: 'The frontend build for that version cannot be redeployed',
     hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'
   },
+  PROVIDER_NOT_READY: {
+    title: 'An outside part is not ready to promote',
+    hint: "The Hub could not read the build or setting it would make live at the provider. Open the environment's provider parts, check the connection, then plan again."
+  },
   ROLLBACK_NO_BUILD: {
     title: 'The API build for that version cannot be redeployed',
     hint: 'Its commit is no longer on the branch, GitLab no longer has the build, or its deploy job cannot run again. Nothing was changed.'

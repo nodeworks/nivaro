@@ -275,7 +275,6 @@ export async function startCreation(
       throw new CreationError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)
     try {
       const written = await writeCreation(input, plan, facts, user)
-      await allowCreationConnections(written.app_id, input, facts)
       return written
     } catch (err) {
       if (err instanceof HubDbError) throw new CreationError(err.code, err.message, 409)
@@ -285,35 +284,6 @@ export async function startCreation(
   })
   for (const e of out.environments) launchLeg(e.id, user, r, ['queued'])
   return out
-}
-
-/**
- * Task 11a: the provider connections a Hub admin created the app with (its GitHub target's, its
- * environments' provider parts') join the app's allowed list, so its owners can later promote
- * and change those parts under the usual owner rules. Best effort: a Hub without the provider
- * tables keeps none.
- */
-async function allowCreationConnections(
-  appId: number,
-  input: CreateAppInput,
-  facts: CreationFacts
-): Promise<void> {
-  const ids = new Set<number>()
-  if (facts.github?.target) ids.add(facts.github.target.connection_id)
-  for (const e of input.environments ?? []) {
-    const pp = providerPartsOf(e.providers)
-    if (pp.ok) for (const p of pp.parts) ids.add(p.connection_id)
-  }
-  if (!ids.size) return
-  try {
-    const { appAllowedConnections, setAppAllowedConnections } = await import(
-      '../providers/store.js'
-    )
-    const have = await appAllowedConnections(appId)
-    await setAppAllowedConnections(appId, [...have, ...ids])
-  } catch {
-    /* no provider tables: nothing to allow */
-  }
 }
 
 async function writeCreation(

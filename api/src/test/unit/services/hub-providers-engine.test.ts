@@ -944,6 +944,50 @@ describe('gates', () => {
     expect((await store.readChange(d.changeId))?.decline_reason).toBe('Too dear this quarter')
   })
 
+  it('a promotion or retirement acts for an owner on its own resources only, never grants the connection', async () => {
+    const { judgeAccess } = await import('../../../services/hub/providers/engine/gates.js')
+    const conn = await store.readConnection(otherConn)
+    if (!conn) throw new Error('no connection')
+    const row = await store.insertResource({
+      connection_id: otherConn,
+      provider: 'fake',
+      type: 'fake.box',
+      external_id: 'box-carried',
+      scope: 'app',
+      app_id: appId,
+      environment_id: devEnv
+    })
+    const base = {
+      connection: conn,
+      scope: 'app' as const,
+      appId,
+      environmentId: devEnv,
+      types: []
+    }
+    // A change on an existing resource, carried by a promotion: allowed per resource.
+    await expect(
+      judgeAccess({ ...base, rows: [row], carriedBy: 'promotion', createCount: 0 }, OWNER)
+    ).resolves.toMatchObject({ app: { id: appId } })
+    await expect(
+      judgeAccess({ ...base, rows: [row], carriedBy: 'retirement', createCount: 0 }, OWNER)
+    ).resolves.toMatchObject({ app: { id: appId } })
+    // Not carried, a create inside the carried change, or a creation: the allowed list decides.
+    await expect(judgeAccess({ ...base, rows: [row] }, OWNER)).rejects.toMatchObject({
+      code: 'CONNECTION_NOT_ALLOWED'
+    })
+    await expect(
+      judgeAccess({ ...base, rows: [row], carriedBy: 'promotion', createCount: 1 }, OWNER)
+    ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
+    await expect(
+      judgeAccess({ ...base, rows: [], carriedBy: 'promotion', createCount: 0 }, OWNER)
+    ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
+    await expect(
+      judgeAccess({ ...base, rows: [row], carriedBy: 'creation', createCount: 0 }, OWNER)
+    ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
+    // The allowed list itself never grows.
+    expect(await store.appAllowedConnections(appId)).toEqual([connId])
+  })
+
   it('owner refused on foreign connection and shared scope', async () => {
     await expect(
       engine.planResourceChange(

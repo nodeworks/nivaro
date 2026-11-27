@@ -353,7 +353,9 @@ async function judgeForRun(row: HubResourceChangeRow, actor: HubActor): Promise<
       appId: row.app_id,
       environmentId: row.environment_id,
       types,
-      rows
+      rows,
+      carriedBy: plan.origin?.kind ?? null,
+      createCount: plan.ops.filter((o) => o.kind === 'create').length
     },
     actor
   )
