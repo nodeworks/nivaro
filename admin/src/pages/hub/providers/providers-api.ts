@@ -99,6 +99,8 @@ export interface ResourceTypeInfo {
 export interface ProviderInfo {
   key: string
   label: string
+  /** What it is for (a key of ProviderTypes.categories, or the adapter's own group key). */
+  category?: string
   connection: { fields: ConnectionField[] }
   /** Task 13: its resources can send Hub events out (notify routes). */
   notify?: boolean
@@ -107,8 +109,36 @@ export interface ProviderInfo {
 
 export interface ProviderTypes {
   risk_flags: RiskFlag[]
+  /** The known provider groups, in picker order. */
+  categories?: Array<{ key: string; label: string }>
   providers: ProviderInfo[]
 }
+
+/**
+ * Picker options for providers, grouped by what they do: known groups in the server's order,
+ * an adapter's own group after them, "Other" last; providers A–Z inside a group.
+ */
+export function providerOptions(
+  providers: ProviderInfo[],
+  categories: Array<{ key: string; label: string }> = []
+): Array<{ value: string; label: string; group: string }> {
+  const rank = (k: string) => {
+    if (k === 'other') return Number.MAX_SAFE_INTEGER
+    const i = categories.findIndex((c) => c.key === k)
+    return i < 0 ? categories.length : i
+  }
+  const labelOf = (k: string) =>
+    categories.find((c) => c.key === k)?.label ?? (k === 'other' ? 'Other' : titleCase(k))
+  return [...providers]
+    .map((p) => ({ p, k: p.category || 'other' }))
+    .sort(
+      (a, b) =>
+        rank(a.k) - rank(b.k) || a.k.localeCompare(b.k) || a.p.label.localeCompare(b.p.label)
+    )
+    .map(({ p, k }) => ({ value: p.key, label: p.label, group: labelOf(k) }))
+}
+
+const titleCase = (k: string) => k.replace(/[-_]+/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
 
 export interface ConnectionTest {
   ok: boolean

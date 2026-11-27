@@ -22,6 +22,7 @@ const {
   PROVIDER_CODE_COPY,
   providerError,
   providerKeys,
+  providerOptions,
   resourceState,
   shortValue,
   usedBy,
@@ -413,5 +414,37 @@ describe('Task 3b words', () => {
     )
     expect(d.hint).toMatch(/Check this connection’s keys/)
     expect(d.hint).not.toMatch(/minute/)
+  })
+})
+
+describe('providerOptions (grouped provider picker)', () => {
+  const cats = [
+    { key: 'code', label: 'Code and builds' },
+    { key: 'ai', label: 'AI' },
+    { key: 'other', label: 'Other' }
+  ]
+  const p = (key: string, label: string, category?: string) =>
+    ({ key, label, category, connection: { fields: [] }, types: [] }) as never
+
+  it('orders groups as the server lists them, own groups after, Other last, A–Z inside', () => {
+    const out = providerOptions(
+      [
+        p('openai', 'OpenAI', 'ai'),
+        p('misc', 'Misc'),
+        p('gitlab', 'GitLab', 'code'),
+        p('erp', 'Acme ERP', 'erp'),
+        p('anthropic', 'Anthropic', 'ai'),
+        p('github', 'GitHub', 'code')
+      ],
+      cats
+    )
+    expect(out.map((o) => `${o.group}:${o.label}`)).toEqual([
+      'Code and builds:GitHub',
+      'Code and builds:GitLab',
+      'AI:Anthropic',
+      'AI:OpenAI',
+      'Erp:Acme ERP',
+      'Other:Misc'
+    ])
   })
 })

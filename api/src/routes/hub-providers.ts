@@ -12,6 +12,7 @@ import {
 } from '../services/hub/create/connection-targets.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { generateAccountKeyPem } from '../services/hub/providers/acme/client.js'
+import { PROVIDER_CATEGORIES, providerCategoryOf } from '../services/hub/providers/categories.js'
 import { registerProviderCostsCron } from '../services/hub/providers/costs.js'
 import { estimateProvider } from '../services/hub/providers/costs-live.js'
 import {
@@ -574,9 +575,12 @@ export async function hubProviderRoutes(app: FastifyInstance) {
       data: {
         // The vocabulary risk flags come from; which flags one change raises is shown on its plan.
         risk_flags: RISK_FLAGS,
+        // What providers are for, in picker order (a provider's own group key may add one).
+        categories: PROVIDER_CATEGORIES,
         providers: listProviders().map((p) => ({
           key: p.key,
           label: p.label,
+          category: providerCategoryOf(p),
           // The adapter's own fields, then the cost settings every connection takes (Task 44a).
           connection: {
             fields: [

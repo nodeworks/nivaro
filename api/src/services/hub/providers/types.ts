@@ -385,6 +385,12 @@ export interface ProviderAdapter {
   /** `/^[a-z][a-z0-9-]{1,30}$/` — 'aws', 'github', or an extension's 'acme'. */
   key: string
   label: string
+  /**
+   * What the provider is for, so pickers group it: a key of PROVIDER_CATEGORIES ('code',
+   * 'hosting', 'data', 'domains', 'identity', 'messaging', 'chat', 'monitoring', 'payments', 'ai',
+   * 'media') or the adapter's own group key. Unset = the core placement, else 'other'.
+   */
+  category?: string
   connection: ConnectionSpec
   types: ResourceTypeSpec[]
   testConnection(ctx: ProviderContext): Promise<ConnectionTest>

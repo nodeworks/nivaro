@@ -43,6 +43,7 @@ import {
   type ProviderInfo,
   providerError,
   providerKeys,
+  providerOptions,
   providerToast,
   type ResourceTypeInfo,
   saveConnection,
@@ -173,6 +174,7 @@ export function HubConnections() {
               key='new'
               connection={null}
               providers={types.data.providers}
+              categories={types.data.categories}
               onClose={() => setPicked(null)}
               onSaved={setPicked}
             />
@@ -373,11 +375,14 @@ function ConnectionInput({
 export function ConnectionForm({
   connection,
   providers,
+  categories = [],
   onClose,
   onSaved
 }: {
   connection: HubConnection | null
   providers: ProviderInfo[]
+  /** Provider groups in picker order (GET /provider-types). */
+  categories?: Array<{ key: string; label: string }>
   onClose: () => void
   onSaved: (id: number) => void
 }) {
@@ -506,7 +511,7 @@ export function ConnectionForm({
               }}
               options={[
                 { value: '', label: 'Pick a provider' },
-                ...providers.map((p) => ({ value: p.key, label: p.label }))
+                ...providerOptions(providers, categories)
               ]}
               ariaLabel='Provider'
               className='h-8 text-left text-[13px]'

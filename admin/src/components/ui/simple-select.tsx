@@ -1,5 +1,14 @@
 import { cn } from '@/lib/utils'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue
+} from './select'
 
 // Thin value/onChange wrapper over the Radix ui/select so plain string-state
 // call sites can drop native <select> without adopting the compound API.
@@ -10,6 +19,22 @@ const EMPTY = '__empty__'
 export interface SimpleSelectOption {
   value: string
   label: string
+  /** Options with the same group show under one heading, groups in first-seen order. */
+  group?: string
+}
+
+type Section = { group: string | null; options: SimpleSelectOption[] }
+
+/** Ungrouped options stay at the top; each group keeps the order its first option had. */
+function sectionsOf(options: SimpleSelectOption[]): Section[] {
+  const out: Section[] = []
+  for (const o of options) {
+    const g = o.group ?? null
+    const s = out.find((x) => x.group === g)
+    if (s) s.options.push(o)
+    else out.push({ group: g, options: [o] })
+  }
+  return out.sort((a, b) => (a.group === null ? -1 : b.group === null ? 1 : 0))
 }
 
 export function SimpleSelect({
@@ -31,6 +56,11 @@ export function SimpleSelect({
   disabled?: boolean
   triggerProps?: Record<string, string>
 }) {
+  const item = (o: SimpleSelectOption) => (
+    <SelectItem key={o.value || EMPTY} value={o.value === '' ? EMPTY : o.value}>
+      {o.label}
+    </SelectItem>
+  )
   return (
     <Select
       value={value === '' ? EMPTY : value}
@@ -41,11 +71,15 @@ export function SimpleSelect({
         <SelectValue />
       </SelectTrigger>
       <SelectContent className={contentClassName}>
-        {options.map((o) => (
-          <SelectItem key={o.value || EMPTY} value={o.value === '' ? EMPTY : o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
+        {options.some((o) => o.group)
+          ? sectionsOf(options).map((sec, i) => (
+              <SelectGroup key={sec.group ?? EMPTY}>
+                {i > 0 && <SelectSeparator />}
+                {sec.group && <SelectLabel>{sec.group}</SelectLabel>}
+                {sec.options.map(item)}
+              </SelectGroup>
+            ))
+          : options.map(item)}
       </SelectContent>
     </Select>
   )

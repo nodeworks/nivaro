@@ -65,7 +65,10 @@ function SelectLabel({
 }: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Label>) {
   return (
     <SelectPrimitive.Label
-      className={cn('py-1.5 pl-8 pr-2 text-xs font-semibold text-slate-500', className)}
+      className={cn(
+        'pb-1 pl-8 pr-2 pt-2 text-[11px] font-semibold text-slate-500 dark:text-slate-400',
+        className
+      )}
       {...props}
     />
   )
@@ -100,7 +103,7 @@ function SelectSeparator({
 }: React.ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>) {
   return (
     <SelectPrimitive.Separator
-      className={cn('-mx-1 my-1 h-px bg-slate-100', className)}
+      className={cn('-mx-1 my-1 h-px bg-slate-100 dark:bg-border', className)}
       {...props}
     />
   )
