@@ -80,11 +80,11 @@ describe('Hub API catalog', () => {
     expect(routes.length).toBeGreaterThan(90)
   })
 
-  it('has one entry per method + path, and plans are POSTs ending in /plan', () => {
+  it('has one entry per method + path, and plans (and cost estimates) are POSTs ending in /plan or /estimate', () => {
     const keys = HUB_ROUTES.map((e) => `${e.method} ${e.path}`)
     expect(new Set(keys).size).toBe(keys.length)
     for (const e of HUB_ROUTES) {
-      if (e.access === 'plan') expect(`${e.method} ${e.path}`).toMatch(/^POST .*\/plan$/)
+      if (e.access === 'plan') expect(`${e.method} ${e.path}`).toMatch(/^POST .*\/(plan|estimate)$/)
       if (e.method === 'GET') expect(e.access).toBe('read')
       if (/\/plan$/.test(e.path) && e.method === 'POST') expect(e.access).toBe('plan')
     }

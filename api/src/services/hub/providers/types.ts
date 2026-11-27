@@ -406,3 +406,147 @@ export class ProviderError extends Error {
 export function isRetryableStatus(status: number): boolean {
   return status === 408 || status === 425 || status === 429 || (status >= 500 && status <= 599)
 }
+
+// ── Costs and estimates (Task 44a) ──
+// Grouped here (interface merging) so the cost contract stays one additive block. Spec: "Live
+// costs and estimates". Every amount is in CENTS of `currency` (fractions allowed on unit prices,
+// rounded on totals). Estimates are list prices and say so; they are never part of `plan_hash`.
+
+/** Where a figure's price came from. */
+export type CostBasis = 'price_list' | 'plan_price' | 'rate_card' | 'usage' | 'free'
+
+/** How far the figure can be trusted. `unknown` = no estimate (shown as "No estimate"). */
+export type CostConfidence = 'exact' | 'list_price' | 'usage_varies' | 'unknown'
+
+/** One line of an estimate: quantity × unit price = a monthly amount. */
+export interface CostLine {
+  label: string
+  qty: number
+  /** 'hour', 'GB-month', 'GB', 'month', 'seat' … */
+  unit: string
+  /** Price of one unit in cents (fractions allowed, e.g. 1.04 for $0.0104). */
+  unitCents: number
+  /** This line's monthly amount in cents (negative for a discount). */
+  monthlyCents: number
+  /** `base` = the resource itself; `transfer` = data out; `tax`; `discount` (a minus line). */
+  kind: 'base' | 'transfer' | 'tax' | 'discount'
+  /** Where the line's figure came from. */
+  source: 'price_list' | 'plan_price' | 'measured' | 'assumed' | 'learned_from_bill' | 'admin_rate'
+}
+
+export interface CostEstimate {
+  /** ISO 4217 ('USD'). */
+  currency: string
+  /** Sum of every line's monthlyCents (tax and discount lines included). */
+  monthlyCents: number
+  oneTimeCents: number
+  yearlyCents: number
+  basis: CostBasis
+  confidence: CostConfidence
+  lines: CostLine[]
+  /** The price's own date (a bundled table's, the price list's), null when not known. */
+  priceAsOf: string | null
+  /** One plain sentence ("plus usage", "tax not included", "no traffic assumed"). */
+  note?: string
+}
+
+/**
+ * Expected data out of a resource, GB per month: from the form (`form`), else prefilled by the
+ * engine from what the Hub measured for the same app (`measured`). Absent = no traffic assumed.
+ */
+export interface EstimateTraffic {
+  egressGbMonth: number
+  source: 'form' | 'measured'
+}
+
+/**
+ * One cost row a provider reports (its bill or near-live usage). Task 34's cost feed and
+ * `usageNow` both answer these. `recordType` lets the price book learn tax and discount rates.
+ */
+export interface CostRow {
+  /** The day the cost belongs to (YYYY-MM-DD, UTC). */
+  date: string
+  /** Negative for a credit, discount or refund. */
+  amountCents: number
+  currency: string
+  /** The managed resource's provider id, when the row names one. */
+  externalId?: string
+  /** The `nivaro-hub:app` tag value, when the row carries one. */
+  appTag?: string
+  service?: string
+  recordType?: 'usage' | 'tax' | 'credit' | 'discount' | 'refund'
+}
+
+/** One price the price book answers (priceLookup). */
+export interface PriceAnswer {
+  /** Price of one unit in cents (fractions allowed). */
+  unitCents: number
+  unit: string
+  currency: string
+  /** The price's own date. */
+  asOf: string | null
+}
+
+/**
+ * A provider's bundled, dated plan-price table (the fallback when its API has no price or is
+ * not asked): sku key → unit + price, optionally per region (absent = the same everywhere).
+ */
+export interface BundledPriceTable {
+  /** The date these prices were copied from the provider's pricing page (YYYY-MM-DD). */
+  asOf: string
+  currency: string
+  items: Record<
+    string,
+    { unit: string; unitCents: number; regions?: Record<string, number>; label?: string }
+  >
+}
+
+export interface ProviderContext {
+  /**
+   * Set by the engine for `estimate` only: the traffic the person entered (or the Hub measured)
+   * for this resource. Absent = no traffic assumed.
+   */
+  traffic?: EstimateTraffic
+}
+
+export interface ResourceTypeSpec {
+  /**
+   * What this resource costs (Task 44a). Required for every type that has a `costClass`
+   * (guard test hub-providers-estimate.guard.test.ts). `desired: null` = a delete: answer what
+   * it costs now (the engine shows it as the saving). Never throws: unknown →
+   * `confidence: 'unknown'`. Prices through `priceLookup` (providers/pricing), never a fetch
+   * outside `ctx.fetch`. Tax and discount lines are the engine's, never the adapter's.
+   */
+  estimate?(
+    ctx: ProviderContext,
+    desired: DesiredResource | null,
+    observed: Observed | null
+  ): Promise<CostEstimate>
+}
+
+export interface PlannedOp {
+  /**
+   * Filled by the engine (Task 44a): the estimate before and after this op and the monthly
+   * difference. Never part of `plan_hash` (prices move).
+   */
+  cost?: {
+    before: CostEstimate | null
+    after: CostEstimate | null
+    deltaMonthlyCents: number
+  }
+}
+
+export interface ProviderAdapter {
+  /**
+   * Optional: what usage-priced resources used so far in `range` (Anthropic / OpenAI usage,
+   * Vercel bandwidth, Twilio records), so the run-rate counts it, not zero.
+   */
+  usageNow?(ctx: ProviderContext, range: { from: string; to: string }): Promise<CostRow[]>
+  /** Optional: the adapter's bundled plan-price table (pricing/bundled.ts reads it). */
+  bundledPrices?: BundledPriceTable
+  /**
+   * Optional: read one price from the provider's own price API (AWS has a core one in
+   * pricing/aws-price-list.ts). null = no price there. May throw; the price book falls back.
+   */
+  priceApi?(ctx: ProviderContext, skuKey: string, region: string): Promise<PriceAnswer | null>
+}

@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { idParam } from '../services/hub/apps.js'
+import { scaleCost } from '../services/hub/providers/costs-live.js'
 import { maxedRoles, scaleTick } from '../services/hub/scale/auto.js'
 import { parseRoleChanges, planScale, ScaleError } from '../services/hub/scale/plan.js'
 import { checkRule } from '../services/hub/scale/rules.js'
@@ -87,7 +88,12 @@ export function hubScaleRoutes(app: FastifyInstance): void {
       if (!target) return refuse(reply, 404, 'NOT_FOUND', 'No such stack.')
       const roles = parseRoleChanges(body(req).roles)
       if ('error' in roles) return refuse(reply, 400, 'BAD_ROLES', roles.error)
-      return reply.send({ data: await planScale(target, roles, 'manual') })
+      const plan = await planScale(target, roles, 'manual')
+      // Task 44a: the shape's cost before → after at the chargeback rates (not in plan_hash).
+      const cost = await scaleCost({ kind: plan.kind, id: plan.id }, plan.from, plan.to).catch(
+        () => null
+      )
+      return reply.send({ data: { ...plan, cost } })
     })
   )
 

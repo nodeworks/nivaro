@@ -234,12 +234,17 @@ export function hubCapacityRoutes(app: FastifyInstance): void {
           app.log.info(
             `hub-capacity-sample: ${r.shared} shared, ${r.environments} environments, ${r.failed} did not answer`
           )
+        // Task 44a: the cost run-rate follows each sample run (figures only; never throws).
+        const { runRateTick } = await import('../services/hub/providers/costs-live.js')
+        await runRateTick().catch((err: unknown) =>
+          app.log.warn({ err: (err as Error | null)?.name }, 'hub-capacity-sample: run-rate failed')
+        )
       },
       {
         quiet: true,
         idempotent: 'safe',
         description:
-          'Every 15 minutes (Hub only) — reads the capacity figures of every shared deployment and hub-linked environment (counts, timings, bytes) into nivaro_hub_capacity_samples and prunes rows older than 31 days. Writes only that table.'
+          'Every 15 minutes (Hub only) — reads the capacity figures of every shared deployment and hub-linked environment (counts, timings, bytes) into nivaro_hub_capacity_samples and prunes rows older than 31 days; then writes the cost run-rate (nivaro_hub_cost_runrate, figures only, 400 days), checks app budgets (one alert per threshold per month, last_alert_* on nivaro_hub_cost_budgets) and may refresh nivaro_hub_price_cache.'
       }
     )
     app.cron.schedule(

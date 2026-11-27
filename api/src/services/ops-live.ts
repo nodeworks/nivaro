@@ -40,6 +40,7 @@ export type OpsTopic =
   | 'mail-log'
   | 'trackers'
   | 'hub'
+  | 'hub:costs'
 
 /**
  * 'ticket' — the person must be able to see that support ticket (canSeeTicket).
@@ -83,7 +84,10 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   // Nivaro Hub (2026-11-25): a Hub table was written. Pokes only — every Hub page re-reads
   // through its own route, which judges admins vs app owners. Sign-in only: the poke names
   // no app, environment or person.
-  hub: 'auth'
+  hub: 'auth',
+  // Nivaro Hub live costs (Task 44a): the run-rate tick moved. Carries app ids only — every page
+  // re-reads GET /api/hub/costs/live, which judges admins vs the app's owners. Sign-in only.
+  'hub:costs': 'auth'
 }
 
 /**

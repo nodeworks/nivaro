@@ -67,7 +67,7 @@ export function regionsOf(config: Record<string, unknown>): string[] {
   ]
 }
 
-export type AwsService = 'ec2' | 'rds' | 'elbv2' | 'sts' | 'acm' | 's3' | 'route53'
+export type AwsService = 'ec2' | 'rds' | 'elbv2' | 'sts' | 'acm' | 's3' | 'route53' | 'pricing'
 
 const SIGN_NAME: Record<AwsService, string> = {
   ec2: 'ec2',
@@ -76,7 +76,8 @@ const SIGN_NAME: Record<AwsService, string> = {
   sts: 'sts',
   acm: 'acm',
   s3: 's3',
-  route53: 'route53'
+  route53: 'route53',
+  pricing: 'pricing'
 }
 const HOST_PREFIX: Record<AwsService, string> = { ...SIGN_NAME }
 const QUERY_VERSION: Record<string, string> = {
@@ -86,7 +87,15 @@ const QUERY_VERSION: Record<string, string> = {
   sts: '2011-06-15'
 }
 
+/**
+ * Task 44a: the AWS Price List Query API (GetProducts) answers from us-east-1 only (the Hub never
+ * asks its other endpoints); the price book signs it with the connection's own credentials.
+ */
+export const AWS_PRICING_REGION = 'us-east-1'
+export const AWS_PRICING_HOST = `api.pricing.${AWS_PRICING_REGION}.amazonaws.com`
+
 export function awsHost(service: AwsService, region: string): string {
+  if (service === 'pricing') return AWS_PRICING_HOST
   return service === 'route53'
     ? 'route53.amazonaws.com'
     : `${HOST_PREFIX[service]}.${region}.amazonaws.com`
@@ -139,7 +148,7 @@ export const awsConnection: ConnectionSpec = {
     }
   ],
   hosts(config) {
-    const out = new Set<string>(['route53.amazonaws.com'])
+    const out = new Set<string>(['route53.amazonaws.com', AWS_PRICING_HOST])
     for (const r of regionsOf(config))
       for (const s of ['ec2', 'rds', 'elbv2', 'sts', 'acm', 's3'] as AwsService[])
         out.add(awsHost(s, r))
@@ -464,6 +473,36 @@ export async function awsJson(
       headers: {
         'content-type': 'application/x-amz-json-1.1',
         'x-amz-target': `CertificateManager.${target}`
+      },
+      body: JSON.stringify(body)
+    })
+  )
+  try {
+    return res.text ? (JSON.parse(res.text) as Record<string, unknown>) : {}
+  } catch {
+    throw new ProviderError('AWS_BAD_ANSWER', 'AWS sent an unreadable answer.', { retryable: true })
+  }
+}
+
+// ── Price List Query API (JSON 1.1, Task 44a) ──
+
+/** One AWSPriceListService call (GetProducts), signed for `pricing` in us-east-1. */
+export async function awsPriceList(
+  ctx: ProviderContext,
+  target: 'GetProducts',
+  body: Record<string, unknown>
+): Promise<Record<string, any>> {
+  const creds = await credentials(ctx)
+  const res = okAnswer(
+    ctx,
+    await rawSend(ctx, creds, {
+      service: 'pricing',
+      region: AWS_PRICING_REGION,
+      method: 'POST',
+      path: '/',
+      headers: {
+        'content-type': 'application/x-amz-json-1.1',
+        'x-amz-target': `AWSPriceListService.${target}`
       },
       body: JSON.stringify(body)
     })

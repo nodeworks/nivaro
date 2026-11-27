@@ -2,8 +2,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { markConfigRead } from '../services/config-live.js'
 import { hubScopeLevel } from '../services/hub/api/scopes.js'
-import { idParam } from '../services/hub/apps.js'
+import { idParam, isAppOwner } from '../services/hub/apps.js'
 import { HUB_PRODUCT_NAME } from '../services/hub/brand.js'
 import { creationOpenRefusal } from '../services/hub/create/store.js'
 import { moveOpenRefusal } from '../services/hub/move-open.js'
@@ -45,9 +46,21 @@ import {
   setHostRegion,
   updateRegion
 } from '../services/hub/placement/regions.js'
+import { createEstimate, liveCosts, stackEstimate } from '../services/hub/providers/costs-live.js'
+import { ResourceChangeError } from '../services/hub/providers/engine/contract.js'
+import {
+  checkBudgetInput,
+  costSettingsRefusal,
+  normalizeCostSettings,
+  readBudget,
+  readCostSettings,
+  writeBudget,
+  writeCostSettings
+} from '../services/hub/providers/estimate.js'
 import { environmentFreezeRefusal } from '../services/hub/releases/freeze.js'
 import { HubSecretError } from '../services/hub/secrets.js'
 import { NIVARO_VERSION } from '../version.js'
+import { actorOf } from './hub-providers.js'
 
 /**
  * Nivaro Hub placement (ideas 48, 49, 50), mounted under /api/hub by hub.ts (HUB=on only). Every
@@ -68,6 +81,13 @@ import { NIVARO_VERSION } from '../version.js'
  *   GET    /chargeback | /chargeback.csv           rough monthly cost per app, department, owner
  *   GET    /chargeback/settings | PUT {currency, rates, window_days}
  *   PUT    /chargeback/apps/:appId                 {department, cost_center}
+ * Live costs and estimates (Task 44a; estimates are reads — no plan, no audit row, open during
+ * maintenance; owners see their own apps, administrators set budgets and the limit):
+ *   POST   /environments/:envId/stack/estimate     {size?, replicas?, settings?} → {before, after}
+ *   POST   /apps/create/estimate                   the Create app body → per environment figures
+ *   GET    /costs/live?app_id=&environment_id=     now, month to date, forecast, billed
+ *   GET    /apps/:id/cost-budget | PUT {monthly_cents, auto_approve_under_cents}
+ *   GET    /costs/settings | PUT {cost_auto_approve_under_cents}
  * Federation (50, read only — nothing is ever sent to another Hub but two GETs):
  *   GET    /federation/self                        who answers and which Hub scope the caller's
  *                                                  key has (another Hub asks it)
@@ -96,6 +116,7 @@ async function guarded(reply: FastifyReply, run: () => Promise<unknown>) {
   } catch (e) {
     if (e instanceof PlacementError) return refuse(reply, e.statusCode, e.code, e.message)
     if (e instanceof HubSecretError) return refuse(reply, 400, e.code, e.message)
+    if (e instanceof ResourceChangeError) return refuse(reply, e.status, e.code, e.message)
     throw e
   }
 }
@@ -381,4 +402,135 @@ export function hubPlacementRoutes(app: FastifyInstance, deps: PlacementRouteDep
     const fresh = (req.query as { fresh?: string } | undefined)?.fresh === '1'
     return { data: await federatedFleet(deps.federation, { fresh }) }
   })
+
+  // ─── live costs and estimates (Task 44a) ──────────────────────────────────
+
+  /** Administrators, or an owner of the app (an app the caller does not own reads as missing). */
+  const mayRead = async (req: FastifyRequest, appId: number) =>
+    req.isAdmin === true || (await isAppOwner(appId, userId(req)))
+
+  app.post('/environments/:envId/stack/estimate', { preHandler: requireAuth }, async (req, reply) =>
+    guarded(reply, async () => {
+      markConfigRead(req)
+      const envId = param(req, 'envId')
+      const env =
+        envId === null
+          ? undefined
+          : ((await db('nivaro_hub_environments').where({ id: envId }).first('app_id')) as
+              | { app_id: number }
+              | undefined)
+      if (envId === null || !env || !(await mayRead(req, Number(env.app_id))))
+        return refuse(reply, 404, 'NOT_FOUND', 'No such environment.')
+      const b = body(req)
+      return reply.send({
+        data: await stackEstimate(envId, {
+          size: b.size,
+          replicas: b.replicas,
+          settings: b.settings
+        })
+      })
+    })
+  )
+
+  app.post('/apps/create/estimate', { preHandler: requireAdmin }, async (req, reply) =>
+    guarded(reply, async () => {
+      markConfigRead(req)
+      return reply.send({ data: await createEstimate(body(req), actorOf(req)) })
+    })
+  )
+
+  app.get('/costs/live', { preHandler: requireAuth }, async (req, reply) =>
+    guarded(reply, async () => {
+      const q = (req.query ?? {}) as Record<string, string | undefined>
+      const appId = q.app_id ? idParam(q.app_id) : null
+      const envId = q.environment_id ? idParam(q.environment_id) : null
+      if ((q.app_id && appId === null) || (q.environment_id && envId === null))
+        return refuse(reply, 400, 'BAD_FILTER', 'app_id and environment_id are ids.')
+      let appIds: number[] | null = appId === null ? null : [appId]
+      if (envId !== null) {
+        const env = (await db('nivaro_hub_environments').where({ id: envId }).first('app_id')) as
+          | { app_id: number }
+          | undefined
+        if (!env || (appId !== null && Number(env.app_id) !== appId))
+          return refuse(reply, 404, 'NOT_FOUND', 'No such environment.')
+        appIds = [Number(env.app_id)]
+      }
+      if (req.isAdmin !== true) {
+        const owned = (
+          (await db('nivaro_hub_app_owners')
+            .where({ user_id: userId(req) })
+            .select('app_id')) as Array<{
+            app_id: number
+          }>
+        ).map((r) => Number(r.app_id))
+        if (appIds && !appIds.every((id) => owned.includes(id)))
+          return refuse(reply, 404, 'NOT_FOUND', 'No such app.')
+        appIds = appIds ?? owned
+      }
+      return reply.send({ data: await liveCosts({ appIds, environmentId: envId }) })
+    })
+  )
+
+  app.get('/apps/:id/cost-budget', { preHandler: requireAuth }, async (req, reply) =>
+    guarded(reply, async () => {
+      const id = param(req, 'id')
+      const exists =
+        id !== null && (await db('nivaro_hub_apps').where({ id }).first('id')) !== undefined
+      if (id === null || !exists || !(await mayRead(req, id)))
+        return refuse(reply, 404, 'NOT_FOUND', 'No such app.')
+      return reply.send({
+        data: (await readBudget(id)) ?? {
+          app_id: id,
+          monthly_cents: 0,
+          auto_approve_under_cents: null,
+          last_alert_month: null,
+          last_alert_pct: null,
+          updated_by: null,
+          updated_at: null
+        }
+      })
+    })
+  )
+
+  app.put('/apps/:id/cost-budget', { preHandler: requireAdmin }, async (req, reply) =>
+    guarded(reply, async () => {
+      const id = param(req, 'id')
+      if (id === null || (await db('nivaro_hub_apps').where({ id }).first('id')) === undefined)
+        return refuse(reply, 404, 'NOT_FOUND', 'No such app.')
+      const input = checkBudgetInput(body(req))
+      if (typeof input === 'string') return refuse(reply, 400, 'BAD_BUDGET', input)
+      const out = await writeBudget(id, input, userId(req) || null)
+      await logActivity({
+        action: 'update',
+        user: userId(req),
+        collection: 'nivaro_hub_cost_budgets',
+        item: String(id),
+        req,
+        changed_fields: Object.keys(body(req))
+      })
+      return reply.send({ data: out })
+    })
+  )
+
+  app.get('/costs/settings', { preHandler: requireAuth }, async () => ({
+    data: await readCostSettings()
+  }))
+
+  app.put('/costs/settings', { preHandler: requireAdmin }, async (req, reply) =>
+    guarded(reply, async () => {
+      const why = costSettingsRefusal(req.body)
+      if (why) return refuse(reply, 400, 'BAD_SETTINGS', why)
+      const next = normalizeCostSettings({ ...(await readCostSettings()), ...body(req) })
+      await writeCostSettings(next)
+      await logActivity({
+        action: 'update',
+        user: userId(req),
+        collection: 'nivaro_extension_settings',
+        item: 'nivaro-hub/costs',
+        req,
+        changed_fields: Object.keys(body(req))
+      })
+      return reply.send({ data: next })
+    })
+  )
 }

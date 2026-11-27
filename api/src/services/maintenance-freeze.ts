@@ -92,6 +92,10 @@ export function maintenanceExemptPath(url: string, routeUrl?: string | null): bo
     /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
     // Nivaro Hub "Create app" preview (phase 3): gathers and plans, never locks or writes.
     /^\/api\/hub\/apps\/create\/plan(\?|$)/.test(url) ||
+    // Hub cost estimates (Task 44a): reads carrying a form — no plan saved, no audit row.
+    /^\/api\/hub\/(providers\/estimate|apps\/create\/estimate|environments\/\d+\/stack\/estimate)(\?|$)/.test(
+      url
+    ) ||
     // Presence heartbeats (never a record write; were outside the freeze before).
     /^\/api\/presence\/(ping|disconnect)(\?|$)/.test(url) ||
     // The MCP endpoint only carries protocol messages; each tool call inside it is its
