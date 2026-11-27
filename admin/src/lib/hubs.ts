@@ -54,6 +54,12 @@ export type HubTabDef = {
    * title and hint stay.
    */
   hint?: string
+  /**
+   * Only Hub administrators can use this page (its API answers 403 to anyone else, and the page
+   * says so). The navigation leaves it out for a signed-in person who is not one, so an app owner
+   * is never offered a page that would only refuse them; the address still opens and explains.
+   */
+  adminOnly?: boolean
   /** Words people search this page by (command palette, the Hub's Find): "dns", "postgres". */
   keywords?: string
   /**
@@ -136,12 +142,14 @@ export const APPS_HUB: HubDef = {
     },
     {
       path: 'templates',
+      adminOnly: true,
       label: 'Templates',
       hint: 'App Blueprints a new app can start from.',
       keywords: 'blueprints starter new app'
     },
     {
       path: 'targets',
+      adminOnly: true,
       label: 'New app defaults',
       hint: 'Where a new app goes: the GitLab group or GitHub account, template and hostnames it gets.',
       keywords: 'targets create app repository group hostnames gitlab github'
@@ -179,6 +187,7 @@ export const APPS_HUB: HubDef = {
     },
     {
       path: 'config',
+      adminOnly: true,
       label: 'Config promotion',
       hint: 'Move configuration from one environment of an app to another, with undo.',
       keywords: 'configuration promote layouts flows roles settings copy between environments'
@@ -193,30 +202,35 @@ export const APPS_HUB: HubDef = {
     // ── Hosting and servers ──
     {
       path: 'hosts',
+      adminOnly: true,
       label: 'Hosts & regions',
       hint: 'Docker hosts grouped in regions, and what runs on each.',
       keywords: 'servers docker swarm region placement map machines'
     },
     {
       path: 'drivers',
+      adminOnly: true,
       label: 'Deploy locations',
       hint: 'Where apps are deployed: a Docker host the Hub agent runs, or a GitLab project.',
       keywords: 'drivers agent docker host gitlab project deploy server'
     },
     {
       path: 'shared',
+      adminOnly: true,
       label: 'Shared deployments',
       hint: 'One process serving many apps, each with its own database, files and key.',
       keywords: 'shared deployment multi-app tenants upgrade'
     },
     {
       path: 'capacity',
+      adminOnly: true,
       label: 'Capacity',
       hint: 'How busy each shared deployment and app is, and which apps should move.',
       keywords: 'load limits rebalance move advisor busy'
     },
     {
       path: 'scale',
+      adminOnly: true,
       label: 'Scaling',
       hint: 'Replicas and limits per role, and the rules that scale them.',
       keywords: 'replicas cpu memory autoscale autoscaling scale out'
@@ -244,6 +258,7 @@ export const APPS_HUB: HubDef = {
     },
     {
       path: 'data',
+      adminOnly: true,
       label: 'Backups & refresh',
       hint: 'Backups, restore drills and refreshes, per environment.',
       keywords: 'backup restore drill refresh copy production to staging rehearsal data'
@@ -323,6 +338,7 @@ export const APPS_HUB: HubDef = {
     // ── People and access ──
     {
       path: 'people',
+      adminOnly: true,
       label: 'People',
       hint: 'Who can reach which app, and offboarding.',
       keywords: 'users directory offboard owners who has access leaver'
@@ -342,12 +358,14 @@ export const APPS_HUB: HubDef = {
     },
     {
       path: 'secrets',
+      adminOnly: true,
       label: 'Secrets',
       hint: 'Tokens and keys the Hub holds, and when each is due to rotate.',
       keywords: 'tokens keys rotate rotation credentials'
     },
     {
       path: 'connections',
+      adminOnly: true,
       label: 'Outside accounts',
       hint: 'Every provider account the Hub holds, in one list, with what each shares between apps.',
       keywords:
@@ -356,6 +374,7 @@ export const APPS_HUB: HubDef = {
     },
     {
       path: 'audit',
+      adminOnly: true,
       label: 'Audit log',
       hint: 'Every change made through the Hub, by whom and when.',
       keywords: 'audit history who changed csv'
@@ -766,9 +785,11 @@ export const hubTabGroup = (hub: HubDef, path: string): HubTabGroup | null =>
  * people use for what the page holds (`keywords`), never only by the page's own name.
  */
 export function hubSearchPages(
-  hub: HubDef
+  hub: HubDef,
+  opts: { admin?: boolean } = {}
 ): Array<{ label: string; path: string; keywords: string }> {
-  return hub.tabs.map((t) => {
+  const tabs = opts.admin === false ? hub.tabs.filter((t) => !t.adminOnly) : hub.tabs
+  return tabs.map((t) => {
     const group = hubTabGroup(hub, t.path)
     const home = group ? (group.title ?? group.label) : hub.title
     return {
@@ -830,6 +851,9 @@ export function isPathDisabled(pathname: string, disabled: Set<string>): boolean
 /** The tabs of a hub a role may open. */
 export const allowedHubTabs = (hub: HubDef, disabled: Set<string>) =>
   hub.tabs.filter((t) => !isDisabled(tabPermissionKey(hub, t), disabled))
+
+/** May a person who is not a Hub administrator use the page at this path? Unknown path = yes. */
+export const hubPageForEveryone = (pathname: string) => !hubForPath(pathname)?.tab.adminOnly
 
 /** The hub whose BASE is this path (a nav entry), or null. */
 export const hubAtBase = (path: string) => HUBS.find((h) => h.base === path) ?? null

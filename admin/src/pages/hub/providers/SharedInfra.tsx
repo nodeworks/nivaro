@@ -60,6 +60,15 @@ export function SharedInfra({ embedded = false }: { embedded?: boolean } = {}) {
     (c) =>
       holding.has(c.id) || (idx.provider(c.provider)?.types ?? []).some((t) => t.scope === 'shared')
   )
+  // Under Outside accounts: an account shows only when it shares something or could (a kind the
+  // Hub can create there), so the list is not a column of empty cards.
+  const withSomething = relevant.filter(
+    (c) =>
+      holding.has(c.id) ||
+      (idx.provider(c.provider)?.types ?? []).some(
+        (t) => t.scope === 'shared' && t.capabilities.create
+      )
+  )
   const pending = connections.isPending || shared.isPending || types.isPending
   const error = connections.error ?? shared.error ?? types.error
 
@@ -79,7 +88,7 @@ export function SharedInfra({ embedded = false }: { embedded?: boolean } = {}) {
       }}
     />
   ) : (
-    relevant.map((c) => (
+    (embedded ? withSomething : relevant).map((c) => (
       <ConnectionGroup
         key={c.id}
         connection={c}
@@ -103,7 +112,7 @@ export function SharedInfra({ embedded = false }: { embedded?: boolean } = {}) {
           <p className='m-0 mt-0.5 max-w-[72ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
             Networks, zones and settings that belong to an account, not to one app. App resources
             point at them; one in use cannot be deleted.
-            {!pending && !error && relevant.length === 0
+            {!pending && !error && withSomething.length === 0
               ? ' None yet: they come with an account whose provider has them.'
               : ''}
           </p>

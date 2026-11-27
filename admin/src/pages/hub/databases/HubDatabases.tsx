@@ -39,12 +39,22 @@ export default function HubDatabases() {
   return <DatabasesAdmin />
 }
 
+/**
+ * An app owner's Databases: the databases and caches their apps hold at providers, with state,
+ * drift and cost. The Hub's own servers and records are for administrators; an owner reaches
+ * their app's database from the app's page.
+ */
 function AdminsOnly() {
   return (
-    <div className='flex flex-1 items-center justify-center bg-slate-50 p-8 text-center dark:bg-background'>
-      <p className='m-0 max-w-[48ch] text-[13px] text-slate-600 dark:text-muted-foreground'>
-        Only administrators manage database servers and databases.
-      </p>
+    <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+      <div className='space-y-4 p-4 sm:p-6'>
+        <LinkedChange isAdmin={false} />
+        <p className='m-0 max-w-[72ch] text-[12px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
+          Only administrators manage database servers and the Hub’s own database records. What your
+          apps hold at a provider is below; your app’s database is on the app’s page.
+        </p>
+        <ProviderHome groups={DATA} isAdmin={false} idPrefix='hub-home-data' />
+      </div>
     </div>
   )
 }

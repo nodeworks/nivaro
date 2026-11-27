@@ -125,7 +125,7 @@ export function HubAppDetail({
   return (
     <div className='space-y-5 p-4 sm:p-6'>
       <AppHeader app={data} isAdmin={isAdmin} onDeleted={onDeleted} />
-      <AppShortcuts app={data} envs={envs} />
+      <AppShortcuts app={data} envs={envs} isAdmin={isAdmin} />
       {envs.map((e) => (
         <HubCreationPanel
           key={e.id}

@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
+import { useAuth } from '@/lib/auth'
+import { hubPageForEveryone } from '@/lib/hubs'
 import { formatRelative } from '@/lib/utils'
 import { ResourceCostChip } from './costs/RowCosts'
 import type { HubAppFull, HubEnvironment } from './hub-api'
@@ -19,10 +21,20 @@ import {
 
 /**
  * From an app to everything about that app (navigation spec 2026-11-27): the Hub pages that hold
- * this app's side of things, each already narrowed to it where the page can be. An owner never
+ * this app's side of things, each already narrowed to it (`?app=<id>`, or `?env=<id>` on the
+ * pages that work per environment). An owner never
  * has to know which section a page lives in to get from their app to its backups or its issues.
  */
-export function AppShortcuts({ app, envs }: { app: HubAppFull; envs: HubEnvironment[] }) {
+export function AppShortcuts({
+  app,
+  envs,
+  isAdmin
+}: {
+  app: HubAppFull
+  envs: HubEnvironment[]
+  /** Not an administrator = an owner: pages only administrators can use are not linked. */
+  isAdmin: boolean
+}) {
   // Pages that work per environment open on the last one in the chain (production, as a rule).
   const env = envs[envs.length - 1]
   const byApp = `?app=${app.id}`
@@ -31,7 +43,7 @@ export function AppShortcuts({ app, envs }: { app: HubAppFull; envs: HubEnvironm
     {
       label: 'Deploys',
       links: [
-        { to: '/hub/releases', label: 'Releases' },
+        { to: `/hub/releases${byApp}`, label: 'Releases' },
         { to: `/hub/smoke${byEnv}`, label: 'Smoke checks' },
         { to: `/hub/config${byApp}`, label: 'Config promotion' }
       ]
@@ -42,7 +54,7 @@ export function AppShortcuts({ app, envs }: { app: HubAppFull; envs: HubEnvironm
         { to: `/hub/fleet${byApp}`, label: 'Versions and uptime' },
         { to: `/hub/health${byApp}`, label: 'Health' },
         { to: `/hub/issues${byApp}`, label: 'Issues' },
-        { to: '/hub/incidents', label: 'Incidents' }
+        { to: `/hub/incidents${byApp}`, label: 'Incidents' }
       ]
     },
     {
@@ -50,11 +62,12 @@ export function AppShortcuts({ app, envs }: { app: HubAppFull; envs: HubEnvironm
       links: [
         { to: `/hub/data${byEnv}`, label: 'Backups' },
         { to: `/hub/usage${byEnv}`, label: 'Usage' },
-        { to: '/hub/costs', label: 'Costs' },
-        { to: '/hub/on-call', label: 'On-call' }
+        { to: `/hub/costs${byApp}`, label: 'Costs' },
+        { to: `/hub/on-call${byApp}`, label: 'On-call' }
       ]
     }
   ]
+  const usable = (l: { to: string }) => isAdmin || hubPageForEveryone(l.to.split('?')[0])
   return (
     <nav
       aria-label={`More about ${app.name}`}
@@ -65,7 +78,7 @@ export function AppShortcuts({ app, envs }: { app: HubAppFull; envs: HubEnvironm
           <span className='mr-1 text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
             {g.label}
           </span>
-          {g.links.map((l) => (
+          {g.links.filter(usable).map((l) => (
             <Link
               key={l.to}
               to={l.to}
@@ -88,6 +101,8 @@ export function AppShortcuts({ app, envs }: { app: HubAppFull; envs: HubEnvironm
  */
 export function AppOutsideResources({ app, envs }: { app: HubAppFull; envs: HubEnvironment[] }) {
   const [, setParams] = useSearchParams()
+  const { user } = useAuth()
+  const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
   const filter = { app: app.id }
   const resources = useQuery({
     queryKey: providerKeys.resources(filter),
@@ -129,12 +144,14 @@ export function AppOutsideResources({ app, envs }: { app: HubAppFull; envs: HubE
                 <span className='font-normal tabular-nums text-slate-500 dark:text-muted-foreground'>
                   {g.rows.length}
                 </span>
-                <Link
-                  to={home.path}
-                  className='ml-auto inline-flex items-center gap-1 text-[11px] font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
-                >
-                  {home.page} <ArrowRight className='h-3 w-3' aria-hidden />
-                </Link>
+                {(isAdmin || hubPageForEveryone(home.path)) && (
+                  <Link
+                    to={home.path}
+                    className='ml-auto inline-flex items-center gap-1 text-[11px] font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
+                  >
+                    {home.page} <ArrowRight className='h-3 w-3' aria-hidden />
+                  </Link>
+                )}
               </h4>
               <ul className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'>
                 {g.rows.map((r) => {

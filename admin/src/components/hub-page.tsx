@@ -3,6 +3,7 @@ import { type ComponentType, type ReactNode, Suspense, useCallback, useEffect } 
 import { Navigate, useLocation, useNavigate } from 'react-router'
 import { ScrollTabStrip } from '@/components/tab-strip'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuth } from '@/lib/auth'
 import { useHubProductFlag } from '@/lib/hub-product'
 import {
   type HubDef,
@@ -31,6 +32,9 @@ export function HubPage({
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const hubLook = useHubProductFlag()
+  // Signed in and not an administrator = an app owner (unknown yet = show everything).
+  const { user } = useAuth()
+  const owner = !!user && !(user as { is_admin?: boolean }).is_admin
   const match = hubForPath(pathname)
   const tabDomId = useCallback(
     (path: string) => `hub-tab${hub.base.replace(/\//g, '-')}-${path || 'index'}`,
@@ -65,7 +69,7 @@ export function HubPage({
   // not show it (a group of one). In the Hub look the top bar names the group, so a group of one
   // has no strip at all and the panel is named by the page heading.
   const group = hub.groups ? hubTabGroup(hub, active.path) : null
-  const inStrip = !group || groupStripTabs(hub, group).includes(active)
+  const inStrip = !group || groupStripTabs(hub, group, owner, active).includes(active)
   const headingId = `hub-heading${hub.base.replace(/\//g, '-')}`
   const labelledBy = inStrip
     ? tabDomId(active.path)
@@ -101,7 +105,13 @@ export function HubPage({
           </div>
         </div>
         {hub.groups ? (
-          <GroupedTabStrips hub={hub} active={active} hubLook={hubLook} panelId={panelId} />
+          <GroupedTabStrips
+            hub={hub}
+            active={active}
+            hubLook={hubLook}
+            panelId={panelId}
+            owner={owner}
+          />
         ) : (
           <ScrollTabStrip
             className='mt-1.5'
@@ -133,11 +143,20 @@ export function HubPage({
 
 const groupDomId = (hub: HubDef, key: string) => `hub-group${hub.base.replace(/\//g, '-')}-${key}`
 
-/** A group's tabs as its strip shows them: one tab alone shows no strip (empty list). */
-function groupStripTabs(hub: HubDef, group: HubTabGroup): HubTabDef[] {
+/**
+ * A group's tabs as its strip shows them: one tab alone shows no strip (empty list). With
+ * `owner` (signed in, not an administrator) admin-only pages are left out, except `keep`: the
+ * page that is open stays in its own strip even when it is one that will only say "administrators".
+ */
+function groupStripTabs(
+  hub: HubDef,
+  group: HubTabGroup,
+  owner = false,
+  keep?: HubTabDef
+): HubTabDef[] {
   const tabs = group.tabs
     .map((p) => hub.tabs.find((t) => t.path === p))
-    .filter((t): t is HubTabDef => !!t)
+    .filter((t): t is HubTabDef => !!t && (!owner || !t.adminOnly || t === keep))
   return tabs.length > 1 ? tabs : []
 }
 
@@ -151,24 +170,35 @@ function GroupedTabStrips({
   hub,
   active,
   hubLook,
-  panelId
+  panelId,
+  owner
 }: {
   hub: HubDef
   active: HubTabDef
   hubLook: boolean
   panelId: string
+  /** Signed in and not an administrator: admin-only pages and empty groups are left out. */
+  owner: boolean
 }) {
   const navigate = useNavigate()
-  const groups = hub.groups ?? []
+  const usable = (g: HubTabGroup) =>
+    g.tabs.some((p) => {
+      const t = hub.tabs.find((x) => x.path === p)
+      return !!t && (!owner || !t.adminOnly || t === active)
+    })
+  const groups = (hub.groups ?? []).filter(usable)
   const open = hubTabGroup(hub, active.path) ?? groups[0]
-  const openTabs = groupStripTabs(hub, open)
+  const openTabs = groupStripTabs(hub, open, owner, active)
   const groupId = useCallback((key: string) => groupDomId(hub, key), [hub])
   const tabDomId = useCallback(
     (path: string) => `hub-tab${hub.base.replace(/\//g, '-')}-${path || 'index'}`,
     [hub.base]
   )
-  /** The tab a group opens on: its first one. */
-  const landing = (g: HubTabGroup) => hub.tabs.find((t) => t.path === g.tabs[0])
+  /** The tab a group opens on: its first one this person can use. */
+  const landing = (g: HubTabGroup) =>
+    g.tabs
+      .map((p) => hub.tabs.find((t) => t.path === p))
+      .find((t) => !!t && (!owner || !t.adminOnly))
   const pick = (path: string) => {
     const tab = hub.tabs.find((t) => t.path === path)
     if (tab) navigate(hubTabPath(hub, tab))

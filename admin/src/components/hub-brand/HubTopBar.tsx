@@ -24,7 +24,7 @@ import { ThemeSwitcher } from '@/components/theme-switcher'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { NavItem } from '@/layouts/nav-config'
-import { logout } from '@/lib/auth'
+import { logout, useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 import { HubGlyph, HubWordmark } from './HubMark'
 import { activeSection, type HubSection, visibleSections } from './hub-sections'
@@ -85,7 +85,13 @@ export function HubTopBar({
   const { pathname } = useLocation()
   const narrow = useNarrow()
   const permitted = useMemo(() => new Set(items.map((i) => i.key ?? i.to)), [items])
-  const sections = useMemo(() => visibleSections({ permitted, disabled }), [permitted, disabled])
+  // Signed in and not an administrator = an app owner: admin-only pages are not offered.
+  const { user: me } = useAuth()
+  const admin = me ? !!(me as { is_admin?: boolean }).is_admin : undefined
+  const sections = useMemo(
+    () => visibleSections({ permitted, disabled, admin }),
+    [permitted, disabled, admin]
+  )
   const current = activeSection(sections, pathname)
   const system = useMemo(() => systemItems(items), [items])
   const [menuOpen, setMenuOpen] = useState(false)

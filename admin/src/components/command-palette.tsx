@@ -506,6 +506,8 @@ export function CommandPalette() {
   // and every app by name. On a standalone Hub they lead the list; elsewhere they follow it.
   const hubOn = useServerFeatures().has('hub')
   const hubLook = useHubProductFlag()
+  const { user: hubUser } = useAuth()
+  const hubAdmin = hubUser ? !!(hubUser as { is_admin?: boolean }).is_admin : undefined
   const { data: hubApps } = useQuery({
     queryKey: ['command-palette-hub-apps'],
     queryFn: () =>
@@ -520,7 +522,7 @@ export function CommandPalette() {
     () =>
       hubOn
         ? [
-            ...hubSearchPages(APPS_HUB),
+            ...hubSearchPages(APPS_HUB, { admin: hubAdmin }),
             ...(hubApps ?? []).map((a) => ({
               label: `${a.name} (app)`,
               path: `/hub?app=${a.id}`,
@@ -528,7 +530,7 @@ export function CommandPalette() {
             }))
           ]
         : [],
-    [hubOn, hubApps]
+    [hubOn, hubApps, hubAdmin]
   )
 
   const q = query.trim()

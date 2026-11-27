@@ -9,6 +9,7 @@ import {
   HUB_REDIRECTS,
   HUBS,
   hubForPath,
+  hubPageForEveryone,
   hubSearchPages,
   hubTabGroup,
   isPathDisabled
@@ -102,6 +103,32 @@ describe('hub registry', () => {
     const map = Object.fromEntries(HUB_REDIRECTS.map((r) => [r.from, r.to]))
     expect(map['/hub/shared-infra']).toBe('/hub/connections')
     expect(HUB_PATHS.has('/hub/shared-infra')).toBe(false)
+  })
+
+  it('marks the pages only administrators can use, and leaves them out of an owner\u2019s search', () => {
+    expect(APPS_HUB.tabs.filter((t) => t.adminOnly).map((t) => t.path)).toEqual([
+      'templates',
+      'targets',
+      'config',
+      'hosts',
+      'drivers',
+      'shared',
+      'capacity',
+      'scale',
+      'data',
+      'people',
+      'secrets',
+      'connections',
+      'audit'
+    ])
+    expect(hubPageForEveryone('/hub/databases')).toBe(true)
+    expect(hubPageForEveryone('/hub/data')).toBe(false)
+    expect(hubPageForEveryone('/users')).toBe(true)
+    const owner = hubSearchPages(APPS_HUB, { admin: false }).map((p) => p.path)
+    expect(owner).toContain('/hub/domains')
+    expect(owner).not.toContain('/hub/connections')
+    expect(hubSearchPages(APPS_HUB, { admin: true })).toHaveLength(APPS_HUB.tabs.length)
+    expect(hubSearchPages(APPS_HUB)).toHaveLength(APPS_HUB.tabs.length)
   })
 
   it('finds Hub pages by what they hold, not only by their name', () => {

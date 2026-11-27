@@ -106,11 +106,21 @@ describe('HubDatabases', () => {
     expect(screen.getByText('Waiting for a DBA')).toBeTruthy()
   })
 
-  it('shows the admins-only state for a non-admin and for a 403', async () => {
+  it('gives a non-admin what their apps hold at providers, and never reads the servers', async () => {
     h.admin = false
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/provider-types')
+        return { data: { data: { risk_flags: [], categories: [], providers: [] } } }
+      return { data: { data: [] } }
+    })
     wrap()
-    expect(screen.getByText(/Only administrators/)).toBeTruthy()
-    expect(h.get).not.toHaveBeenCalled()
+    expect(screen.getByText(/Only administrators manage database servers/)).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'In your apps' })).toBeTruthy()
+    // Account management is not offered to an owner.
+    expect(screen.queryByRole('button', { name: /Connect a database provider/ })).toBeNull()
+    const asked = h.get.mock.calls.map((c) => c[0])
+    expect(asked).not.toContain('/hub/db-servers')
+    expect(asked).not.toContain('/hub/databases')
   })
 
   it('shows the admins-only state when the API answers 403', async () => {

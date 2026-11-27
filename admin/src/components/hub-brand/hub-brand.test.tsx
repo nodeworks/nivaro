@@ -193,6 +193,57 @@ describe('top bar sections and fleet strip', () => {
     expect(visibleSections(none)).toEqual([])
   })
 
+  it('an app owner is offered no admin-only page, and no home that holds nothing else', () => {
+    const owner = { ...admin, admin: false }
+    const sections = visibleSections(owner)
+    const pages = (key: string) => sections.find((s) => s.key === key)?.pages.map((p) => p.label)
+    expect(pages('apps')).toEqual([
+      'Apps',
+      'Usage',
+      'Dependencies',
+      'App services',
+      'Clone & retire'
+    ])
+    expect(pages('deploys')).toEqual([
+      'Releases',
+      'Change calendar',
+      'Smoke checks',
+      'Extensions',
+      'Code & pipelines'
+    ])
+    // Hosting keeps what an owner can read; it opens on the first of those.
+    expect(sections.find((s) => s.key === 'hosting')).toMatchObject({
+      to: '/hub/storage',
+      pages: [
+        expect.objectContaining({ label: 'Storage' }),
+        expect.objectContaining({ label: 'Cloud accounts' })
+      ]
+    })
+    expect(pages('databases')).toEqual(['Databases'])
+    expect(pages('access')).toEqual(['Sign-in', 'Access reviews'])
+    const all = sections.flatMap((s) => s.pages.map((p) => p.to))
+    for (const to of [
+      '/hub/templates',
+      '/hub/targets',
+      '/hub/config',
+      '/hub/hosts',
+      '/hub/drivers',
+      '/hub/shared',
+      '/hub/capacity',
+      '/hub/scale',
+      '/hub/data',
+      '/hub/people',
+      '/hub/secrets',
+      '/hub/connections',
+      '/hub/audit'
+    ]) {
+      expect(all, to).not.toContain(to)
+      expect(sectionAllowed(to, owner), to).toBe(false)
+    }
+    // An administrator, and a person the app does not know yet, see the whole map.
+    expect(visibleSections({ ...admin, admin: true })).toEqual(visibleSections(admin))
+  })
+
   it('lights the section a page lives in, and none on a System page', () => {
     const sections = visibleSections(admin)
     expect(activeSection(sections, '/hub')?.label).toBe('Apps')

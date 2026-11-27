@@ -14,8 +14,9 @@ import {
  * of the Hub for the top bar, the strip under it, the Find box and the docs, so a page has one
  * home whichever way a person looks for it.
  *
- * A section shows only when this person may open at least one of its pages, exactly as the old
- * sidebar decided: the Apps entry in their permitted nav AND the tab allowed by their role's
+ * A section shows only when this person may use at least one of its pages. An app owner (not a
+ * Hub administrator) is never offered a page only administrators can use (`adminOnly`), so a home
+ * with nothing for them does not show at all. Beyond that it is exactly as the old sidebar decided: the Apps entry in their permitted nav AND the tab allowed by their role's
  * ui_permissions (allowedHubTabs). It links to the first page they may open. Everything else a
  * standalone Hub keeps (HUB_ONLY_NAV: Users, Roles, Health, Jobs, Settings…) goes under "System".
  */
@@ -37,6 +38,8 @@ export interface SectionAccess {
   permitted: ReadonlySet<string>
   /** Their role's ui_permissions (useUiPermissions). */
   disabled: ReadonlySet<string>
+  /** false = signed in and not a Hub administrator: admin-only pages are left out. */
+  admin?: boolean
 }
 
 /** May this person open `to` (same rule as the sidebar)? */
@@ -45,7 +48,7 @@ export function sectionAllowed(to: string, access: SectionAccess): boolean {
   if (match) {
     if (!access.permitted.has(match.hub.base)) return false
     return allowedHubTabs(match.hub, access.disabled as Set<string>).some(
-      (t) => hubTabPath(match.hub, t) === to
+      (t) => hubTabPath(match.hub, t) === to && !(access.admin === false && t.adminOnly)
     )
   }
   return access.permitted.has(to)
@@ -72,7 +75,9 @@ export function visibleSections(
   hub: HubDef = APPS_HUB
 ): HubSection[] {
   if (access && !access.permitted.has(hub.base)) return []
-  const tabs = access ? allowedHubTabs(hub, access.disabled as Set<string>) : hub.tabs
+  const tabs = (access ? allowedHubTabs(hub, access.disabled as Set<string>) : hub.tabs).filter(
+    (t) => !(access?.admin === false && t.adminOnly)
+  )
   return (hub.groups ?? []).map((g) => sectionOf(hub, g, tabs)).filter((s): s is HubSection => !!s)
 }
 

@@ -1,6 +1,10 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const who = vi.hoisted(() => ({ user: null as { id: string; is_admin: boolean } | null }))
+vi.mock('@/lib/auth', () => ({ useAuth: () => ({ user: who.user }) }))
+
 import { APPS_HUB, DATABASE_HUB } from '@/lib/hubs'
 import { HubPage, HubRedirect } from './hub-page'
 
@@ -101,6 +105,30 @@ function renderApps(url: string) {
 }
 
 describe('HubPage with tab groups (Apps hub)', () => {
+  it('an app owner gets no admin-only page in the strips, but the open one stays in its own', () => {
+    who.user = { id: 'u1', is_admin: false }
+    renderApps('/hub/storage')
+    const [groups, tabs] = screen.getAllByRole('tablist')
+    expect(
+      within(tabs)
+        .getAllByRole('tab')
+        .map((t) => t.textContent)
+    ).toEqual(['Storage', 'Cloud accounts'])
+    expect(within(groups).queryByRole('tab', { name: 'Costs' })).not.toBeNull()
+    // Access opens on the first page an owner can use, not on People.
+    fireEvent.click(within(groups).getByRole('tab', { name: 'Access' }))
+    expect(screen.getByTestId('where').textContent).toBe('/hub/signin')
+    cleanup()
+    // Followed a link to a page only administrators use: it is in its strip, and says so itself.
+    renderApps('/hub/drivers')
+    expect(
+      within(screen.getAllByRole('tablist')[1])
+        .getAllByRole('tab')
+        .map((t) => t.textContent)
+    ).toEqual(['Deploy locations', 'Storage', 'Cloud accounts'])
+    who.user = null
+  })
+
   it("shows the groups, then the open group's tabs", () => {
     renderApps('/hub/smoke')
     const [groups, tabs] = screen.getAllByRole('tablist')
