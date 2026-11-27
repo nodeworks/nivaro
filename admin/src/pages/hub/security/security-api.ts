@@ -283,6 +283,10 @@ export interface DomainRow {
   days_left: number | null
   auto_renew: boolean | null
   locked: boolean | null
+  /** Days before the end the Hub renews this domain itself (null = it does not). */
+  hub_renew_days?: number | null
+  /** The registrar's own auto-renew is shown but cannot be changed through its API. */
+  renew_read_only?: boolean
   error_code: string | null
   checked_at: string | null
 }

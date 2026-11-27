@@ -26,7 +26,13 @@ function domainWords(d: DomainRow): { tone: 'good' | 'warn' | 'bad'; text: strin
   return { tone: d.state === 'warning' ? 'warn' : 'good', text: `${left} days left` }
 }
 
-const renewWords = (v: boolean | null) => (v == null ? '—' : v ? 'By itself' : 'By hand')
+/** Who renews it: the Hub (switched on here), the registrar (read only at Namecheap), or by hand. */
+function renewWords(d: DomainRow): string {
+  if (d.hub_renew_days != null) return `Renewed by the Hub, ${d.hub_renew_days} days before`
+  if (d.auto_renew == null) return '—'
+  if (d.auto_renew) return d.renew_read_only ? 'Auto-renew at Namecheap (read only)' : 'By itself'
+  return 'By hand'
+}
 
 function LockChip({ locked }: { locked: boolean | null }) {
   if (locked == null) return <span className='text-slate-400'>—</span>
@@ -66,7 +72,7 @@ export default function HubDomainsCard() {
                 {[
                   appName(envs, d.app_id),
                   d.expires_at ? `ends ${formatDate(d.expires_at)}` : null,
-                  d.auto_renew == null ? null : `renews ${renewWords(d.auto_renew).toLowerCase()}`,
+                  renewWords(d) === '—' ? null : renewWords(d),
                   d.locked === false ? 'transfer lock off' : null
                 ]
                   .filter(Boolean)
@@ -104,7 +110,7 @@ export default function HubDomainsCard() {
                     {d.expires_at ? formatDate(d.expires_at) : '—'}
                   </td>
                   <td className={cn(td, 'text-slate-600 dark:text-muted-foreground')}>
-                    {renewWords(d.auto_renew)}
+                    {renewWords(d)}
                   </td>
                   <td className={td}>
                     <LockChip locked={d.locked} />

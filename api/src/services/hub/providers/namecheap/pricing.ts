@@ -101,6 +101,8 @@ export async function domainEstimate(
     if (!renew || (registering && !reg))
       return unknownEstimate(`No Namecheap price found for .${tld} domains.`)
     const years = Math.min(10, Math.max(1, Math.trunc(Number(f.years ?? 1)) || 1))
+    // The `renew` trigger charges one more year now.
+    const renewingNow = !registering && !!desired && f.renew === true
     const autoRenew = observed?.fields.auto_renew === true
     const fromApi = renew.source !== 'bundled'
     return estimateOf({
@@ -108,15 +110,22 @@ export async function domainEstimate(
       confidence: 'list_price',
       currency: renew.currency,
       lines: [],
-      oneTimeCents: registering && reg ? reg.unitCents + (years - 1) * renew.unitCents : 0,
+      oneTimeCents:
+        registering && reg
+          ? reg.unitCents + (years - 1) * renew.unitCents
+          : renewingNow
+            ? renew.unitCents
+            : 0,
       yearlyCents: renew.unitCents,
       priceAsOf: renew.asOf,
       note: [
-        registering
-          ? `Registration is charged once, now (${years} year${years === 1 ? '' : 's'}); it then costs the renewal price each year it is renewed.`
-          : autoRenew
-            ? 'Renews each year at the renewal price.'
-            : 'Auto-renew is off at Namecheap: the renewal is charged only when someone renews it.',
+        renewingNow
+          ? 'Renewing is charged once, now (one year at the renewal price).'
+          : registering
+            ? `Registration is charged once, now (${years} year${years === 1 ? '' : 's'}); it then costs the renewal price each year it is renewed.`
+            : autoRenew
+              ? 'Renews each year at the renewal price.'
+              : 'Auto-renew is off at Namecheap: the renewal is charged only when someone renews it.',
         fromApi
           ? 'Prices are this account’s.'
           : 'List prices from a dated table; the account’s own may differ.'

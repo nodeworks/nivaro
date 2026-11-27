@@ -388,7 +388,10 @@ async function judgeForRun(row: HubResourceChangeRow, actor: HubActor): Promise<
       appId: row.app_id,
       environmentId: row.environment_id,
       actions: plan.request.ops.map((o) => o.action),
-      resourceIds: plan.request.ops.map((o) => o.resourceId ?? null)
+      resourceIds: plan.request.ops.map((o) => o.resourceId ?? null),
+      fieldKeys: plan.request.ops.map((o) =>
+        Object.keys(o.fields && typeof o.fields === 'object' ? o.fields : {})
+      )
     })
   const gates = await judgeChangeGates({
     scope: row.scope,

@@ -388,7 +388,9 @@ export function planCostTotal(ops: readonly PlannedOp[], now: Date): PlanCostTot
     const a = c.after && c.after.confidence !== 'unknown' ? c.after : null
     const b = c.before && c.before.confidence !== 'unknown' ? c.before : null
     // One-time amounts are paid on a create (or a replace); yearly ones change like monthly.
-    if (a && (op.kind === 'create' || op.kind === 'replace')) once += a.oneTimeCents
+    // (A named `renew` charges its one-time amount too: a domain renewal is paid now.)
+    if (a && (op.kind === 'create' || op.kind === 'replace' || op.action === 'renew'))
+      once += a.oneTimeCents
     yearly += (a?.yearlyCents ?? 0) - (b?.yearlyCents ?? 0)
   }
   return {

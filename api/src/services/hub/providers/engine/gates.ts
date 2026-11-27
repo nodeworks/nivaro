@@ -10,7 +10,13 @@ import { moveOpenRefusal } from '../../move-open.js'
 import { envPolicy } from '../../owner-access.js'
 import { archivedRefusal } from '../../releases/archived.js'
 import { freezeRefusal } from '../../releases/freeze.js'
-import { appAllowedConnections, type HubConnectionRow, type HubResourceRow } from '../store.js'
+import { RENEW_DAYS_DEFAULT, renewDaysOf } from '../renewal-window.js'
+import {
+  appAllowedConnections,
+  type HubConnectionRow,
+  type HubResourceRow,
+  readResource
+} from '../store.js'
 import type { ResourceScope, ResourceTypeSpec } from '../types.js'
 import {
   type ChangeGate,
@@ -86,7 +92,15 @@ export async function judgeAccess(input: AccessInput, actor: HubActor): Promise<
     scope === 'shared' ||
     rows.some((r) => r.scope === 'shared') ||
     types.some((t) => t.scope === 'shared')
-  if (sharedTouched && !actor.isAdmin)
+  // Gap G-E: the Hub's own renewal of a shared registrar domain acts for the person who made it
+  // (never as an administrator): one resource, judged again by judgeOrigin.
+  const renewalOfShared =
+    input.carriedBy === 'renewal' &&
+    scope === 'shared' &&
+    types.length > 0 &&
+    types.every((t) => RENEWABLE_SHARED_TYPES.includes(t.key)) &&
+    rows.every((r) => RENEWABLE_SHARED_TYPES.includes(r.type))
+  if (sharedTouched && !actor.isAdmin && !renewalOfShared)
     throw refuse(
       'SHARED_ADMIN_ONLY',
       'Shared resources (networks, hosted zones, organisation settings) are changed by Hub administrators only.'
@@ -321,11 +335,19 @@ const ORIGIN_ACTIONS: Record<ChangeOrigin['kind'], readonly PlanAction[]> = {
   promotion: ['adopt', 'update'],
   creation: ['create', 'adopt', 'update'],
   retirement: ['delete'],
-  renewal: ['reapply']
+  renewal: ['reapply', 'update']
 }
 
 /** Task 43: the types a renewal origin may re-apply (each plans a `renew` op in its window). */
 export const RENEWABLE_TYPES: readonly string[] = Object.freeze(['acme.certificate'])
+
+/**
+ * Hub auto-renew of a registrar domain (gap G-E): shared-scope types a renewal origin may renew
+ * with ONE `update` carrying exactly `{renew: true}` (the type's own one-shot trigger). The domain
+ * must have `hub_auto_renew` on and end within `renew_days_before` (default 30, 7–60).
+ */
+export const RENEWABLE_SHARED_TYPES: readonly string[] = Object.freeze(['namecheap.domain'])
+export { RENEW_DAYS_DEFAULT, renewDaysOf }
 
 /**
  * Throws ORIGIN_INVALID unless `origin` is a run that may carry this change NOW: the right kind of
@@ -341,11 +363,45 @@ export async function judgeOrigin(
     actions: PlanAction[]
     /** The request ops' resource ids (Task 43: a renewal names exactly one). */
     resourceIds?: ReadonlyArray<number | null | undefined>
+    /** The request ops' field keys (a shared-domain renewal names exactly `renew`). */
+    fieldKeys?: ReadonlyArray<string[]>
+    /** The clock (tests). */
+    now?: number
   }
 ): Promise<void> {
   const bad = (message: string) => refuse('ORIGIN_INVALID', message)
   const allowed = ORIGIN_ACTIONS[origin?.kind as ChangeOrigin['kind']]
   if (!allowed) throw bad('Unknown carrier of this change.')
+  if (origin.kind === 'renewal' && c.scope === 'shared') {
+    const id = Number(origin.resourceId)
+    const ids = c.resourceIds ?? []
+    const keys = c.fieldKeys ?? []
+    if (
+      c.actions.length !== 1 ||
+      c.actions[0] !== 'update' ||
+      ids.length !== 1 ||
+      Number(ids[0]) !== id ||
+      keys.length !== 1 ||
+      keys[0].length !== 1 ||
+      keys[0][0] !== 'renew'
+    )
+      throw bad('A renewal renews the one resource it is for, and does nothing else.')
+    const r = await readResource(id)
+    if (
+      !r ||
+      r.deleted_at ||
+      !r.external_id ||
+      r.scope !== 'shared' ||
+      !RENEWABLE_SHARED_TYPES.includes(r.type)
+    )
+      throw bad('The resource this renewal is for is not a renewable shared resource.')
+    if (r.desired?.hub_auto_renew !== true) throw bad('Hub auto-renew is off for this resource.')
+    const ends = Date.parse(String(r.observed?.fields?.expires_at ?? ''))
+    const now = c.now ?? Date.now()
+    if (!Number.isFinite(ends) || ends - now > renewDaysOf(r.desired) * 86_400_000)
+      throw bad('This resource is not inside its renewal window.')
+    return
+  }
   if (c.scope !== 'app' || c.appId == null)
     throw bad("A change carried by a Hub run belongs to one app's resources.")
   const wrong = c.actions.find((a) => !allowed.includes(a))
@@ -358,6 +414,9 @@ export async function judgeOrigin(
   if (origin.kind === 'renewal') {
     const id = Number(origin.resourceId)
     const ids = c.resourceIds ?? []
+    // A certificate is re-applied; only a shared domain renews through its own `update` trigger.
+    if (c.actions.some((a) => a !== 'reapply'))
+      throw bad('A renewal re-applies only the resource it renews.')
     if (!ids.length || ids.some((x) => Number(x) !== id))
       throw bad('A renewal re-applies only the resource it renews.')
     const r = (await db('nivaro_hub_resources')
