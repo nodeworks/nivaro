@@ -27,6 +27,11 @@ const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
 const { logActivity } = await import('../../../services/activity.js')
 const registry = await import('../../../services/hub/providers/registry.js')
 const store = await import('../../../services/hub/providers/store.js')
+// Load the engine's run and plan modules in full before any test: contract.ts reaches run.ts by a
+// dynamic import, and under a loaded machine two lazy loads raced and run.ts saw plan.ts half-made
+// ("Cannot access … before initialization", 33 tests at once).
+await import('../../../services/hub/providers/engine/plan.js')
+await import('../../../services/hub/providers/engine/run.js')
 const engine = await import('../../../services/hub/providers/engine/contract.js')
 const deps = await import('../../../services/hub/providers/engine/deps.js')
 const locks = await import('../../../services/hub/providers/engine/locks.js')
