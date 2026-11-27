@@ -1,0 +1,12 @@
+{
+  "rooms": [
+    {
+      "sid": "RM_fakeroom0001",
+      "name": "nvr-0000000000000000000000000000aaaa",
+      "creation_time": "1764000000",
+      "numParticipants": 3,
+      "numPublishers": 2,
+      "activeRecording": false
+    }
+  ]
+}

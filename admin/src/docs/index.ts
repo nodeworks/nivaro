@@ -65,6 +65,7 @@ export * from './sections/hub-providers.js'
 export * from './sections/hub-providers-cloudflare.js'
 export * from './sections/hub-providers-entra.js'
 export * from './sections/hub-providers-gitlab.js'
+export * from './sections/hub-providers-livekit.js'
 export * from './sections/hub-providers-redis.js'
 export * from './sections/hub-providers-teams.js'
 export * from './sections/hub-providers-twilio.js'
@@ -385,6 +386,7 @@ import { hubProvidersAwsPart3Docs } from './sections/hub-providers-aws-part3.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
+import { hubProvidersLivekitDocs } from './sections/hub-providers-livekit.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
@@ -1263,6 +1265,7 @@ export const navSections: NavGroup[] = [
       hubProvidersDocs,
       hubProvidersGithubDocs,
       hubProvidersGitlabDocs,
+      hubProvidersLivekitDocs,
       hubProvidersAwsDocs,
       hubProvidersAwsPart3Docs,
       hubProvidersVercelDocs,
