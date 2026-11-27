@@ -391,6 +391,7 @@ import {
 } from './sections/hub-providers-redis.js'
 import { hubProvidersSendgridDocs } from './sections/hub-providers-sendgrid.js'
 import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
+import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
@@ -1270,6 +1271,7 @@ export const navSections: NavGroup[] = [
       hubProvidersOpenaiDocs,
       hubProvidersEntraDocs,
       hubProvidersTwilioDocs,
+      hubProvidersStripeDocs,
       hubProvidersSlackDocs,
       hubProvidersPagerdutyDocs,
       hubProvidersSendgridDocs,

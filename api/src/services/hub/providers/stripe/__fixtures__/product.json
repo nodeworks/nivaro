@@ -1,0 +1,9 @@
+{
+  "id": "prod_TESTproduct0001",
+  "object": "product",
+  "active": true,
+  "livemode": false,
+  "name": "Demo plan",
+  "description": "A demo product",
+  "metadata": { "nivaro-hub:resource": "7", "nivaro-hub:app": "demo" }
+}

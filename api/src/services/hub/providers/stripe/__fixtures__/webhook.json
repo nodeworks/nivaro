@@ -1,0 +1,10 @@
+{
+  "id": "we_TESTendpoint0001",
+  "object": "webhook_endpoint",
+  "livemode": false,
+  "url": "https://hooks.example.com/stripe",
+  "enabled_events": ["checkout.session.completed", "invoice.paid"],
+  "description": "Demo hook",
+  "status": "enabled",
+  "metadata": { "nivaro-hub:resource": "9" }
+}
