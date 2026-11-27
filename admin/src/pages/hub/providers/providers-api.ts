@@ -689,6 +689,46 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
     title: 'Not while viewing as someone else',
     hint: 'Changes start only from your own sign-in.'
   },
+  CHECKLIST_MISMATCH: {
+    title: 'That checklist is for a different change',
+    hint: 'Open the checklist this change asks for, tick it, then start again.'
+  },
+  CHECKLIST_USED: {
+    title: 'That checklist was already used',
+    hint: 'Each checklist run covers one start. Start a new run, tick it, then start again.'
+  },
+  CHECKLIST_UNKNOWN: {
+    title: 'The Hub could not check the checklist',
+    hint: 'Try again in a minute. Nothing was changed.'
+  },
+  FREEZE_UNKNOWN: {
+    title: 'The Hub could not check for a freeze',
+    hint: 'Try again in a minute. Nothing was changed.'
+  },
+  MOVE_UNKNOWN: {
+    title: 'The Hub could not check for an open move',
+    hint: 'Try again in a minute. Nothing was changed.'
+  },
+  ENV_ARCHIVED: {
+    title: 'This app is retired',
+    hint: 'Changes are closed on a retired app. Restore the app first if you need this.'
+  },
+  WINDOW_INVALID: {
+    title: 'The deploy window setting is broken',
+    hint: 'Ask a Hub admin to fix the deploy window for this environment.'
+  },
+  LOCK_UNAVAILABLE: {
+    title: 'Another change is working on this resource',
+    hint: 'Wait for it to finish, then try again.'
+  },
+  CONNECTION_DISABLED: {
+    title: 'That connection is turned off',
+    hint: 'A Hub admin can turn it back on under Connections.'
+  },
+  ALREADY_EXISTS: {
+    title: 'Something with that name already exists at the provider',
+    hint: 'The Hub did not make it. Adopt it from the connection’s Not managed list instead.'
+  },
   NOT_IMPLEMENTED: {
     title: 'This Hub cannot do that yet',
     hint: 'The Hub on this server is missing this part. Update the Hub, then try again.'
