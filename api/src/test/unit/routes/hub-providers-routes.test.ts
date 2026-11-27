@@ -294,7 +294,7 @@ describe('connections', () => {
     expect(c).toMatchObject({
       provider: 'demo',
       name: 'Main',
-      description: 'Demo acme',
+      description: 'Demo zz-conn-org-7f3',
       status: 'untested',
       secret_keys: ['token']
     })
@@ -409,7 +409,7 @@ describe('connections', () => {
     const refused = await inject('PATCH', `/connections/${c.id}`, { config: { org: 'evil' } })
     expect(refused.statusCode).toBe(409)
     expect(refused.json().code).toBe('SECRET_REQUIRED_ON_HOST_CHANGE')
-    expect((await store.readConnection(c.id))?.config.org).toBe('acme')
+    expect((await store.readConnection(c.id))?.config.org).toBe('zz-conn-org-7f3')
     expect(await cached()).toBe('test-token-0001')
     // The mask does not count as re-sending.
     const masked = await inject('PATCH', `/connections/${c.id}`, {
