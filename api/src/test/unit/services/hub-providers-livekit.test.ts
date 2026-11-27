@@ -989,3 +989,37 @@ describe('livekit adapter: health', () => {
     expect((await livekitAdapter.health?.(failed, T.egress, EGRESS))?.status).toBe('warn')
   })
 })
+
+describe('livekit adapter: review fixes', () => {
+  const inbound = (addrs: string[]) =>
+    desired(T.sip, { direction: 'inbound', name: 'x', allowed_addresses: addrs })
+  const exposed = (addrs: string[]) =>
+    spec(T.sip).risk(op(T.sip, { kind: 'create' }), inbound(addrs))
+
+  it('a leading-zero mask is refused (never reaches LiveKit)', async () => {
+    const { ctx, calls } = harness([])
+    await expect(
+      livekitAdapter.apply(ctx, op(T.sip, { kind: 'create' }), inbound(['10.0.0.0/08']))
+    ).rejects.toMatchObject({ code: 'INVALID_FIELDS' })
+    expect(calls).toEqual([])
+    expect(exposed(['10.0.0.0/08'])).toEqual(['public_exposure'])
+  })
+
+  it('two /1 ranges are everyone; so is a mapped IPv6 /96, a short prefix and junk', () => {
+    expect(exposed(['0.0.0.0/1', '128.0.0.0/1'])).toEqual(['public_exposure'])
+    expect(exposed(['::ffff:0:0/96'])).toEqual(['public_exposure'])
+    expect(exposed(['::ffff:203.0.113.0/120'])).toEqual(['public_exposure'])
+    expect(exposed(['8.0.0.0/7'])).toEqual(['public_exposure'])
+    expect(exposed(['2000::/8'])).toEqual(['public_exposure'])
+    expect(exposed(['nonsense'])).toEqual(['public_exposure'])
+    expect(exposed(['203.0.113.0/24', '2001:db8::/32'])).toEqual([])
+  })
+
+  it('rooms, egress and trunks are shared scope (Hub admins only); the key stays app', () => {
+    expect(spec(T.room).scope).toBe('shared')
+    expect(spec(T.egress).scope).toBe('shared')
+    expect(spec(T.sip).scope).toBe('shared')
+    expect(spec(T.project).scope).toBe('shared')
+    expect(spec(T.apiKey).scope).toBe('app')
+  })
+})
