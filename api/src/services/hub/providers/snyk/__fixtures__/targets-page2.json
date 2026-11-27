@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "type": "target",
+      "attributes": {
+        "display_name": "example-org/example-repo",
+        "url": "https://example.test/example-org/example-repo",
+        "is_private": true
+      },
+      "relationships": {
+        "integration": {
+          "data": {
+            "type": "integration",
+            "id": "22222222-2222-4222-8222-222222222222",
+            "attributes": {
+              "integration_type": "github"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "links": {}
+}
