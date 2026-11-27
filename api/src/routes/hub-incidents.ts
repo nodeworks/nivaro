@@ -10,6 +10,7 @@ import {
   freezeOn,
   hideBanner,
   IncidentError,
+  notifyIncidentUpdate,
   openIncident,
   resolveIncident,
   SEV_LABEL,
@@ -384,6 +385,7 @@ export async function hubIncidentRoutes(app: FastifyInstance): Promise<void> {
       req
     })
     let after = (await readIncident(inc.id)) as Incident
+    notifyIncidentUpdate(after, `changed ${said.join(', ')}`)
     // A new tone reaches the app at once.
     if (patch.banner_tone && after.status === 'open') after = await showBanner(after, userId(req))
     return { data: after }
@@ -396,6 +398,7 @@ export async function hubIncidentRoutes(app: FastifyInstance): Promise<void> {
     if (!text || text.length > 2000)
       return fail(reply, 400, 'BAD_NOTE', 'text is 1 to 2000 characters')
     await addEvent(inc.id, 'note', text, userId(req))
+    notifyIncidentUpdate(inc, 'a note was added')
     await logActivity({
       action: 'hub-incident-note',
       user: userId(req),

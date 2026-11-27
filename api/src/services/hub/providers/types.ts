@@ -229,6 +229,12 @@ export interface ResourceTypeSpec {
    * routes may name them, and `adapter.notify` is called with them. Other types never send.
    */
   sends?: boolean
+  /**
+   * Task 33: a sending type that mails people (a SendGrid sender): the engine hands `notify` the
+   * route's audience as `msg.recipients` (Hub admins for a Hub-wide route, the app's owners for an
+   * app route). Other senders never get anyone's address.
+   */
+  audience?: 'email'
 }
 
 // ── Values that travel between the engine and adapters ──
@@ -474,6 +480,17 @@ export interface OutboundMessage {
   dedupKey?: string
   /** With `dedupKey`: open a new item, update it or resolve it (default open). */
   action?: 'open' | 'update' | 'resolve'
+  /**
+   * Task 33: who an email sender mails when its own list is empty — the route's audience,
+   * resolved by the engine at send time (only for a type with `audience: 'email'`).
+   */
+  recipients?: string[]
+  /**
+   * Task 33: with `dedupKey`, the provider's id of the first message the Hub sent for that key on
+   * this route (a Slack thread ts), remembered by the engine across restarts. An adapter that
+   * threads answers the id to remember as `OpResult.answer.threadRef` (a string, ≤ 200).
+   */
+  threadRef?: string
 }
 
 // ── Errors ──

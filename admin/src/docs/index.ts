@@ -412,6 +412,7 @@ import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
 import { hubProvidersOutputsDocs, hubProvidersRulesDocs } from './sections/hub-providers-wave2.js'
+import { hubProvidersWave2HooksDocs } from './sections/hub-providers-wave2-hooks.js'
 import { hubProvidersWave3Docs } from './sections/hub-providers-wave3.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
@@ -1314,6 +1315,7 @@ export const navSections: NavGroup[] = [
       hubProvidersCostsFeedDocs,
       hubProvidersWave3Docs,
       hubProvidersHooksDocs,
+      hubProvidersWave2HooksDocs,
       hubProvidersApiDocs
     ]
   },

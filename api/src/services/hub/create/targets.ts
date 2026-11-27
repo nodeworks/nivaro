@@ -34,7 +34,7 @@ export interface HubTargetConfig {
   manager_known_hosts: string
   proxy_network: string
   /** route53 (Task 11a): the Hub makes each name's record in the hosted zone below. */
-  dns_mode: 'automatic' | 'manual' | 'route53'
+  dns_mode: 'automatic' | 'manual' | 'route53' | 'cloudflare'
   /** route53: the managed `aws.route53_zone` resource (nivaro_hub_resources.id). */
   dns_zone_resource_id?: number | null
   wildcard_domain: string | null
@@ -324,8 +324,13 @@ export function validateTargetInput(
     return fail('BAD_CONFIG', 'Config proxy_network must be a Docker network name.')
 
   const dnsMode = pick('dns_mode')
-  if (dnsMode !== 'automatic' && dnsMode !== 'manual' && dnsMode !== 'route53')
-    return fail('BAD_CONFIG', 'Config dns_mode must be automatic, manual or route53.')
+  if (
+    dnsMode !== 'automatic' &&
+    dnsMode !== 'manual' &&
+    dnsMode !== 'route53' &&
+    dnsMode !== 'cloudflare'
+  )
+    return fail('BAD_CONFIG', 'Config dns_mode must be automatic, manual, route53 or cloudflare.')
   const scheme = withDefault('scheme')
   if (scheme !== 'https' && scheme !== 'http')
     return fail('BAD_CONFIG', 'Config scheme must be https or http.')
@@ -411,7 +416,7 @@ export function validateTargetInput(
     port,
     cert_note: certNote,
     traefik_version: traefikVersion,
-    ...(dnsMode === 'route53' ? { dns_zone_resource_id: zoneId } : {})
+    ...(dnsMode === 'route53' || dnsMode === 'cloudflare' ? { dns_zone_resource_id: zoneId } : {})
   }
   return { ok: true, row: { kind: 'gitlab', name: name.trim(), config, secret } }
 }

@@ -41,7 +41,13 @@ import {
 } from './app-config.js'
 import { namingForDocker, namingForShared, sharedHostname } from './dest.js'
 import { dnsSuffix, httpAllowed } from './dns.js'
-import { type CreateProviderType, partLine, providerPartsOf } from './provider-parts.js'
+import {
+  type CreateProviderType,
+  ENTRA_APP_TYPE,
+  partLine,
+  partsProblem,
+  providerPartsOf
+} from './provider-parts.js'
 import { type HubTargetRow, knownHostsCover, parseKnownHosts, validTemplateRef } from './targets.js'
 import type {
   CreateAppInput,
@@ -161,7 +167,12 @@ export function targetProblem(t: HubTargetRow): string | null {
   if (!known) return `${t.name} has no manager host keys (manager_known_hosts).`
   if (typeof c.deploy_host !== 'string' || !knownHostsCover(known, c.deploy_host))
     return `${t.name}'s manager host keys do not cover its deploy host: add the host key of ${cut(String(c.deploy_host ?? ''), 60)}.`
-  if (c.dns_mode !== 'automatic' && c.dns_mode !== 'manual' && c.dns_mode !== 'route53')
+  if (
+    c.dns_mode !== 'automatic' &&
+    c.dns_mode !== 'manual' &&
+    c.dns_mode !== 'route53' &&
+    c.dns_mode !== 'cloudflare'
+  )
     return `${t.name} has no DNS mode.`
   if (c.dns_mode !== 'manual' && !dnsSuffix(c.wildcard_domain))
     return `${t.name} makes names automatically but has no wildcard domain.`
@@ -356,8 +367,19 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
       return 'The sign-in client secret is missing.'
     return null
   })()
+  // Task 33: a Docker app whose every environment gets an Entra app registration part signs in
+  // with those (the Hub makes them and binds them to each stack): sign-in is optional then.
+  const rawEnvs = Array.isArray(i.environments) ? i.environments : []
+  const entraEverywhere =
+    kind === 'docker' &&
+    rawEnvs.length > 0 &&
+    rawEnvs.every((e) => {
+      const p = providerPartsOf((e as { providers?: unknown } | null)?.providers)
+      return p.ok && p.parts.some((x) => x.type === ENTRA_APP_TYPE)
+    })
+  const signinOmitted = i.signin === undefined || i.signin === null
   // On a shared deployment the app signs in with the deployment's own OIDC: optional there.
-  if (signinProblem && !(kind === 'shared' && (i.signin === undefined || i.signin === null)))
+  if (signinProblem && !((kind === 'shared' || entraEverywhere) && signinOmitted))
     block('BAD_SIGNIN', signinProblem)
 
   const extensionIds: string[] = []
@@ -591,6 +613,10 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
     // engine judges each when the providers step plans it.
     const parts = providerPartsOf((e as { providers?: unknown }).providers)
     if (!parts.ok) block('BAD_PROVIDER_PART', parts.text, label)
+    else {
+      const problem = partsProblem(parts.parts, { kind, stackRedis })
+      if (problem) block('BAD_PROVIDER_PART', problem, label)
+    }
     // Task 43: an ACME certificate only where Traefik cannot get one itself (a Docker driver whose
     // names are made by hand).
     if (
@@ -946,7 +972,9 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
           ? `${p.key}: ${p.base_url} — the DNS name is requested by ticket; the Hub waits until it answers.`
           : `${p.key}: ${p.base_url}.`
       )
-    if (p.redirect_uri)
+    // Task 33: an Entra part's registration gets the redirect URI from the Hub itself.
+    const entraPart = (p.providers ?? []).some((x) => x.type === ENTRA_APP_TYPE)
+    if (p.redirect_uri && !entraPart)
       lines.push(
         sh
           ? `${p.key}: add the redirect URI ${p.redirect_uri} to the deployment's app registration.`
@@ -954,7 +982,11 @@ export function buildCreationPlan(input: CreateAppInput, facts: CreationFacts): 
       )
     // Task 11a: provider parts and a Route 53 name record (the providers step).
     if (p.dns_record && p.hostname)
-      lines.push(`${p.key}: the Hub makes the Route 53 record ${p.hostname} in the hosted zone.`)
+      lines.push(
+        naming?.dns_mode === 'cloudflare'
+          ? `${p.key}: the Hub makes the Cloudflare DNS record ${p.hostname} in the zone.`
+          : `${p.key}: the Hub makes the Route 53 record ${p.hostname} in the hosted zone.`
+      )
     for (const part of p.providers ?? [])
       lines.push(
         partLine(p.key, {

@@ -909,12 +909,13 @@ describe('promote through provider components', () => {
         approveEnvironment: 'production'
       }
     }
-    await expect(promoteRun.providerStepRun(wrong, ctx, opts)).rejects.toThrow()
+    await expect(promoteRun.providerStepRun(wrong, ctx, opts)).rejects.toThrow(/approves/)
     expect(world.calls.length).toBe(before)
-    const failed = (await store.listChanges({})).find(
-      (c) => c.status === 'failed' && c.steps.some((s) => s.error?.code === 'TARGET_MISMATCH')
+    // Task 33: refused when planned (a blocker), not only at start.
+    const refused = (await store.listChanges({})).find(
+      (c) => c.status === 'planned' && c.plan?.blockers.some((b) => b.code === 'TARGET_MISMATCH')
     )
-    expect(failed).toBeTruthy()
+    expect(refused).toBeTruthy()
 
     // No origin: the same approval planned by hand (not carried by a promotion) never runs.
     const plain = await engine.planResourceChange(
@@ -937,15 +938,12 @@ describe('promote through provider components', () => {
       ),
       ADMIN
     )
-    const out = await engine.startResourceChange(
-      plain.changeId,
-      { planHash: plain.planHash },
-      ADMIN
-    )
-    expect(out.status).toBe('failed')
-    expect((await store.readChange(plain.changeId))?.steps.at(-1)?.error?.code).toBe(
-      'ORIGIN_INVALID'
-    )
+    // Task 33: the plan itself says no (Task 11c refused it only at start).
+    expect(plain.blockers.map((b) => b.code)).toContain('ORIGIN_INVALID')
+    await expect(
+      engine.startResourceChange(plain.changeId, { planHash: plain.planHash }, ADMIN)
+    ).rejects.toMatchObject({ code: 'ORIGIN_INVALID' })
+    expect((await store.readChange(plain.changeId))?.status).toBe('planned')
     expect(world.calls.length).toBe(before)
     await db('nivaro_hub_environments').where({ id: production }).update({ placement_id: null })
   })

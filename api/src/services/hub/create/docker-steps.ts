@@ -89,6 +89,40 @@ const ENVS = 'nivaro_hub_environments'
 
 const done = (note: string): StepResult => ({ status: 'done', note })
 
+/**
+ * Task 33: writes the stack bindings of this environment (the providers step's Entra client id +
+ * secret, a managed Redis's URL) with the engine's own push (pushBindings: the Stack panel's
+ * validation, never a deploy). Answers how many landed and what failed (scrubbed by the push). A
+ * Hub without the bindings table has none.
+ */
+export async function pushEnvBindings(
+  envId: number,
+  actorId: string | null
+): Promise<{ ok: number; failed: string[] }> {
+  let rows: Array<{ id: number; resource_id: number }>
+  try {
+    rows = (await db('nivaro_hub_resource_bindings')
+      .where({ environment_id: envId })
+      .whereIn('target', ['stack_setting', 'stack_secret'])
+      .select('id', 'resource_id')) as Array<{ id: number; resource_id: number }>
+  } catch {
+    return { ok: 0, failed: [] }
+  }
+  if (!rows.length) return { ok: 0, failed: [] }
+  const { pushBindings } = await import('../providers/engine/bindings.js')
+  const mine = new Set(rows.map((r) => Number(r.id)))
+  let ok = 0
+  const failed: string[] = []
+  for (const resourceId of new Set(rows.map((r) => Number(r.resource_id)))) {
+    for (const o of await pushBindings(resourceId, { actorId })) {
+      if (!mine.has(o.bindingId)) continue
+      if (o.ok) ok++
+      else failed.push(o.error ?? 'not written')
+    }
+  }
+  return { ok, failed }
+}
+
 function dockerOf(ctx: DestStepContext): DockerDriverRow {
   if (ctx.dest.kind !== 'docker')
     throw new StepFailure('BAD_TARGET', 'This creation does not deploy through a Docker driver.')
@@ -198,7 +232,9 @@ export async function stepStack(ctx: DestStepContext): Promise<StepResult> {
   }
   if (ctx.app.oidc_secret) map.OIDC_CLIENT_SECRET = ctx.app.oidc_secret
   const settings: Record<string, string> = { ...s.settings }
-  if (ctx.app.oidc.issuer) settings.OIDC_ISSUER = ctx.app.oidc.issuer
+  // Task 33: an Entra part's tenant wins (its client id + secret are bound below).
+  const issuer = ctx.made.entra_issuer || ctx.app.oidc.issuer
+  if (issuer) settings.OIDC_ISSUER = issuer
   if (ctx.app.oidc.client_id) settings.OIDC_CLIENT_ID = ctx.app.oidc.client_id
   settings.OIDC_REDIRECT_URI = redirectUriFor(planned.base_url)
   const size = (STACK_SIZES as readonly string[]).includes(s.size) ? (s.size as StackSize) : 'small'
@@ -213,6 +249,18 @@ export async function stepStack(ctx: DestStepContext): Promise<StepResult> {
     },
     s.extension_pins
   )
+  // Task 33: the provider parts' outputs bound to this stack (the Entra client id + secret, a
+  // managed Redis's URL) are written now that the settings exist — before the deploy reads them.
+  const pushed = await pushEnvBindings(ctx.env.id, ctx.creation.started_by)
+  if (pushed.failed.length)
+    throw new StepFailure(
+      'BINDING_PUSH_FAILED',
+      `The values bound to this stack could not be written: ${pushed.failed.join('; ')}`.slice(
+        0,
+        900
+      )
+    )
+  if (pushed.ok) ctx.log(`Stack ${name}: ${pushed.ok} bound value(s) written`)
   const pins = Object.keys(s.extension_pins).length
   ctx.log(
     `Stack ${name} on ${driver.name}: settings saved (size ${saved.size}, Redis ${saved.redis}${pins ? `, ${pins} extension pin${pins === 1 ? '' : 's'}` : ''})`

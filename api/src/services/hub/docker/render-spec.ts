@@ -274,7 +274,10 @@ export function hostnameRefusals(
     })
   }
   const wildcard =
-    (driver.dns_mode === 'automatic' || driver.dns_mode === 'route53') && driver.wildcard_domain
+    (driver.dns_mode === 'automatic' ||
+      driver.dns_mode === 'route53' ||
+      driver.dns_mode === 'cloudflare') &&
+    driver.wildcard_domain
       ? driver.wildcard_domain.toLowerCase()
       : null
   for (const name of names) {

@@ -27,13 +27,24 @@
 // at the start (`made.planned.providers_sealed`) and opened only here, for the call that plans the
 // change — the engine seals new secret values in its own envelope.
 
-import type { PlanRequest, PlanRequestOp } from '../providers/engine/contract.js'
+import type { HubActor, PlanRequest, PlanRequestOp } from '../providers/engine/contract.js'
 import { hubActorForUser, runCarriedChange } from '../providers/hooks/carried.js'
-import { type HubResourceRow, listResources } from '../providers/store.js'
+import { type HubResourceRow, listResources, readConnection } from '../providers/store.js'
 import { openSecret } from '../secrets.js'
-import { recordOp, route53Zone, zoneResourceIdOf } from './dns-route53.js'
+import {
+  isManagedDnsMode,
+  MANAGED_DNS,
+  recordOp,
+  route53Zone,
+  zoneResourceIdOf
+} from './dns-route53.js'
 import {
   type CreateProviderPart,
+  ENTRA_APP_TYPE,
+  ENTRA_SECRET_TYPE,
+  entraIssuerOf,
+  entraSecretFields,
+  PART_BINDINGS,
   partBindings,
   partFields,
   partName,
@@ -77,26 +88,62 @@ export async function stepProviders(
         r.connection_id === conn &&
         (r.name === name || r.desired?.name === name || r.observed?.name === name)
     )
+  const rowNamed = (type: string, conn: number, name: unknown) =>
+    typeof name === 'string'
+      ? (have.find(
+          (r) =>
+            r.type === type &&
+            r.connection_id === conn &&
+            (r.name === name || r.desired?.name === name || r.observed?.name === name)
+        ) ?? null)
+      : null
   for (const p of parts) {
     const fields = partFields(p, ctx.env.base_url)
+    if (p.type === ENTRA_APP_TYPE) {
+      // Task 33: the app registration and, in the same change, its client secret (a negative ref
+      // points at a create of this change). A retry makes only what is missing.
+      const secret = entraSecretFields(ctx.app.key, ctx.env.key)
+      const appRow = rowNamed(p.type, p.connection_id, fields.name)
+      if (!appRow) {
+        add(p.connection_id, { action: 'create', type: p.type, fields })
+        const at = (ops.get(p.connection_id) ?? []).length - 1
+        add(p.connection_id, {
+          action: 'create',
+          type: ENTRA_SECRET_TYPE,
+          fields: { ...secret, application: { resourceId: -(at + 1) } }
+        })
+      } else if (!rowNamed(ENTRA_SECRET_TYPE, p.connection_id, secret.name))
+        add(p.connection_id, {
+          action: 'create',
+          type: ENTRA_SECRET_TYPE,
+          fields: { ...secret, application: { resourceId: appRow.id } }
+        })
+      continue
+    }
     if (made(p.type, p.connection_id, partName({ ...p, fields }))) continue
     add(p.connection_id, { action: 'create', type: p.type, fields })
   }
 
-  if (naming?.dns_mode === 'route53') {
+  // Route 53 (Task 11a) or Cloudflare (Task 33): the environment's name record in the zone.
+  if (isManagedDnsMode(naming?.dns_mode)) {
+    const mode = naming.dns_mode
     const zoneId = zoneResourceIdOf(naming.dns_zone_resource_id)
     const host = planned?.hostname ?? ctx.env.hostnames[0] ?? ''
     if (!zoneId || !host || !naming.edge)
       throw new StepFailure(
         'DNS_ZONE_MISSING',
-        'Route 53 names need the hosted zone, a hostname and the edge address.'
+        `${MANAGED_DNS[mode].label} names need the ${mode === 'route53' ? 'hosted zone' : 'zone'}, a hostname and the edge address.`
       )
-    const zone = await route53Zone(zoneId, naming.wildcard_domain ?? null)
+    const zone = await route53Zone(zoneId, naming.wildcard_domain ?? null, mode)
     if (!zone.ok) throw new StepFailure('DNS_ZONE_MISSING', zone.message)
-    const op = recordOp(zone.zoneResourceId, host, naming.edge)
-    if (!made('aws.route53_record', zone.connectionId, op.fields?.name)) add(zone.connectionId, op)
+    const op = recordOp(zone.zoneResourceId, host, naming.edge, mode)
+    if (!made(String(op.type), zone.connectionId, op.fields?.name)) add(zone.connectionId, op)
   }
-  if (!ops.size) return { status: 'done', note: 'No provider parts for this environment.' }
+  const bindsSomething = parts.some(
+    (p) => PART_BINDINGS[p.type]?.length || partBindings(p.type).length
+  )
+  if (!ops.size && !bindsSomething)
+    return { status: 'done', note: 'No provider parts for this environment.' }
 
   const actor = await hubActorForUser(ctx.creation.started_by)
   if (!actor)
@@ -137,27 +184,129 @@ export async function stepProviders(
       )
     done.push(`#${out.changeId}`)
   }
-  ctx.log(`provider parts: changes ${done.join(', ')} applied`)
-  // Task 43: the default bindings of the parts made (a LiveKit key → the huddle settings).
-  const bound = await bindParts(ctx, parts, actor).catch(() => [] as string[])
-  if (bound.length) ctx.log(`provider parts: bound ${bound.join(', ')}`)
+  if (done.length) ctx.log(`provider parts: changes ${done.join(', ')} applied`)
+  const bound = parts.some((p) => PART_BINDINGS[p.type]?.length)
+    ? await bindParts(ctx, parts, actor)
+    : 0
+  // Task 43: app-setting bindings of the parts made (a LiveKit key → the huddle settings).
+  const appBound = await bindAppSettingParts(ctx, parts, actor).catch(() => [] as string[])
+  if (appBound.length) ctx.log(`provider parts: bound ${appBound.join(', ')}`)
   return {
     status: 'done',
-    note: `${[...ops.values()].flat().length} provider part(s) made (changes ${done.join(', ')}).`
+    note: `${[...ops.values()].flat().length} provider part(s) made${done.length ? ` (changes ${done.join(', ')})` : ''}${bound ? `; ${bound} value(s) bound to the stack` : ''}.`
   }
 }
 
 /**
- * Task 43: gives each made part its default bindings (provider-parts.ts partBindings), keeping any
- * binding a person already set, then pushes them in the background (an app setting reaches the app
- * once it answers on its hub link; until then the binding shows the push error and is pushed again
- * with the next change of its outputs or from the resource page). A refusal (a destination another
- * resource already feeds) is skipped, never a failed creation.
+ * Task 33: binds the parts' outputs to the environment's stack (PART_BINDINGS: the Entra client
+ * id + secret as the stack's sign-in, a managed Redis's URL as REDIS_URL) and keeps the Entra
+ * tenant's issuer in `made.entra_issuer` for the stack step. The bindings are the engine's own
+ * (setBindings: the same checks as the Outputs card); the values are written when the stack step
+ * has saved the stack settings (docker-steps.ts pushes them), never deployed here. Answers how many
+ * bindings the environment holds from its parts.
  */
 async function bindParts(
   ctx: BaseStepContext,
   parts: CreateProviderPart[],
-  actor: { id: string; isAdmin: boolean }
+  actor: HubActor
+): Promise<number> {
+  // Loaded here: the bindings module pulls the engine and every adapter (a static import closes
+  // a cycle through promote-run → create steps → this file).
+  const { BindingError, listBindings, setBindings } = await import(
+    '../providers/engine/bindings.js'
+  )
+  const rows = await listResources({ appId: ctx.app.id, environmentId: ctx.env.id })
+  const named = (type: string, conn: number, name: unknown) =>
+    rows.find(
+      (r) =>
+        r.type === type &&
+        r.connection_id === conn &&
+        (r.name === name || r.desired?.name === name || r.observed?.name === name)
+    ) ?? null
+  let count = 0
+  for (const p of parts) {
+    const want = PART_BINDINGS[p.type]
+    if (!want?.length) continue
+    const fields = partFields(p, ctx.env.base_url)
+    const partRow = named(p.type, p.connection_id, fields.name)
+    const secretRow =
+      p.type === ENTRA_APP_TYPE
+        ? named(
+            ENTRA_SECRET_TYPE,
+            p.connection_id,
+            entraSecretFields(ctx.app.key, ctx.env.key).name
+          )
+        : null
+    for (const [which, row] of [
+      ['part', partRow],
+      ['secret', secretRow]
+    ] as const) {
+      const mine = want.filter((b) => b.resource === which)
+      if (!mine.length) continue
+      if (!row)
+        throw new StepFailure(
+          'PROVIDER_CHANGE_FAILED',
+          `The ${which === 'secret' ? 'Entra client secret' : p.type} this environment needs is not there: retry the step.`
+        )
+      const before = await listBindings(row.id)
+      const inputs = before.map((b) => ({
+        output_key: b.output_key,
+        environment_id: b.environment_id,
+        target: b.target,
+        target_key: b.target_key
+      }))
+      for (const b of mine)
+        if (
+          !inputs.some(
+            (x) =>
+              x.environment_id === ctx.env.id &&
+              x.target === b.target &&
+              x.target_key === b.target_key
+          )
+        )
+          inputs.push({
+            output_key: b.output_key,
+            environment_id: ctx.env.id,
+            target: b.target,
+            target_key: b.target_key
+          })
+      try {
+        await setBindings(row, inputs, actor)
+      } catch (e) {
+        if (e instanceof BindingError) throw new StepFailure(e.code, e.message)
+        throw e
+      }
+      count += mine.length
+    }
+    if (p.type === ENTRA_APP_TYPE) {
+      const conn = await readConnection(p.connection_id)
+      const issuer = entraIssuerOf(conn?.config?.tenant_id)
+      if (!issuer)
+        throw new StepFailure(
+          'BAD_PROVIDER_PART',
+          'The Entra connection names no tenant: its sign-in issuer is unknown.'
+        )
+      if (ctx.made.entra_issuer !== issuer) {
+        ctx.made.entra_issuer = issuer
+        await ctx.saveMade()
+      }
+    }
+  }
+  return count
+}
+
+/**
+ * Task 43: gives each made part its default app-setting bindings (provider-parts.ts
+ * partBindings: a LiveKit key → the app's huddle settings), keeping any binding a person already
+ * set, then pushes them in the background (an app setting reaches the app once it answers on its
+ * hub link; until then the binding shows the push error and is pushed again with the next change
+ * of its outputs or from the resource page). A refusal (a destination another resource already
+ * feeds) is a log line, never a failed creation.
+ */
+async function bindAppSettingParts(
+  ctx: BaseStepContext,
+  parts: CreateProviderPart[],
+  actor: HubActor
 ): Promise<string[]> {
   const wanted = parts.filter((p) => partBindings(p.type).length)
   if (!wanted.length) return []

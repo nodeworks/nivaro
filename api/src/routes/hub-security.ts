@@ -707,9 +707,16 @@ export function hubSecurityRoutes(app: FastifyInstance) {
       .filter((i) => i.environment_ids.length)
     const findings = await openFindings(images.map((i) => i.digest))
     const settings = await loadSecuritySettings()
+    // Task 33: the latest pushed image of each managed ECR repository the reader may see (its
+    // scan finding counts, read live through the repository's connection).
+    const { ecrRepositoryFindings } = await import(
+      '../services/hub/providers/hooks/ecr-findings.js'
+    )
+    const repositories = await ecrRepositoryFindings(await visibleApps(req))
     return {
       data: {
         scanner: !!settings.scanner_url,
+        repositories,
         environments: await envDirectory(await visibleApps(req)),
         // Owners: when the last scan ran, never which images of other apps it covered.
         last_scan: await scanFor(

@@ -439,9 +439,9 @@ export async function hubRecordBlockers(
   deleted: HubResourceRow[],
   appId: number | null
 ): Promise<Array<{ code: string; message: string }>> {
-  // Task 43: an Azure SQL server or database linked as a database server counts the same.
+  // Tasks 33 / 43: a Neon branch or an Azure SQL server / database may be a database server too.
   const rds = deleted.filter((r) =>
-    ['aws.rds_instance', 'azure.sql_server', 'azure.sql_database'].includes(r.type)
+    ['aws.rds_instance', 'neon.branch', 'azure.sql_server', 'azure.sql_database'].includes(r.type)
   )
   if (!rds.length) return []
   const out: Array<{ code: string; message: string }> = []
@@ -471,7 +471,7 @@ export async function hubRecordBlockers(
       if (foreign)
         out.push({
           code: 'SHARED_IN_USE',
-          message: `Database server ${s.name} is this resource, and it still holds databases of other apps (or of no environment). Move or drop them first.`
+          message: `Database server ${s.name} is this ${rds.every((r) => r.type === 'aws.rds_instance') ? 'RDS instance' : 'database resource'}, and it still holds databases of other apps (or of no environment). Move or drop them first.`
         })
     }
   } catch {
