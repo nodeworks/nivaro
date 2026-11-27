@@ -60,6 +60,7 @@ export * from './sections/hub-lifecycle.js'
 export * from './sections/hub-ops.js'
 export * from './sections/hub-people.js'
 export * from './sections/hub-placement.js'
+export * from './sections/hub-providers.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
 export * from './sections/hub-security.js'
@@ -359,6 +360,16 @@ import { hubLifecycleDocs } from './sections/hub-lifecycle.js'
 import { hubIssuesDocs, hubSecretsDocs, hubStorageDocs } from './sections/hub-ops.js'
 import { hubPeopleDocs } from './sections/hub-people.js'
 import { hubPlacementDocs } from './sections/hub-placement.js'
+import {
+  hubProvidersApiDocs,
+  hubProvidersAuth0Docs,
+  hubProvidersAwsDocs,
+  hubProvidersDocs,
+  hubProvidersExpoDocs,
+  hubProvidersGithubDocs,
+  hubProvidersHooksDocs,
+  hubProvidersVercelDocs
+} from './sections/hub-providers.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1219,7 +1230,15 @@ export const navSections: NavGroup[] = [
       hubInsightDocs,
       hubIncidentsDocs,
       hubPeopleDocs,
-      hubSecurityDocs
+      hubSecurityDocs,
+      hubProvidersDocs,
+      hubProvidersGithubDocs,
+      hubProvidersAwsDocs,
+      hubProvidersVercelDocs,
+      hubProvidersAuth0Docs,
+      hubProvidersExpoDocs,
+      hubProvidersHooksDocs,
+      hubProvidersApiDocs
     ]
   },
   {
