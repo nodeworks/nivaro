@@ -255,8 +255,76 @@ export async function ghAll<T>(
   return out
 }
 
-export const seg = encodeURIComponent
-/** A branch name in a path: slashes stay, every other character is encoded. */
+function badId(what: string, value: unknown): ProviderError {
+  const shown = JSON.stringify(String(value ?? '')).slice(0, 60)
+  return new ProviderError('BAD_ID', `${shown} is not a valid ${what}.`)
+}
+
+const CONTROL = {
+  test(text: string): boolean {
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i)
+      if (c < 0x20 || c === 0x7f) return true
+    }
+    return false
+  }
+}
+
+/**
+ * One path segment, encoded. Refuses what could move the call to another endpoint: empty, `.`,
+ * `..` (also written %2e), a slash or backslash, control characters.
+ */
+export function seg(value: string): string {
+  if (
+    typeof value !== 'string' ||
+    value === '' ||
+    /^(\.|%2e)+$/i.test(value) ||
+    /[\\/]/.test(value) ||
+    CONTROL.test(value)
+  )
+    throw badId('path segment', value)
+  return encodeURIComponent(value)
+}
+
+function matching(re: RegExp, what: string, value: unknown): string {
+  if (typeof value !== 'string' || !re.test(value)) throw badId(what, value)
+  seg(value)
+  return value
+}
+
+export const checkOwner = (v: unknown): string =>
+  matching(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/, 'account name', v)
+export const checkRepoName = (v: unknown): string =>
+  matching(/^[A-Za-z0-9._-]{1,100}$/, 'repository name', v)
+export const checkEnvName = (v: unknown): string =>
+  matching(/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,254}$/, 'environment name', v)
+export const checkVarName = (v: unknown): string =>
+  matching(/^[A-Za-z_][A-Za-z0-9_]{0,254}$/, 'secret or variable name', v)
+export const checkWorkflowFile = (v: unknown): string =>
+  matching(/^[A-Za-z0-9._-]+\.ya?ml$/, 'workflow file name', v)
+export const checkNumericId = (v: unknown): string => matching(/^\d{1,20}$/, 'numeric id', v)
+
+/** A branch name in a path (git ref rules): slashes stay, every other character is encoded. */
 export function branchPath(branch: string): string {
-  return branch.split('/').map(encodeURIComponent).join('/')
+  if (
+    typeof branch !== 'string' ||
+    branch === '' ||
+    branch.length > 250 ||
+    branch.startsWith('/') ||
+    branch.endsWith('/') ||
+    branch.includes('//') ||
+    branch.includes('@{') ||
+    branch === '@' ||
+    branch.includes('..') ||
+    branch.includes('\\') ||
+    /[ ~^:?*[]/.test(branch) ||
+    CONTROL.test(branch) ||
+    branch.endsWith('.') ||
+    branch.endsWith('.lock')
+  )
+    throw badId('branch name', branch)
+  const parts = branch.split('/')
+  for (const p of parts)
+    if (p === '' || p.startsWith('.') || p.endsWith('.lock')) throw badId('branch name', branch)
+  return parts.map(seg).join('/')
 }

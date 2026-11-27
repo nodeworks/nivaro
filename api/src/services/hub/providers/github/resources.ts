@@ -5,7 +5,21 @@ import {
   type ProviderContext,
   ProviderError
 } from '../types.js'
-import { branchPath, type GhResponse, gh, ghAll, nextPage, ownerOf, seg } from './api.js'
+import {
+  branchPath,
+  checkEnvName,
+  checkNumericId,
+  checkOwner,
+  checkRepoName,
+  checkVarName,
+  checkWorkflowFile,
+  type GhResponse,
+  gh,
+  ghAll,
+  nextPage,
+  ownerOf,
+  seg
+} from './api.js'
 import { sealSecretValue } from './seal.js'
 
 /**
@@ -50,7 +64,7 @@ function bad(code: string, message: string): never {
 export function splitRepo(full: string): { owner: string; repo: string } {
   const i = full.indexOf('/')
   if (i <= 0 || i === full.length - 1) bad('BAD_ID', `"${full}" is not owner/repo.`)
-  return { owner: full.slice(0, i), repo: full.slice(i + 1) }
+  return { owner: checkOwner(full.slice(0, i)), repo: checkRepoName(full.slice(i + 1)) }
 }
 
 /** `owner/repo#rest` → both halves. */
@@ -127,7 +141,7 @@ function observedRepo(j: Json): Observed {
 }
 
 async function ownerRepos(ctx: ProviderContext, page: number): Promise<GhResponse> {
-  const owner = seg(ownerOf(ctx))
+  const owner = seg(checkOwner(ownerOf(ctx)))
   const q = `per_page=20&page=${page}`
   const r = await gh(ctx, 'GET', `/orgs/${owner}/repos?${q}`, { ok: [404] })
   if (r.status !== 404) return r
@@ -432,7 +446,7 @@ function envFields(repo: string, j: Json): Record<string, unknown> {
 
 function envPath(repo: string, name: string): string {
   const { owner, repo: r } = splitRepo(repo)
-  return `/repos/${seg(owner)}/${seg(r)}/environments/${seg(name)}`
+  return `/repos/${seg(owner)}/${seg(r)}/environments/${seg(checkEnvName(name))}`
 }
 
 function observedEnv(repo: string, j: Json): Observed {
@@ -519,7 +533,7 @@ const environment: Handler = {
 function actionsBase(repo: string, env: string | null, kind: 'secrets' | 'variables'): string {
   const { owner, repo: r } = splitRepo(repo)
   const root = `/repos/${seg(owner)}/${seg(r)}`
-  return env ? `${root}/environments/${seg(env)}/${kind}` : `${root}/actions/${kind}`
+  return env ? `${root}/environments/${seg(checkEnvName(env))}/${kind}` : `${root}/actions/${kind}`
 }
 
 const scopedId = (repo: string, env: string | null, name: string): string =>
@@ -550,9 +564,14 @@ const actionsSecret: Handler = {
   secretField: 'value',
   async observe(ctx, ext) {
     const { repo, env, name } = splitScoped(ext)
-    const r = await gh<Json>(ctx, 'GET', `${actionsBase(repo, env, 'secrets')}/${seg(name)}`, {
-      ok: [404]
-    })
+    const r = await gh<Json>(
+      ctx,
+      'GET',
+      `${actionsBase(repo, env, 'secrets')}/${seg(checkVarName(name))}`,
+      {
+        ok: [404]
+      }
+    )
     return r.status === 404 ? null : observedSecret(repo, env, r.json)
   },
   async list(ctx, cursor) {
@@ -579,7 +598,7 @@ const actionsSecret: Handler = {
   },
   async remove(ctx, ext) {
     const { repo, env, name } = splitScoped(ext)
-    await gh(ctx, 'DELETE', `${actionsBase(repo, env, 'secrets')}/${seg(name)}`, {
+    await gh(ctx, 'DELETE', `${actionsBase(repo, env, 'secrets')}/${seg(checkVarName(name))}`, {
       ok: [404],
       what: 'delete the secret'
     })
@@ -601,7 +620,7 @@ async function putSecret(
   if (typeof key?.key !== 'string' || typeof key?.key_id !== 'string')
     bad('PROVIDER_ERROR', 'GitHub did not return a public key for the secret.')
   const sealed = await sealSecretValue(plain, key.key)
-  await gh(ctx, 'PUT', `${base}/${seg(name)}`, {
+  await gh(ctx, 'PUT', `${base}/${seg(checkVarName(name))}`, {
     body: { encrypted_value: sealed, key_id: key.key_id },
     what: 'write the secret'
   })
@@ -630,9 +649,14 @@ const actionsVariable: Handler = {
   replaceKeys: ['environment', 'name'],
   async observe(ctx, ext) {
     const { repo, env, name } = splitScoped(ext)
-    const r = await gh<Json>(ctx, 'GET', `${actionsBase(repo, env, 'variables')}/${seg(name)}`, {
-      ok: [404]
-    })
+    const r = await gh<Json>(
+      ctx,
+      'GET',
+      `${actionsBase(repo, env, 'variables')}/${seg(checkVarName(name))}`,
+      {
+        ok: [404]
+      }
+    )
     return r.status === 404 ? null : observedVariable(repo, env, r.json)
   },
   async list(ctx, cursor) {
@@ -665,7 +689,7 @@ const actionsVariable: Handler = {
   },
   async update(ctx, ext, desired) {
     const { repo, env, name } = splitScoped(ext)
-    await gh(ctx, 'PATCH', `${actionsBase(repo, env, 'variables')}/${seg(name)}`, {
+    await gh(ctx, 'PATCH', `${actionsBase(repo, env, 'variables')}/${seg(checkVarName(name))}`, {
       body: { name, value: text(desired.fields.value) },
       what: 'update the variable'
     })
@@ -673,7 +697,7 @@ const actionsVariable: Handler = {
   },
   async remove(ctx, ext) {
     const { repo, env, name } = splitScoped(ext)
-    await gh(ctx, 'DELETE', `${actionsBase(repo, env, 'variables')}/${seg(name)}`, {
+    await gh(ctx, 'DELETE', `${actionsBase(repo, env, 'variables')}/${seg(checkVarName(name))}`, {
       ok: [404],
       what: 'delete the variable'
     })
@@ -706,7 +730,7 @@ function observedWorkflow(repo: string, j: Json): Observed {
 
 function workflowPath(repo: string, file: string): string {
   const { owner, repo: r } = splitRepo(repo)
-  return `/repos/${seg(owner)}/${seg(r)}/actions/workflows/${seg(file)}`
+  return `/repos/${seg(owner)}/${seg(r)}/actions/workflows/${seg(checkWorkflowFile(file))}`
 }
 
 export async function dispatchWorkflow(
@@ -815,7 +839,9 @@ const deployKey: Handler = {
   replaceKeys: ['title', 'key', 'read_only'],
   async observe(ctx, ext) {
     const { repo, rest: id } = splitChild(ext)
-    const r = await gh<Json>(ctx, 'GET', `${keysPath(repo)}/${seg(id)}`, { ok: [404] })
+    const r = await gh<Json>(ctx, 'GET', `${keysPath(repo)}/${seg(checkNumericId(id))}`, {
+      ok: [404]
+    })
     return r.status === 404 ? null : observedKey(repo, r.json)
   },
   async list(ctx, cursor) {
@@ -846,7 +872,7 @@ const deployKey: Handler = {
   },
   async remove(ctx, ext) {
     const { repo, rest: id } = splitChild(ext)
-    await gh(ctx, 'DELETE', `${keysPath(repo)}/${seg(id)}`, {
+    await gh(ctx, 'DELETE', `${keysPath(repo)}/${seg(checkNumericId(id))}`, {
       ok: [404],
       what: 'remove the deploy key'
     })
@@ -909,7 +935,9 @@ const webhook: Handler = {
   secretField: 'secret',
   async observe(ctx, ext) {
     const { repo, rest: id } = splitChild(ext)
-    const r = await gh<Json>(ctx, 'GET', `${hooksPath(repo)}/${seg(id)}`, { ok: [404] })
+    const r = await gh<Json>(ctx, 'GET', `${hooksPath(repo)}/${seg(checkNumericId(id))}`, {
+      ok: [404]
+    })
     return r.status === 404 ? null : observedHook(repo, r.json)
   },
   async list(ctx, cursor) {
@@ -940,7 +968,7 @@ const webhook: Handler = {
   },
   async update(ctx, ext, desired) {
     const { repo, rest: id } = splitChild(ext)
-    await gh(ctx, 'PATCH', `${hooksPath(repo)}/${seg(id)}`, {
+    await gh(ctx, 'PATCH', `${hooksPath(repo)}/${seg(checkNumericId(id))}`, {
       body: hookBody(desired),
       what: 'update the webhook'
     })
@@ -948,7 +976,7 @@ const webhook: Handler = {
   },
   async remove(ctx, ext) {
     const { repo, rest: id } = splitChild(ext)
-    await gh(ctx, 'DELETE', `${hooksPath(repo)}/${seg(id)}`, {
+    await gh(ctx, 'DELETE', `${hooksPath(repo)}/${seg(checkNumericId(id))}`, {
       ok: [404],
       what: 'delete the webhook'
     })

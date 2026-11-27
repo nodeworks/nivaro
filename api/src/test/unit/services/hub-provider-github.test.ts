@@ -1125,3 +1125,98 @@ describe('github adapter: secrets never appear in errors', () => {
     expect(f.calls).toHaveLength(0)
   })
 })
+
+describe('github adapter: identities cannot escape their endpoint', () => {
+  const del = (type: string, ext: string): PlannedOp => ({
+    kind: 'delete',
+    type,
+    resourceId: 1,
+    externalId: ext,
+    reason: '',
+    changes: [],
+    preconditions: {},
+    risk: []
+  })
+
+  it('dot segments (also %2e) are refused with BAD_ID before any call', async () => {
+    const f = fake({})
+    const ctx = ctxFor(f.impl)
+    const bad: Array<[string, string]> = [
+      ['github.environment', 'acme/web#..'],
+      ['github.environment', 'acme/web#%2e%2e'],
+      ['github.environment', 'acme/web#.'],
+      ['github.environment', 'acme/web#a/b'],
+      ['github.environment', 'acme/web#a\\b'],
+      ['github.actions_secret', 'acme/web@..#TOKEN'],
+      ['github.actions_secret', 'acme/web#..'],
+      ['github.actions_variable', 'acme/web#../x'],
+      ['github.workflow', 'acme/web#..'],
+      ['github.workflow', 'acme/web#deploy.txt'],
+      ['github.workflow', 'acme/web#a/b.yml'],
+      ['github.deploy_key', 'acme/web#..'],
+      ['github.deploy_key', 'acme/web#12/../3'],
+      ['github.webhook', 'acme/web#%2e%2e'],
+      ['github.webhook', 'acme/web#1a'],
+      ['github.repository', 'acme/..'],
+      ['github.repository', '../web'],
+      ['github.repository', 'ac me/web'],
+      ['github.branch_protection', 'acme/web#..'],
+      ['github.branch_protection', 'acme/web#a/../b'],
+      ['github.branch_protection', 'acme/web#/main'],
+      ['github.branch_protection', 'acme/web#main/'],
+      ['github.branch_protection', 'acme/web#a//b'],
+      ['github.branch_protection', 'acme/web#a@{b'],
+      ['github.branch_protection', 'acme/web#a\\b'],
+      ['github.branch_protection', 'acme/web#a.lock'],
+      ['github.branch_protection', 'acme/web#a\u0007b'],
+      ['github.branch_protection', 'acme/web#a b']
+    ]
+    for (const [type, ext] of bad) {
+      await expect(githubAdapter.observe(ctx, type, ext), `${type} ${ext}`).rejects.toMatchObject({
+        code: 'BAD_ID',
+        retryable: false
+      })
+      await expect(
+        githubAdapter.apply(ctx, del(type, ext), null),
+        `${type} ${ext}`
+      ).rejects.toMatchObject({
+        code: 'BAD_ID'
+      })
+    }
+    expect(f.calls).toHaveLength(0)
+  })
+
+  it('a bad name in a create is refused before any write', async () => {
+    const f = fake({})
+    const ctx = ctxFor(f.impl)
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['github.environment', { name: '..' }],
+      ['github.actions_variable', { name: '../x', value: 'v' }],
+      ['github.branch_protection', { branch: 'a/../b' }],
+      ['github.repository', { name: '..' }]
+    ]
+    for (const [type, fields] of cases) {
+      const d = desired(type, fields, { externalId: 'acme/web#x' })
+      await expect(
+        githubAdapter.apply(ctx, githubAdapter.plan(null as any, d, null)[0], d),
+        type
+      ).rejects.toMatchObject({ code: 'BAD_ID' })
+    }
+    expect(f.calls.filter((c) => c.method !== 'GET')).toHaveLength(0)
+  })
+
+  it('ordinary names still work (spaces in environments, slashes in branches)', async () => {
+    const f = fake({
+      'GET /repos/acme/web/environments/QA%20blue': {
+        body: { ...(fx('environment') as object), name: 'QA blue' }
+      },
+      'GET /repos/acme/web/branches/feature/x-1/protection': { body: fx('protection') }
+    })
+    const ctx = ctxFor(f.impl)
+    const env = await githubAdapter.observe(ctx, 'github.environment', 'acme/web#QA blue')
+    expect(env?.name).toBe('QA blue')
+    expect(
+      await githubAdapter.observe(ctx, 'github.branch_protection', 'acme/web#feature/x-1')
+    ).not.toBeNull()
+  })
+})

@@ -12,7 +12,15 @@ import {
   type ProviderContext,
   ProviderError
 } from '../types.js'
-import { authMethod, gh, installationPermissions, ownerOf, seg } from './api.js'
+import {
+  authMethod,
+  checkOwner,
+  checkWorkflowFile,
+  gh,
+  installationPermissions,
+  ownerOf,
+  seg
+} from './api.js'
 import {
   archiveRepository,
   dispatchWorkflow,
@@ -369,7 +377,7 @@ const NEEDS: Need[] = [
 async function testConnection(ctx: ProviderContext): Promise<ConnectionTest> {
   const owner = ownerOf(ctx)
   try {
-    const account = await gh<Json>(ctx, 'GET', `/users/${seg(owner)}`, { ok: [404] })
+    const account = await gh<Json>(ctx, 'GET', `/users/${seg(checkOwner(owner))}`, { ok: [404] })
     if (account.status === 404) return fail(`GitHub has no organisation or user called ${owner}.`)
 
     if (authMethod(ctx) === 'app') {
@@ -439,7 +447,7 @@ async function health(ctx: ProviderContext, type: string, ext: string): Promise<
     const runs = await gh<Json>(
       ctx,
       'GET',
-      `/repos/${seg(owner)}/${seg(r)}/actions/workflows/${seg(file)}/runs?per_page=1`,
+      `/repos/${seg(owner)}/${seg(r)}/actions/workflows/${seg(checkWorkflowFile(file))}/runs?per_page=1`,
       { ok: [404] }
     )
     const last: Json | undefined = runs.json?.workflow_runs?.[0]
