@@ -154,6 +154,16 @@ export const APPS_HUB: HubDef = {
       hint: 'Where apps are deployed: a GitLab project or a Docker host the Hub agent runs.'
     },
     {
+      path: 'connections',
+      label: 'Connections',
+      hint: 'Accounts at outside providers (GitHub, AWS, Vercel…) the Hub may change things in.'
+    },
+    {
+      path: 'shared-infra',
+      label: 'Shared infra',
+      hint: 'Networks, zones and settings that belong to a connection, not to one app.'
+    },
+    {
       path: 'databases',
       label: 'Databases',
       hint: 'The servers new apps get a database on, and every database the Hub knows.'
@@ -269,7 +279,11 @@ export const APPS_HUB: HubDef = {
       label: 'Deploy',
       tabs: ['releases', 'changes', 'smoke', 'extensions', 'config']
     },
-    { key: 'run', label: 'Run', tabs: ['shared', 'capacity', 'scale', 'hosts', 'drivers'] },
+    {
+      key: 'run',
+      label: 'Run',
+      tabs: ['shared', 'capacity', 'scale', 'hosts', 'drivers', 'connections', 'shared-infra']
+    },
     { key: 'data', label: 'Data', tabs: ['databases', 'data', 'storage'] },
     {
       key: 'watch',

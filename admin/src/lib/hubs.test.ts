@@ -28,7 +28,7 @@ describe('hub registry', () => {
     expect(APPS_HUB.groups?.map((g) => [g.label, g.tabs])).toEqual([
       ['Apps', ['']],
       ['Deploy', ['releases', 'changes', 'smoke', 'extensions', 'config']],
-      ['Run', ['shared', 'capacity', 'scale', 'hosts', 'drivers']],
+      ['Run', ['shared', 'capacity', 'scale', 'hosts', 'drivers', 'connections', 'shared-infra']],
       ['Data', ['databases', 'data', 'storage']],
       [
         'Watch',
