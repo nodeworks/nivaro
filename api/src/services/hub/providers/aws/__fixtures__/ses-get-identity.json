@@ -1,0 +1,33 @@
+{
+  "IdentityType": "DOMAIN",
+  "FeedbackForwardingStatus": true,
+  "VerifiedForSendingStatus": true,
+  "VerificationStatus": "SUCCESS",
+  "DkimAttributes": {
+    "SigningEnabled": true,
+    "Status": "SUCCESS",
+    "Tokens": [
+      "tok1fake",
+      "tok2fake",
+      "tok3fake"
+    ],
+    "SigningAttributesOrigin": "AWS_SES"
+  },
+  "MailFromAttributes": {
+    "MailFromDomain": "mail.example.com",
+    "MailFromDomainStatus": "SUCCESS",
+    "BehaviorOnMxFailure": "USE_DEFAULT_VALUE"
+  },
+  "Policies": {},
+  "Tags": [
+    {
+      "Key": "nivaro-hub:managed",
+      "Value": "true"
+    },
+    {
+      "Key": "nivaro-hub:resource",
+      "Value": "41"
+    }
+  ],
+  "ConfigurationSetName": "shop-mail"
+}

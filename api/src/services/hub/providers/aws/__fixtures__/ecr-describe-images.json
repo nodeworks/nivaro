@@ -1,0 +1,46 @@
+{
+  "imageDetails": [
+    {
+      "registryId": "123456789012",
+      "repositoryName": "shop/api",
+      "imageDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "imageTags": [
+        "v1"
+      ],
+      "imageSizeInBytes": 1073741824,
+      "imagePushedAt": 1790000000.0,
+      "imageScanStatus": {
+        "status": "COMPLETE"
+      },
+      "imageScanFindingsSummary": {
+        "imageScanCompletedAt": 1790000100.0,
+        "findingSeverityCounts": {
+          "CRITICAL": 9,
+          "HIGH": 9
+        }
+      }
+    },
+    {
+      "registryId": "123456789012",
+      "repositoryName": "shop/api",
+      "imageDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "imageTags": [
+        "v2"
+      ],
+      "imageSizeInBytes": 2147483648,
+      "imagePushedAt": 1790100000.0,
+      "imageScanStatus": {
+        "status": "COMPLETE"
+      },
+      "imageScanFindingsSummary": {
+        "imageScanCompletedAt": 1790100100.0,
+        "findingSeverityCounts": {
+          "CRITICAL": 1,
+          "HIGH": 2,
+          "MEDIUM": 5,
+          "LOW": 3
+        }
+      }
+    }
+  ]
+}

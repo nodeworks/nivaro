@@ -1,0 +1,9 @@
+{
+  "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:shop/db-AbCdEf",
+  "Name": "shop/db",
+  "VersionId": "00000000-fake-version-0002",
+  "SecretString": "test-secret-value-from-sm",
+  "VersionStages": [
+    "AWSCURRENT"
+  ]
+}

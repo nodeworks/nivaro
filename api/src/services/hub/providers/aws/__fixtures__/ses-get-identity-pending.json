@@ -1,0 +1,25 @@
+{
+  "IdentityType": "DOMAIN",
+  "VerifiedForSendingStatus": false,
+  "VerificationStatus": "PENDING",
+  "DkimAttributes": {
+    "SigningEnabled": true,
+    "Status": "PENDING",
+    "Tokens": [
+      "tok1fake",
+      "tok2fake",
+      "tok3fake"
+    ]
+  },
+  "MailFromAttributes": {},
+  "Tags": [
+    {
+      "Key": "nivaro-hub:managed",
+      "Value": "true"
+    },
+    {
+      "Key": "nivaro-hub:resource",
+      "Value": "41"
+    }
+  ]
+}

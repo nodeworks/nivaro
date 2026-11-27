@@ -1,0 +1,5 @@
+{
+  "registryId": "123456789012",
+  "repositoryName": "shop/api",
+  "lifecyclePolicyText": "{ \"rules\": [ { \"rulePriority\": 1, \"description\": \"keep 10\", \"selection\": { \"tagStatus\": \"any\", \"countType\": \"imageCountMoreThan\", \"countNumber\": 10 }, \"action\": { \"type\": \"expire\" } } ] }"
+}

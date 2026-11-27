@@ -1,0 +1,6 @@
+{
+  "FormatVersion": "aws_v1",
+  "PriceList": [
+    "{\"product\":{\"productFamily\":\"Sending Email\",\"attributes\":{\"servicecode\":\"AmazonSES\",\"regionCode\":\"us-east-1\",\"usagetype\":\"Recipients-EC2\"},\"sku\":\"SESFAKE0001\"},\"serviceCode\":\"AmazonSES\",\"terms\":{\"OnDemand\":{\"SESFAKE0001.JRTCKXETXF\":{\"priceDimensions\":{\"SESFAKE0001.JRTCKXETXF.6YS6EN2CT7\":{\"unit\":\"Emails\",\"endRange\":\"Inf\",\"description\":\"$0.10 per 1,000 emails\",\"appliesTo\":[],\"rateCode\":\"SESFAKE0001.JRTCKXETXF.6YS6EN2CT7\",\"beginRange\":\"0\",\"pricePerUnit\":{\"USD\":\"0.0001000000\"}}},\"sku\":\"SESFAKE0001\",\"effectiveDate\":\"2026-11-20T00:00:00Z\",\"offerTermCode\":\"JRTCKXETXF\",\"termAttributes\":{}}}},\"version\":\"20261120000000\",\"publicationDate\":\"2026-11-20T00:00:00Z\"}"
+  ]
+}

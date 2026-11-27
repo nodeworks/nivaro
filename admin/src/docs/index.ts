@@ -381,6 +381,7 @@ import {
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
 import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
+import { hubProvidersAwsPart3Docs } from './sections/hub-providers-aws-part3.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
@@ -1262,6 +1263,7 @@ export const navSections: NavGroup[] = [
       hubProvidersGithubDocs,
       hubProvidersGitlabDocs,
       hubProvidersAwsDocs,
+      hubProvidersAwsPart3Docs,
       hubProvidersVercelDocs,
       hubProvidersAuth0Docs,
       hubProvidersExpoDocs,

@@ -1,0 +1,16 @@
+{
+  "repository": {
+    "repositoryArn": "arn:aws:ecr:us-east-1:123456789012:repository/shop/api",
+    "registryId": "123456789012",
+    "repositoryName": "shop/api",
+    "repositoryUri": "123456789012.dkr.ecr.us-east-1.amazonaws.com/shop/api",
+    "createdAt": 1790000000.0,
+    "imageTagMutability": "IMMUTABLE",
+    "imageScanningConfiguration": {
+      "scanOnPush": true
+    },
+    "encryptionConfiguration": {
+      "encryptionType": "AES256"
+    }
+  }
+}

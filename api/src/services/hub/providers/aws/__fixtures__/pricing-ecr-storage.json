@@ -1,0 +1,6 @@
+{
+  "FormatVersion": "aws_v1",
+  "PriceList": [
+    "{\"product\":{\"productFamily\":\"EC2 Container Registry\",\"attributes\":{\"servicecode\":\"AmazonECR\",\"regionCode\":\"us-east-1\",\"usagetype\":\"TimedStorage-ByteHrs\"},\"sku\":\"ECRFAKE0001\"},\"serviceCode\":\"AmazonECR\",\"terms\":{\"OnDemand\":{\"ECRFAKE0001.JRTCKXETXF\":{\"priceDimensions\":{\"ECRFAKE0001.JRTCKXETXF.6YS6EN2CT7\":{\"unit\":\"GB-Mo\",\"endRange\":\"Inf\",\"description\":\"$0.10 per GB / month of data storage\",\"appliesTo\":[],\"rateCode\":\"ECRFAKE0001.JRTCKXETXF.6YS6EN2CT7\",\"beginRange\":\"0\",\"pricePerUnit\":{\"USD\":\"0.1000000000\"}}},\"sku\":\"ECRFAKE0001\",\"effectiveDate\":\"2026-11-20T00:00:00Z\",\"offerTermCode\":\"JRTCKXETXF\",\"termAttributes\":{}}}},\"version\":\"20261120000000\",\"publicationDate\":\"2026-11-20T00:00:00Z\"}"
+  ]
+}

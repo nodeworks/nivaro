@@ -1,0 +1,8 @@
+{
+  "imageIds": [
+    {
+      "imageDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "imageTag": "v2"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "__type": "RepositoryNotFoundException",
+  "message": "The repository with name 'shop/api' does not exist in the registry with id '123456789012'"
+}

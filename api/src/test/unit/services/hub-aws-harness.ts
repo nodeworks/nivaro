@@ -42,7 +42,10 @@ const PREFIX: Record<string, string> = {
   acm: 'acm',
   s3: 's3',
   route53: 'route53',
-  monitoring: 'monitoring'
+  monitoring: 'monitoring',
+  email: 'ses',
+  iam: 'iam',
+  secretsmanager: 'secretsmanager'
 }
 
 export const CONFIG = {
@@ -69,12 +72,19 @@ export function harness(
     const u = new URL(url)
     const service = u.hostname.startsWith('api.pricing.')
       ? 'pricing'
-      : (PREFIX[u.hostname.split('.')[0]] ?? u.hostname)
+      : u.hostname.startsWith('api.ecr.')
+        ? 'ecr'
+        : (PREFIX[u.hostname.split('.')[0]] ?? u.hostname)
     const body = typeof init.body === 'string' ? init.body : ''
     const headers = (init.headers ?? {}) as Record<string, string>
     const params = Object.fromEntries(new URLSearchParams(body))
     let action = params.Action ?? ''
-    if (service === 'acm' || service === 'pricing')
+    if (
+      service === 'acm' ||
+      service === 'pricing' ||
+      service === 'ecr' ||
+      service === 'secretsmanager'
+    )
       action =
         String(headers['x-amz-target'] ?? '')
           .split('.')
@@ -169,5 +179,16 @@ export const OTHER_PROBES_OK = {
   'elbv2:DescribeTargetGroups': 'elb-describe-tg.xml',
   'acm:ListCertificates': { body: '{"CertificateSummaryList":[]}' },
   'pricing:GetProducts': 'pricing-empty.json',
-  'monitoring:GetMetricData': 'cloudwatch-metric-data-empty.xml'
+  'monitoring:GetMetricData': 'cloudwatch-metric-data-empty.xml',
+  'ecr:DescribeRepositories': { body: '{"repositories":[]}' },
+  'ecr:GetLifecyclePolicy': {
+    status: 400,
+    body: '{"__type":"RepositoryNotFoundException","message":"not found"}'
+  },
+  'ses:GET /v2/email/identities': { body: '{"EmailIdentities":[]}' },
+  'ses:GET /v2/email/configuration-sets': { body: '{"ConfigurationSets":[]}' },
+  'secretsmanager:ListSecrets': { body: '{"SecretList":[]}' },
+  'iam:ListUsers': {
+    body: '<ListUsersResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><ListUsersResult><Users/><IsTruncated>false</IsTruncated></ListUsersResult></ListUsersResponse>'
+  }
 }

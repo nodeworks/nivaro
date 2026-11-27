@@ -272,8 +272,9 @@ describe('estimate from recorded price list answer', () => {
     const keys = (aws?.types ?? [])
       .filter((t) => typeof t.estimate === 'function')
       .map((t) => t.key)
-    expect(keys.sort()).toEqual(
-      [
+    // At least these (later AWS tasks add types of their own, each with its estimate).
+    expect(keys).toEqual(
+      expect.arrayContaining([
         'aws.acm_certificate',
         'aws.ebs_volume',
         'aws.ec2_instance',
@@ -283,7 +284,7 @@ describe('estimate from recorded price list answer', () => {
         'aws.rds_instance',
         'aws.route53_zone',
         'aws.s3_bucket'
-      ].sort()
+      ])
     )
   })
 })

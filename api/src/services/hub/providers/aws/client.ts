@@ -77,6 +77,10 @@ export type AwsService =
   | 'route53'
   | 'pricing'
   | 'monitoring'
+  | 'ecr'
+  | 'secretsmanager'
+  | 'ses'
+  | 'iam'
 
 const SIGN_NAME: Record<AwsService, string> = {
   ec2: 'ec2',
@@ -87,15 +91,25 @@ const SIGN_NAME: Record<AwsService, string> = {
   s3: 's3',
   route53: 'route53',
   pricing: 'pricing',
-  monitoring: 'monitoring'
+  monitoring: 'monitoring',
+  ecr: 'ecr',
+  secretsmanager: 'secretsmanager',
+  ses: 'ses',
+  iam: 'iam'
 }
-const HOST_PREFIX: Record<AwsService, string> = { ...SIGN_NAME }
+// Host label before `.<region>.amazonaws.com` (ECR's is `api.ecr`, SES v2's is `email`).
+const HOST_PREFIX: Record<AwsService, string> = {
+  ...SIGN_NAME,
+  ecr: 'api.ecr',
+  ses: 'email'
+}
 const QUERY_VERSION: Record<string, string> = {
   ec2: '2016-11-15',
   rds: '2014-10-31',
   elbv2: '2015-12-01',
   sts: '2011-06-15',
-  monitoring: '2010-08-01'
+  monitoring: '2010-08-01',
+  iam: '2010-05-08'
 }
 
 /**
@@ -107,9 +121,9 @@ export const AWS_PRICING_HOST = `api.pricing.${AWS_PRICING_REGION}.amazonaws.com
 
 export function awsHost(service: AwsService, region: string): string {
   if (service === 'pricing') return AWS_PRICING_HOST
-  return service === 'route53'
-    ? 'route53.amazonaws.com'
-    : `${HOST_PREFIX[service]}.${region}.amazonaws.com`
+  // Route 53 and IAM are global: one host, signed for us-east-1.
+  if (service === 'route53' || service === 'iam') return `${HOST_PREFIX[service]}.amazonaws.com`
+  return `${HOST_PREFIX[service]}.${region}.amazonaws.com`
 }
 
 export const awsConnection: ConnectionSpec = {
@@ -159,9 +173,22 @@ export const awsConnection: ConnectionSpec = {
     }
   ],
   hosts(config) {
-    const out = new Set<string>(['route53.amazonaws.com', AWS_PRICING_HOST])
+    // iam.amazonaws.com: only the SES SMTP user type calls it, and only for users under the
+    // /nivaro-hub/ path (the adapter checks path + tag on every call).
+    const out = new Set<string>(['route53.amazonaws.com', 'iam.amazonaws.com', AWS_PRICING_HOST])
     for (const r of regionsOf(config))
-      for (const s of ['ec2', 'rds', 'elbv2', 'sts', 'acm', 's3', 'monitoring'] as AwsService[])
+      for (const s of [
+        'ec2',
+        'rds',
+        'elbv2',
+        'sts',
+        'acm',
+        's3',
+        'monitoring',
+        'ecr',
+        'secretsmanager',
+        'ses'
+      ] as AwsService[])
         out.add(awsHost(s, r))
     return [...out]
   },
@@ -227,7 +254,7 @@ async function rawSend(
         .join('&')
     : ''
   const url = `https://${host}${req.path}${qs ? `?${qs}` : ''}`
-  const signRegion = req.service === 'route53' ? 'us-east-1' : req.region
+  const signRegion = req.service === 'route53' || req.service === 'iam' ? 'us-east-1' : req.region
   const headers = signAwsRequest(
     {
       method: req.method,
@@ -302,6 +329,8 @@ export function errorFromAnswer(ctx: ProviderContext, res: AwsAnswer): ProviderE
       // neither XML nor JSON: the status text below is all there is
     }
   }
+  // REST JSON services (SES v2) name the error in a header and have no `__type` in the body.
+  if (!code) code = (res.headers.get('x-amzn-errortype') ?? '').split(':')[0].split('#').pop() ?? ''
   if (!code)
     code =
       res.status === 404 ? 'NotFound' : res.status === 403 ? 'AccessDenied' : `HTTP_${res.status}`
@@ -443,7 +472,7 @@ export interface QueryOptions {
 /** One Query API action; answers the action's result object. */
 export async function awsQuery(
   ctx: ProviderContext,
-  service: 'ec2' | 'rds' | 'elbv2' | 'sts' | 'monitoring',
+  service: 'ec2' | 'rds' | 'elbv2' | 'sts' | 'monitoring' | 'iam',
   action: string,
   params: Record<string, unknown> = {},
   opts: QueryOptions = {}
@@ -464,10 +493,17 @@ export async function awsQuery(
   return unwrap(parseOk(ctx, res.text), action)
 }
 
-// ── ACM (JSON 1.1) ──
+// ── JSON 1.1 services (ACM, ECR, Secrets Manager) ──
 
-export async function awsJson(
+const JSON_TARGET: Record<'acm' | 'ecr' | 'secretsmanager', string> = {
+  acm: 'CertificateManager',
+  ecr: 'AmazonEC2ContainerRegistry_V20150921',
+  secretsmanager: 'secretsmanager'
+}
+
+export async function awsJsonFor(
   ctx: ProviderContext,
+  service: 'acm' | 'ecr' | 'secretsmanager',
   target: string,
   body: Record<string, unknown>,
   opts: QueryOptions = {}
@@ -477,13 +513,13 @@ export async function awsJson(
   const res = okAnswer(
     ctx,
     await rawSend(ctx, creds, {
-      service: 'acm',
+      service,
       region,
       method: 'POST',
       path: '/',
       headers: {
         'content-type': 'application/x-amz-json-1.1',
-        'x-amz-target': `CertificateManager.${target}`
+        'x-amz-target': `${JSON_TARGET[service]}.${target}`
       },
       body: JSON.stringify(body)
     })
@@ -494,6 +530,13 @@ export async function awsJson(
     throw new ProviderError('AWS_BAD_ANSWER', 'AWS sent an unreadable answer.', { retryable: true })
   }
 }
+
+export const awsJson = (
+  ctx: ProviderContext,
+  target: string,
+  body: Record<string, unknown>,
+  opts: QueryOptions = {}
+) => awsJsonFor(ctx, 'acm', target, body, opts)
 
 // ── Price List Query API (JSON 1.1, Task 44a) ──
 
@@ -538,7 +581,7 @@ export interface RestOptions {
 
 export async function awsRest(
   ctx: ProviderContext,
-  service: 'route53' | 's3',
+  service: 'route53' | 's3' | 'ses',
   method: string,
   path: string,
   opts: RestOptions = {}
@@ -556,6 +599,29 @@ export async function awsRest(
   })
   if (opts.allow?.includes(res.status)) return res
   return okAnswer(ctx, res)
+}
+
+/** One SES v2 REST call (JSON in, JSON out); `allow` statuses answer `{status: n}`. */
+export async function awsSesJson(
+  ctx: ProviderContext,
+  method: string,
+  path: string,
+  region: string,
+  body?: Record<string, unknown>,
+  query?: Record<string, string>
+): Promise<Record<string, any>> {
+  const res = await awsRest(ctx, 'ses', method, path, {
+    region,
+    query,
+    headers: body ? { 'content-type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : null
+  })
+  if (!res.text) return {}
+  try {
+    return JSON.parse(res.text) as Record<string, unknown>
+  } catch {
+    throw new ProviderError('AWS_BAD_ANSWER', 'AWS sent an unreadable answer.', { retryable: true })
+  }
 }
 
 /** A REST answer's XML, root unwrapped. */
@@ -580,6 +646,43 @@ export function isNotFound(err: unknown): boolean {
     err.code === 'NotFound' ||
     err.code === 'NoSuchHostedZone'
   )
+}
+
+/**
+ * One id or name that goes into a URL path: refuses empty, `.`, `..`, `/`, `\\` and control
+ * characters (BAD_ID), then percent-encodes it.
+ */
+export function awsSegment(value: unknown): string {
+  const v = typeof value === 'string' ? value : ''
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing them is the point
+  if (!v || v === '.' || v === '..' || /[/\\\u0000-\u001f\u007f]/.test(v))
+    throw new ProviderError('BAD_ID', 'That id or name cannot be used in a request.')
+  return encodeURIComponent(v)
+}
+
+/**
+ * The 12-digit account the connection is pinned to: its `account_id` when set, else the caller
+ * identity. Anything an id names outside it is refused (AWS_OUT_OF_ACCOUNT).
+ */
+export async function connectionAccount(ctx: ProviderContext): Promise<string> {
+  const pinned = String(ctx.config.account_id ?? '').trim()
+  if (/^\d{12}$/.test(pinned)) return pinned
+  const r = await awsQuery(ctx, 'sts', 'GetCallerIdentity')
+  const acct = xmlText(xmlChild(r, 'Account'))
+  if (!/^\d{12}$/.test(acct))
+    throw new ProviderError('AWS_BAD_ANSWER', 'AWS did not say which account the keys belong to.')
+  return acct
+}
+
+/** An ARN id must belong to the connection's account (a bare name is the account's own). */
+export async function assertArnInAccount(ctx: ProviderContext, id: string): Promise<void> {
+  if (!id.startsWith('arn:')) return
+  const m = /^arn:aws:[a-z0-9-]+:[a-z0-9-]*:(\d{12}|):.+$/.exec(id)
+  if (!m || m[1] !== (await connectionAccount(ctx)))
+    throw new ProviderError(
+      'AWS_OUT_OF_ACCOUNT',
+      'That resource belongs to a different AWS account than this connection.'
+    )
 }
 
 /** Runs `fn`; a not-found error answers null. */

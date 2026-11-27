@@ -1,0 +1,21 @@
+{
+  "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:shop/db-AbCdEf",
+  "Name": "shop/db",
+  "Description": "Shop database URL",
+  "LastChangedDate": 1790000000.0,
+  "Tags": [
+    {
+      "Key": "nivaro-hub:managed",
+      "Value": "true"
+    },
+    {
+      "Key": "nivaro-hub:resource",
+      "Value": "41"
+    },
+    {
+      "Key": "nivaro-hub:recovery-days",
+      "Value": "14"
+    }
+  ],
+  "DeletedDate": 1790300000.0
+}
