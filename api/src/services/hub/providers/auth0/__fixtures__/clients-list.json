@@ -1,0 +1,17 @@
+[
+  {
+    "_doc": "GET /api/v2/clients?page=0&per_page=50. The Global Client is hidden from list().",
+    "client_id": "cl_global",
+    "name": "All Applications",
+    "global": true
+  },
+  {
+    "client_id": "cl_test_app_02",
+    "name": "Admin portal",
+    "app_type": "regular_web",
+    "global": false,
+    "callbacks": ["https://admin.example.com/cb"],
+    "client_secret": "test-secret-list-do-not-leak",
+    "client_metadata": {}
+  }
+]

@@ -1,0 +1,4 @@
+{
+  "_doc": "GET /api/v2/connections/{id}/clients. Checkpoint pagination: `next` is absent on the last page.",
+  "clients": [{ "client_id": "cl_test_app_01" }, { "client_id": "cl_test_app_02" }]
+}

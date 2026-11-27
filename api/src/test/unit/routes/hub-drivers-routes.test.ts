@@ -549,7 +549,7 @@ describe('docker drivers (phase 4)', () => {
       id: d.id,
       kind: 'docker',
       name: 'Swarm',
-      config: { ...DOCKER, edge_target: null },
+      config: { ...DOCKER, edge_target: null, edge_scheme: null, edge_port: null },
       secret: MASK
     })
     const stored = await db('nivaro_hub_drivers').where({ id: d.id }).first()

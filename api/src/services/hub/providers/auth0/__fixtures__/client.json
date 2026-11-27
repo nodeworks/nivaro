@@ -1,0 +1,22 @@
+{
+  "_doc": "GET/POST/PATCH /api/v2/clients/{id}. Auth0 returns client_secret, signing_keys and jwt_configuration; the adapter must never copy them. All values are fake.",
+  "client_id": "cl_test_app_01",
+  "tenant": "acme-test",
+  "name": "Storefront (staging)",
+  "description": "Staging sign-in",
+  "global": false,
+  "app_type": "spa",
+  "callbacks": ["https://staging.example.com/callback", "http://localhost:3000/callback"],
+  "allowed_logout_urls": ["https://staging.example.com"],
+  "allowed_origins": ["https://staging.example.com"],
+  "web_origins": ["https://staging.example.com"],
+  "client_secret": "test-secret-client-do-not-leak",
+  "signing_keys": [{ "cert": "test-cert", "key": "test-secret-signing-key" }],
+  "jwt_configuration": { "alg": "RS256", "secret_encoded": true, "lifetime_in_seconds": 36000 },
+  "client_metadata": {
+    "nivaro_hub_app": "7",
+    "nivaro_hub_env": "3",
+    "nivaro_hub_resource": "41",
+    "other": "x"
+  }
+}

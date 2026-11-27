@@ -1,0 +1,106 @@
+{
+  "_doc": "Documented shapes of the EAS GraphQL `data` objects the adapter reads, keyed by the operation name in queries.ts. Values are fake. Shapes follow the public eas-cli schema; fields marked UNVERIFIED in queries.ts are unconfirmed against a live account.",
+  "HubWhoami": {
+    "meActor": {
+      "__typename": "Robot",
+      "id": "actor-1",
+      "accounts": [{ "id": "acct-1", "name": "acme-mobile" }]
+    }
+  },
+  "HubAccount": { "account": { "byName": { "id": "acct-1", "name": "acme-mobile" } } },
+  "HubAccountApps": {
+    "account": {
+      "byName": {
+        "id": "acct-1",
+        "apps": [
+          {
+            "id": "app-1",
+            "slug": "field-app",
+            "name": "field-app",
+            "fullName": "@acme-mobile/field-app",
+            "privacy": "UNLISTED"
+          }
+        ]
+      }
+    }
+  },
+  "HubAppById": {
+    "app": {
+      "byId": {
+        "id": "app-1",
+        "slug": "field-app",
+        "name": "field-app",
+        "fullName": "@acme-mobile/field-app",
+        "privacy": "UNLISTED"
+      }
+    }
+  },
+  "HubBranches": {
+    "app": {
+      "byId": {
+        "id": "app-1",
+        "updateBranches": [
+          { "id": "br-1", "name": "release-1" },
+          { "id": "br-2", "name": "release-2" }
+        ]
+      }
+    }
+  },
+  "HubChannels": {
+    "app": {
+      "byId": {
+        "id": "app-1",
+        "updateChannels": [
+          {
+            "id": "ch-1",
+            "name": "production",
+            "branchMapping": "{\"version\":0,\"data\":[{\"branchId\":\"br-1\",\"branchMappingLogic\":\"true\"}]}"
+          }
+        ]
+      }
+    }
+  },
+  "HubEnvVars": {
+    "app": {
+      "byId": {
+        "id": "app-1",
+        "environmentVariables": [
+          {
+            "id": "ev-1",
+            "name": "API_URL",
+            "visibility": "SECRET",
+            "environments": ["PRODUCTION", "PREVIEW"]
+          }
+        ]
+      }
+    }
+  },
+  "HubBuild": {
+    "builds": {
+      "byId": {
+        "id": "bld-1",
+        "status": "FINISHED",
+        "platform": "IOS",
+        "buildProfile": "production",
+        "gitCommitHash": "0123abcd",
+        "app": { "id": "app-1" }
+      }
+    }
+  },
+  "HubBuilds": {
+    "app": {
+      "byId": {
+        "id": "app-1",
+        "builds": [
+          {
+            "id": "bld-1",
+            "status": "FINISHED",
+            "platform": "IOS",
+            "buildProfile": "production",
+            "gitCommitHash": "0123abcd"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "_doc": "GET /api/v2/connections/{id}?fields=id,name",
+  "id": "con_test_01",
+  "name": "Username-Password-Authentication"
+}
