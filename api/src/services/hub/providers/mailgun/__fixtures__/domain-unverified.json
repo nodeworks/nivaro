@@ -1,0 +1,36 @@
+{
+  "domain": {
+    "name": "mg.example.com",
+    "state": "unverified",
+    "web_scheme": "https",
+    "spam_action": "disabled",
+    "wildcard": false,
+    "created_at": "Thu, 26 Nov 2026 10:00:00 GMT",
+    "smtp_login": "postmaster@mg.example.com",
+    "type": "custom"
+  },
+  "receiving_dns_records": [],
+  "sending_dns_records": [
+    {
+      "record_type": "TXT",
+      "name": "mg.example.com",
+      "value": "v=spf1 include:mailgun.org ~all",
+      "valid": "unknown",
+      "cached": []
+    },
+    {
+      "record_type": "TXT",
+      "name": "smtp._domainkey.mg.example.com",
+      "value": "k=rsa; p=FAKEDKIMPUBLICKEY",
+      "valid": "unknown",
+      "cached": []
+    },
+    {
+      "record_type": "CNAME",
+      "name": "email.mg.example.com",
+      "value": "mailgun.org",
+      "valid": "unknown",
+      "cached": []
+    }
+  ]
+}
