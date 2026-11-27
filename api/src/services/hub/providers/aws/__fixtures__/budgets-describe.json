@@ -1,0 +1,13 @@
+{
+  "Budget": {
+    "BudgetName": "shop-monthly",
+    "BudgetLimit": { "Amount": "200.0", "Unit": "USD" },
+    "CostFilters": { "TagKeyValue": ["user:nivaro-hub:app$shop"] },
+    "TimeUnit": "MONTHLY",
+    "BudgetType": "COST",
+    "CalculatedSpend": {
+      "ActualSpend": { "Amount": "90.5", "Unit": "USD" },
+      "ForecastedSpend": { "Amount": "150", "Unit": "USD" }
+    }
+  }
+}

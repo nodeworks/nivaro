@@ -1,6 +1,8 @@
 import { fieldWords } from '../plan-words.js'
+import type { HubResourceRow } from '../store.js'
 import {
   type ConnectionTest,
+  type CostRow,
   type DesiredResource,
   type FieldChange,
   type FieldSpec,
@@ -8,6 +10,7 @@ import {
   type ListPage,
   type Observed,
   type OpResult,
+  type OutboundMessage,
   type PlannedOp,
   type ProviderAdapter,
   type ProviderContext,
@@ -89,6 +92,19 @@ export interface AwsTypeDef {
     observed: Observed
   ): Promise<Omit<HealthAnswer, 'checkedAt'>>
   remove(ctx: ProviderContext, id: string, region: string, op: PlannedOp): Promise<void>
+  /**
+   * Task 40: fields that live only in the Hub (notify recipients). They are validated and kept in
+   * the stored desired state but never compared with what the provider says, so a fresh read
+   * does not show them as drift.
+   */
+  hubOnly?: string[]
+  /** Task 40: sends one message through a resource of this type (`spec.sends`). */
+  notify?(
+    ctx: ProviderContext,
+    resource: HubResourceRow,
+    msg: OutboundMessage,
+    region: string
+  ): Promise<OpResult>
   /** A resource a half-finished create already made (tag / name lookup), or null. */
   findExisting?(
     ctx: ProviderContext,
@@ -97,7 +113,7 @@ export interface AwsTypeDef {
   ): Promise<Observed | null>
   snapshot?(ctx: ProviderContext, id: string, region: string): Promise<SnapshotRef>
   /** Throws a ProviderError when the change is one the type refuses (a volume shrink). */
-  checkPlan?(desired: DesiredResource, observed: Observed | null): void
+  checkPlan?(desired: DesiredResource, observed: Observed | null, ctx: ProviderContext): void
   /** The desired fields as they are compared with `observed` (drop what the provider does not echo). */
   normalize?(fields: Record<string, unknown>): Record<string, unknown>
   /** Plan-time data stored on the op and handed back to apply (client tokens, snapshot names). */
@@ -200,7 +216,7 @@ export function planFor(
     ]
   }
   if (!desired) return []
-  def.checkPlan?.(desired, observed)
+  def.checkPlan?.(desired, observed, ctx)
   const dn = def.normalize ? { ...desired, fields: def.normalize(desired.fields) } : desired
 
   const settable = spec.fields.filter((f) => !f.readOnly)
@@ -231,6 +247,7 @@ export function planFor(
     const want = wanted(dn, f)
     if (want === undefined) continue
     if (f.trigger && want !== true) continue // a one-shot trigger that is off changes nothing
+    if (def.hubOnly?.includes(f.key)) continue // lives only in the Hub: never drift
     const have = observed.fields[f.key]
     if (have === undefined && f.createOnly) continue // write-only: the provider does not echo it
     // An unresolved ref (parent not created yet) counts as a change unless nothing is set.
@@ -424,6 +441,8 @@ export interface AwsAdapterParts {
    * Optional permissions beyond the types' own (price estimates, measured data out): each gets a
    * row in the connection test, but a missing one never fails the connection.
    */
+  /** Task 40: what the account billed in a date range (Cost Explorer). */
+  costs?: AwsCostsFn
   optionalProbes?: Array<{
     type: string
     need: string
@@ -431,6 +450,12 @@ export interface AwsAdapterParts {
     run(ctx: ProviderContext, region: string): Promise<unknown>
   }>
 }
+
+/** Task 40: the cost feed's adapter method (Task 34 adds the same optional member to ProviderAdapter). */
+export type AwsCostsFn = (
+  ctx: ProviderContext,
+  range: { from: string; to: string }
+) => Promise<CostRow[]>
 
 export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
   const byType = new Map(parts.defs.map((d) => [d.spec.key, d]))
@@ -461,6 +486,7 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
     connection: parts.connection,
     types: parts.defs.map((d) => d.spec),
     ...(parts.bundledPrices ? { bundledPrices: parts.bundledPrices } : {}),
+    ...(parts.costs ? { costs: parts.costs } : {}),
 
     async testConnection(ctx): Promise<ConnectionTest> {
       let identity: string | null = null
@@ -579,6 +605,14 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
         () =>
           def.snapshot?.(ctx, externalId, resolveRegion(ctx, ctx.region)) as Promise<SnapshotRef>
       )
+    },
+
+    async notify(ctx, resource, msg) {
+      const def = byType.get(resource.type)
+      const send = def?.notify
+      if (!def || !send)
+        throw new ProviderError('NOT_A_SENDER', 'This AWS resource cannot send messages.')
+      return guard(ctx, null, () => send(ctx, resource, msg, resolveRegion(ctx, ctx.region)))
     },
 
     async readOutputs(ctx, type, externalId, resourceId) {

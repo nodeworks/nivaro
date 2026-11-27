@@ -1,0 +1,1 @@
+<PublishResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/"><PublishResult><MessageId>msg-fake-0001</MessageId></PublishResult><ResponseMetadata><RequestId>req-fake-sns</RequestId></ResponseMetadata></PublishResponse>

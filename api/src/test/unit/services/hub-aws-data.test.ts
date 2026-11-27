@@ -91,6 +91,9 @@ describe('aws data+edge testConnection', () => {
       'pricing:GetProducts': 'pricing-empty.json',
       'monitoring:GetMetricData': 'cloudwatch-metric-data-empty.xml',
       'ecr:DescribeRepositories': { body: '{"repositories":[]}' },
+      'sns:ListTopics': 'sns-list-topics.xml',
+      'budgets:DescribeBudgets': 'budgets-list.json',
+      'route53domains:ListDomains': 'r53d-list.json',
       'ecr:GetLifecyclePolicy': {
         status: 400,
         body: '{"__type":"RepositoryNotFoundException","message":"not found"}'

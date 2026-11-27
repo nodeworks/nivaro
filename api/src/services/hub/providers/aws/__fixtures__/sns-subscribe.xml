@@ -1,0 +1,1 @@
+<SubscribeResponse xmlns="http://sns.amazonaws.com/doc/2010-03-31/"><SubscribeResult><SubscriptionArn>arn:aws:sns:us-east-1:123456789012:shop-alerts:11111111-2222-3333-4444-555555555555</SubscriptionArn></SubscribeResult><ResponseMetadata><RequestId>req-fake-sns</RequestId></ResponseMetadata></SubscribeResponse>

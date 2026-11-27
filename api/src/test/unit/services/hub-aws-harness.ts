@@ -45,7 +45,11 @@ const PREFIX: Record<string, string> = {
   monitoring: 'monitoring',
   email: 'ses',
   iam: 'iam',
-  secretsmanager: 'secretsmanager'
+  secretsmanager: 'secretsmanager',
+  sns: 'sns',
+  ce: 'ce',
+  budgets: 'budgets',
+  route53domains: 'route53domains'
 }
 
 export const CONFIG = {
@@ -83,7 +87,10 @@ export function harness(
       service === 'acm' ||
       service === 'pricing' ||
       service === 'ecr' ||
-      service === 'secretsmanager'
+      service === 'secretsmanager' ||
+      service === 'ce' ||
+      service === 'budgets' ||
+      service === 'route53domains'
     )
       action =
         String(headers['x-amz-target'] ?? '')
@@ -188,6 +195,9 @@ export const OTHER_PROBES_OK = {
   'ses:GET /v2/email/identities': { body: '{"EmailIdentities":[]}' },
   'ses:GET /v2/email/configuration-sets': { body: '{"ConfigurationSets":[]}' },
   'secretsmanager:ListSecrets': { body: '{"SecretList":[]}' },
+  'sns:ListTopics': 'sns-list-topics.xml',
+  'budgets:DescribeBudgets': 'budgets-list.json',
+  'route53domains:ListDomains': 'r53d-list.json',
   'iam:ListUsers': {
     body: '<ListUsersResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><ListUsersResult><Users/><IsTruncated>false</IsTruncated></ListUsersResult></ListUsersResponse>'
   }

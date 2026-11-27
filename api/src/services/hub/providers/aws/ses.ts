@@ -59,7 +59,7 @@ const DOMAIN_RE = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,
 const SET_RE = /^[A-Za-z0-9_-]{1,64}$/
 const USER_RE = /^[A-Za-z0-9+=,.@_-]{1,64}$/
 const SUB_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
-const IAM_PATH = '/nivaro-hub/'
+export const IAM_PATH = '/nivaro-hub/'
 const POLICY_NAME = 'nivaro-hub-ses-send'
 
 const t = xmlText
@@ -514,7 +514,7 @@ export const sesConfigurationSetDef: AwsTypeDef = {
 
 // ── aws.ses_smtp_user (the IAM exception) ──
 
-const iam = (
+export const iam = (
   ctx: ProviderContext,
   region: string,
   action: string,
@@ -535,7 +535,7 @@ const sleep = (ctx: ProviderContext, ms: number) =>
   })
 
 /** IAM is eventually consistent: a call right after CreateUser may say NoSuchEntity. */
-async function afterCreate<T>(ctx: ProviderContext, fn: () => Promise<T>): Promise<T> {
+export async function afterCreate<T>(ctx: ProviderContext, fn: () => Promise<T>): Promise<T> {
   for (let i = 0; ; i++) {
     try {
       return await fn()
@@ -546,7 +546,7 @@ async function afterCreate<T>(ctx: ProviderContext, fn: () => Promise<T>): Promi
   }
 }
 
-interface HubUser {
+export interface HubUser {
   arn: string
   tags: Record<string, string>
 }
@@ -556,11 +556,13 @@ interface HubUser {
  * null = no such user. A user that is not the Hub's is NOT_HUB_USER: nothing is read from or
  * changed on it.
  */
-async function hubUser(
+export async function hubUser(
   ctx: ProviderContext,
   name: string,
   region: string,
-  resourceId?: number | null
+  resourceId?: number | null,
+  /** Task 40: the user's `nivaro-hub:kind` tag must equal this (none for an SES user): an SNS user is never read as an SES one. */
+  kind?: string
 ): Promise<HubUser | null> {
   if (!USER_RE.test(name)) throw new ProviderError('BAD_ID', 'That is not an IAM user name.')
   const r = await orNull(() => iam(ctx, region, 'GetUser', { UserName: name }))
@@ -573,6 +575,11 @@ async function hubUser(
       'NOT_HUB_USER',
       `IAM user ${name} was not made by the Hub (it is outside ${IAM_PATH} or not tagged nivaro-hub:managed). The Hub never reads or changes it.`
     )
+  if (tags['nivaro-hub:kind'] !== kind)
+    throw new ProviderError(
+      'NOT_HUB_USER',
+      `IAM user ${name} is a different kind of Hub user. The Hub does not read or change it from here.`
+    )
   // A write names the resource row: another row's Hub user is refused too.
   if (resourceId != null && tags['nivaro-hub:resource'] !== String(resourceId))
     throw new ProviderError(
@@ -582,13 +589,17 @@ async function hubUser(
   return { arn: t(c(u, 'Arn')), tags }
 }
 
-interface KeyMeta {
+export interface KeyMeta {
   id: string
   status: string
   created: string
 }
 
-async function listKeys(ctx: ProviderContext, name: string, region: string): Promise<KeyMeta[]> {
+export async function listKeys(
+  ctx: ProviderContext,
+  name: string,
+  region: string
+): Promise<KeyMeta[]> {
   const r = await iam(ctx, region, 'ListAccessKeys', { UserName: name })
   return xmlList(c(r, 'AccessKeyMetadata'), 'member')
     .map((k) => ({

@@ -1,0 +1,9 @@
+{
+  "DomainName": "example.com",
+  "Nameservers": [{ "Name": "ns-2.awsdns-01.org" }, { "Name": "ns-1.awsdns-00.com" }],
+  "AutoRenew": true,
+  "RegistrantContact": { "Email": "owner@example.com", "FirstName": "Fake" },
+  "RegistrarName": "Amazon Registrar, Inc.",
+  "StatusList": ["clientTransferProhibited"],
+  "ExpirationDate": 1798243200
+}

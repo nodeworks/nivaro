@@ -1,0 +1,43 @@
+{
+  "ResultsByTime": [
+    {
+      "TimePeriod": { "Start": "2026-11-25", "End": "2026-11-26" },
+      "Total": {},
+      "Estimated": false,
+      "Groups": [
+        {
+          "Keys": ["nivaro-hub:app$shop", "Usage"],
+          "Metrics": { "UnblendedCost": { "Amount": "12.3456", "Unit": "USD" } }
+        },
+        {
+          "Keys": ["nivaro-hub:app$", "Usage"],
+          "Metrics": { "UnblendedCost": { "Amount": "3.10", "Unit": "USD" } }
+        },
+        {
+          "Keys": ["nivaro-hub:app$shop", "Tax"],
+          "Metrics": { "UnblendedCost": { "Amount": "1.02", "Unit": "USD" } }
+        },
+        {
+          "Keys": ["nivaro-hub:app$shop", "Credit"],
+          "Metrics": { "UnblendedCost": { "Amount": "-2.50", "Unit": "USD" } }
+        },
+        {
+          "Keys": ["nivaro-hub:app$", "Refund"],
+          "Metrics": { "UnblendedCost": { "Amount": "-0.40", "Unit": "USD" } }
+        },
+        {
+          "Keys": ["nivaro-hub:app$shop", "SavingsPlanNegation"],
+          "Metrics": { "UnblendedCost": { "Amount": "-0.75", "Unit": "USD" } }
+        },
+        {
+          "Keys": ["nivaro-hub:app$shop", "DiscountedUsage"],
+          "Metrics": { "UnblendedCost": { "Amount": "0.50", "Unit": "USD" } }
+        },
+        {
+          "Keys": ["nivaro-hub:app$shop", "Fee"],
+          "Metrics": { "UnblendedCost": { "Amount": "0.00", "Unit": "USD" } }
+        }
+      ]
+    }
+  ]
+}

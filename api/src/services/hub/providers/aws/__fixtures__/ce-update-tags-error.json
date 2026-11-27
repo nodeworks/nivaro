@@ -1,0 +1,9 @@
+{
+  "Errors": [
+    {
+      "TagKey": "nivaro-hub:app",
+      "Code": "TRAILING_LINKED_ACCOUNT_ERROR",
+      "Message": "Only the management account can change tag status"
+    }
+  ]
+}

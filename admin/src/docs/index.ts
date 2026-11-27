@@ -385,6 +385,7 @@ import {
 import { hubProvidersAcmeDocs } from './sections/hub-providers-acme.js'
 import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
 import { hubProvidersAwsPart3Docs } from './sections/hub-providers-aws-part3.js'
+import { hubProvidersAwsPart4Docs } from './sections/hub-providers-aws-part4.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersCostsFeedDocs } from './sections/hub-providers-costs-feed.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
@@ -1279,6 +1280,7 @@ export const navSections: NavGroup[] = [
       hubProvidersLivekitDocs,
       hubProvidersAwsDocs,
       hubProvidersAwsPart3Docs,
+      hubProvidersAwsPart4Docs,
       hubProvidersVercelDocs,
       hubProvidersAuth0Docs,
       hubProvidersExpoDocs,
