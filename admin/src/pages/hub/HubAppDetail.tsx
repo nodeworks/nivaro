@@ -74,6 +74,7 @@ import {
 } from './move/move-api'
 import { movePrefill } from './move/move-prefill'
 import { mayDeploy, OwnerPolicyCard, useAppAccess } from './owner-access'
+import { AppConnectionsCard, ResourcesPanel } from './providers/ResourcesPanel'
 import { HubAppSigninCard } from './signin/HubEnvSigninPanel'
 
 /**
@@ -131,6 +132,7 @@ export function HubAppDetail({
         />
       ))}
       <EnvironmentsCard app={data} envs={envs} isAdmin={isAdmin} canPromote={canPromote} />
+      {isAdmin && <AppConnectionsCard appId={data.id} />}
       <PromotionsCard envs={envs} canPromote={canPromote} appId={data.id} />
       {canPromote && <HubAppSigninCard app={data} envs={envs} />}
       <DeploysCard envs={envs} />
@@ -783,6 +785,7 @@ function EnvRow({
           layout='row'
         />
       )}
+      <ResourcesPanel app={app} env={env} isAdmin={isAdmin} canDeploy={canPromote} layout='row' />
       {row.moving && (
         <tr className='border-b border-slate-100 last:border-0 dark:border-border'>
           <td colSpan={6} className='px-4 pb-3'>
@@ -917,6 +920,14 @@ function EnvItem({
           idPrefix='-m'
         />
       )}
+      <ResourcesPanel
+        app={app}
+        env={env}
+        isAdmin={isAdmin}
+        canDeploy={canPromote}
+        layout='card'
+        idPrefix='-m'
+      />
       {row.moving && (
         <div className='mt-2'>
           <ProductionGuard envKey={env.key} what='move'>
