@@ -1,5 +1,5 @@
 import { ConfirmButton, type ErrorDescription, ErrorNotice } from '@nivaro/shared'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { HUB_MASK } from '../hub-api'
 import { dangerArmed, dangerGhost, Field, SecretInput } from '../hub-parts'
+import { fetchResources, providerKeys } from '../providers/providers-api'
 import { ManagedResourcePicker } from '../providers/ResourcePickers'
 import {
   type DbEngine,
@@ -20,6 +21,8 @@ import {
   describeFailure,
   ENGINE_LABEL,
   ENGINE_PORT,
+  LINK_TYPE_LABELS,
+  linkTypesFor,
   MODE_LABEL,
   type ProvisionMode,
   probeWords,
@@ -35,14 +38,6 @@ import {
  * login is two values, user + password; both come back as the mask and stay stored while left
  * alone. Test connects with the saved login and says what it may do in words.
  */
-
-/** Task 43: what a SQL Server database server may be linked to (resource_id). */
-const LINK_TYPES_MSSQL = ['aws.rds_instance', 'azure.sql_server', 'azure.sql_database'] as const
-const LINK_TYPE_LABELS: Record<string, string> = {
-  'aws.rds_instance': 'RDS instance',
-  'azure.sql_server': 'Azure SQL server',
-  'azure.sql_database': 'Azure SQL database'
-}
 
 export function DbServerForm({
   server,
@@ -75,6 +70,19 @@ export function DbServerForm({
   const [failure, setFailure] = useState<ErrorDescription | null>(null)
   const [probe, setProbe] = useState<ServerProbe | null>(null)
 
+  // The linked resource's type (the picker lists the same query, so this costs nothing extra).
+  const linkables = useQuery({
+    queryKey: providerKeys.resources({}),
+    queryFn: () => fetchResources({})
+  })
+  const linkedType = linkables.data?.find((r) => r.id === resourceId)?.type ?? null
+  const isNeon = linkedType === 'neon.branch'
+  const changeEngine = (next: DbEngine) => {
+    setEngine(next)
+    // A link that does not suit the new engine is let go rather than refused at save.
+    if (linkedType && !linkTypesFor(next).includes(linkedType)) setResourceId(null)
+  }
+
   const isMy = engine === 'mysql2' || engine === 'mariadb'
   const loginTouched =
     loginUser !== (stored ? HUB_MASK : '') || loginPass !== (stored ? HUB_MASK : '')
@@ -93,6 +101,10 @@ export function DbServerForm({
   const errors = {
     name: name.trim() ? '' : 'Give the server a name',
     host: host.trim() || resourceId ? '' : 'The host name or IP address',
+    ssl:
+      isNeon && ssl === 'disable'
+        ? 'Neon accepts TLS connections only: pick require or verify'
+        : '',
     port:
       portNum === null || (Number.isInteger(portNum) && portNum >= 1 && portNum <= 65535)
         ? ''
@@ -177,6 +189,7 @@ export function DbServerForm({
   })
 
   const id = (f: string) => `hub-dbserver-${server?.id ?? 'new'}-${f}`
+  const types = linkTypesFor(engine)
   const words = probe ? probeWords(probe) : null
   return (
     <div className='p-4 sm:p-6'>
@@ -212,7 +225,7 @@ export function DbServerForm({
           <Field id={id('engine')} label='Engine'>
             <SimpleSelect
               value={engine}
-              onChange={(v) => setEngine(v as DbEngine)}
+              onChange={(v) => changeEngine(v as DbEngine)}
               options={SERVER_ENGINES.map((e) => ({
                 value: e,
                 label: ENGINE_LABEL[e]
@@ -225,18 +238,23 @@ export function DbServerForm({
           <div className='sm:col-span-2'>
             <Field
               id={id('rds')}
-              label={engine === 'mssql' ? 'Managed database resource' : 'Amazon RDS instance'}
+              label={types.length > 1 ? 'Managed database resource' : 'Amazon RDS instance'}
               hint={
-                resourceId
-                  ? 'Host and port come from the resource when it is available; its engine must match.'
-                  : engine === 'mssql'
-                    ? 'Optional: link a managed RDS instance or Azure SQL server or database so its address is kept up to date.'
-                    : 'Optional: link a managed RDS instance so its address is kept up to date.'
+                isNeon
+                  ? 'Host comes from the branch (its pooled address), port 5432, TLS required. The branch password stays sealed in the Hub and is never shown here; the provisioning login below is separate.'
+                  : resourceId
+                    ? 'Host and port come from the resource when it is available; its engine must match.'
+                    : types.length > 1
+                      ? `Optional: link a managed ${types
+                          .map((t) => LINK_TYPE_LABELS[t])
+                          .join(', ')
+                          .replace(/, ([^,]*)$/, ' or $1')} so its address is kept up to date.`
+                      : 'Optional: link a managed RDS instance so its address is kept up to date.'
               }
             >
               <ManagedResourcePicker
                 id={id('rds')}
-                type={engine === 'mssql' ? LINK_TYPES_MSSQL : 'aws.rds_instance'}
+                type={types}
                 typeLabels={LINK_TYPE_LABELS}
                 value={resourceId}
                 onChange={setResourceId}
@@ -294,7 +312,12 @@ export function DbServerForm({
               triggerProps={{ id: id('mode') }}
             />
           </Field>
-          <Field id={id('ssl')} label='TLS'>
+          <Field
+            id={id('ssl')}
+            label='TLS'
+            error={tried ? errors.ssl : null}
+            hint={isNeon ? 'Empty = require (Neon always uses TLS).' : undefined}
+          >
             <SimpleSelect
               value={ssl}
               onChange={(v) => setSsl(v as SslMode | '')}

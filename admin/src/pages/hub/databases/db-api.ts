@@ -34,7 +34,7 @@ export interface DbServer {
   notes: string | null
   /** '••••••' when a provisioning login is stored, else null. */
   admin_secret: string | null
-  /** Task 11: the managed aws.rds_instance this server is, when linked (migration 583). */
+  /** Task 11: the managed resource (RDS instance, Neon branch, Azure SQL) this server is, when linked (migration 583). */
   resource_id?: number | null
 }
 
@@ -532,4 +532,23 @@ export const describeFailure =
 export function dbToast(err: unknown, fallback: string, opts: { owner?: boolean } = {}) {
   const d = dbError(err, fallback, opts)
   toast.error(d.title, errorToastOptions(d))
+}
+
+/** Gap G-B: the managed resource types a server of each engine may be linked to (resource_id). */
+export const LINK_TYPE_LABELS: Record<string, string> = {
+  'aws.rds_instance': 'RDS instance',
+  'neon.branch': 'Neon branch',
+  'azure.sql_server': 'Azure SQL server',
+  'azure.sql_database': 'Azure SQL database'
+}
+
+export function linkTypesFor(engine: DbEngine): string[] {
+  if (engine === 'mssql') return ['aws.rds_instance', 'azure.sql_server', 'azure.sql_database']
+  if (engine === 'pg') return ['aws.rds_instance', 'neon.branch']
+  return ['aws.rds_instance']
+}
+
+/** "Neon branch main" — what a linked server row says it is. */
+export function linkWords(type: string, name: string): string {
+  return `${LINK_TYPE_LABELS[type] ?? type} ${name}`
 }
