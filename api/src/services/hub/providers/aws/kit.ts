@@ -488,9 +488,10 @@ export function makeAwsAdapter(parts: AwsAdapterParts): ProviderAdapter {
      */
     async findExisting(ctx, type, desired) {
       const def = defOf(type)
-      if (!def.findExisting || desired.externalId) return null
+      const look = def.findExisting
+      if (!look || desired.externalId) return null
       const found = await guard(ctx, desired, () =>
-        def.findExisting?.(ctx, desired, resolveRegion(ctx, desired.fields.region))
+        look(ctx, desired, resolveRegion(ctx, desired.fields.region))
       )
       const mark = desired.tags['nivaro-hub:resource']
       if (found && mark && found.tags['nivaro-hub:resource'] === mark) return null
