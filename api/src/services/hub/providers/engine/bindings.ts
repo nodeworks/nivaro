@@ -163,6 +163,25 @@ export async function plainOutput(resourceId: number, key: string): Promise<stri
   return openOutput(resourceId, key)
 }
 
+/**
+ * The ONE other reader of a stored secret output: a provider adapter that carries a credential to
+ * another provider itself (the Expo adapter uploads a Firebase FCM key to EAS), because bindings
+ * reach only stack settings, stack secrets and app settings. The caller names the resource it
+ * expects (provider + type) and the key must be a declared output of that type; anything else
+ * answers null. The value goes straight into one outbound call and nowhere else: never into
+ * observed, desired, steps, errors or logs (the caller scrubs it from anything it rethrows).
+ */
+export async function openOutputForCredentialLink(
+  resourceId: number,
+  expect: { provider: string; type: string; key: string }
+): Promise<string | null> {
+  const row = await readResource(resourceId)
+  if (!row || row.deleted_at || row.provider !== expect.provider || row.type !== expect.type)
+    return null
+  if (!declaredOutputs(typeOf(row.type)).some((o) => o.key === expect.key)) return null
+  return openOutput(resourceId, expect.key)
+}
+
 /** Opens one stored output (this file only: pushes). */
 async function openOutput(resourceId: number, key: string): Promise<string | null> {
   const row = (await db(OUTPUTS).where({ resource_id: resourceId, key }).first('value')) as

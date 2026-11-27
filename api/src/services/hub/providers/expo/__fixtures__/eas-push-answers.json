@@ -1,0 +1,70 @@
+{
+  "_doc": "Documented shapes of the EAS GraphQL `data` objects the Android push credentials type reads and writes, keyed by the operation name in queries.ts. Values are fake. Every shape here is UNVERIFIED against a live Expo account (see the UNVERIFIED notes in queries.ts).",
+  "HubAppById": {
+    "app": {
+      "byId": {
+        "id": "app-1",
+        "slug": "field-app",
+        "name": "field-app",
+        "fullName": "@acme-mobile/field-app",
+        "privacy": "UNLISTED"
+      }
+    }
+  },
+  "HubAccount": { "account": { "byName": { "id": "acct-1", "name": "acme-mobile" } } },
+  "HubAndroidCredentials": {
+    "app": {
+      "byId": {
+        "id": "app-1",
+        "androidAppCredentials": [
+          {
+            "id": "cred-1",
+            "applicationIdentifier": "com.acme.fieldapp",
+            "googleServiceAccountKeyForFcmV1": {
+              "id": "sakey-1",
+              "clientEmail": "fcm-send@fake-project.iam.gserviceaccount.com",
+              "privateKeyIdentifier": "0123456789abcdef0123456789abcdef01234567",
+              "projectIdentifier": "fake-project"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "HubCreateAndroidCredentials": {
+    "androidAppCredentials": {
+      "createAndroidAppCredentials": {
+        "id": "cred-2",
+        "applicationIdentifier": "com.acme.fieldapp",
+        "googleServiceAccountKeyForFcmV1": null
+      }
+    }
+  },
+  "HubCreateServiceAccountKey": {
+    "googleServiceAccountKey": {
+      "createGoogleServiceAccountKey": {
+        "id": "sakey-2",
+        "clientEmail": "fcm-send@fake-project.iam.gserviceaccount.com",
+        "privateKeyIdentifier": "fedcba9876543210fedcba9876543210fedcba98",
+        "projectIdentifier": "fake-project"
+      }
+    }
+  },
+  "HubSetFcmV1Key": {
+    "androidAppCredentials": {
+      "setGoogleServiceAccountKeyForFcmV1": {
+        "id": "cred-2",
+        "applicationIdentifier": "com.acme.fieldapp",
+        "googleServiceAccountKeyForFcmV1": {
+          "id": "sakey-2",
+          "clientEmail": "fcm-send@fake-project.iam.gserviceaccount.com",
+          "privateKeyIdentifier": "fedcba9876543210fedcba9876543210fedcba98",
+          "projectIdentifier": "fake-project"
+        }
+      }
+    }
+  },
+  "HubDeleteServiceAccountKey": {
+    "googleServiceAccountKey": { "deleteGoogleServiceAccountKey": { "id": "sakey-1" } }
+  }
+}

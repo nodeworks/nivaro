@@ -16,6 +16,16 @@ import type {
 import { ProviderError } from '../types.js'
 import { composeId, gql, isGone, pageAll, splitId } from './client.js'
 import { EXPO_BUNDLED } from './pricing.js'
+import {
+  findExistingPush,
+  firebaseConnectionId,
+  linkKey,
+  listPush,
+  observePush,
+  planPush,
+  removeKey,
+  T_PUSH
+} from './push.js'
 import * as Q from './queries.js'
 import { EXPO_TYPE_KEYS, EXPO_TYPES } from './specs.js'
 
@@ -239,6 +249,7 @@ async function observeType(
   externalId: string
 ): Promise<Observed | null> {
   if (type === 'expo.project') return readProject(ctx, externalId)
+  if (type === T_PUSH) return observePush(ctx, externalId, guardApp)
   const { appId, id } = splitId(externalId)
   if (!(await guardApp(ctx, appId))) return null
   try {
@@ -609,6 +620,7 @@ async function remove(ctx: ProviderContext, type: string, externalId: string): P
     if (await readProject(ctx, externalId)) await gql(ctx, Q.M_DELETE_APP, { id: externalId })
     return done(externalId, null)
   }
+  if (type === T_PUSH) return removeKey(ctx, externalId, guardApp)
   const { id } = splitId(externalId)
   if (!(await observeType(ctx, type, externalId))) return done(externalId, null)
   if (type === 'expo.branch') await gql(ctx, Q.M_DELETE_BRANCH, { id })
@@ -630,6 +642,8 @@ function createFor(ctx: ProviderContext, op: PlannedOp, d: DesiredResource): Pro
       return upsertEnvVar(ctx, d)
     case 'expo.build':
       return triggerBuild(ctx, op, d)
+    case T_PUSH:
+      return linkKey(ctx, d, requireApp, account(ctx))
     default:
       throw new ProviderError('EXPO_UNKNOWN_TYPE', `Expo has no resource type ${d.type}.`)
   }
@@ -664,6 +678,7 @@ async function listType(
       items.push(...(await envVarRows(ctx, appId)).map((r) => mapEnvVar(appId, r)))
     else if (type === 'expo.build')
       items.push(...(await buildRows(ctx, appId)).map((r) => mapBuild(appId, r)))
+    else if (type === T_PUSH) items.push(...(await listPush(ctx, [appId])))
     else throw new ProviderError('EXPO_UNKNOWN_TYPE', `Expo has no resource type ${type}.`)
   }
   return { items, cursor: next }
@@ -691,6 +706,12 @@ export const expoAdapter: ProviderAdapter = {
         secret: true,
         required: true,
         help: 'Create a robot in the Expo account settings and give it the Developer role.'
+      },
+      {
+        key: 'firebase_connection_id',
+        label: 'Firebase connection',
+        kind: 'number',
+        help: 'Optional. The id of the Hub Firebase connection whose FCM keys may be uploaded to Expo as Android push credentials. Only this connection is ever used for that; empty = push credentials are refused.'
       }
     ],
     hosts: () => ['api.expo.dev'],
@@ -701,6 +722,13 @@ export const expoAdapter: ProviderAdapter = {
       else if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(String(config.account)))
         problems.push('The account name has characters Expo does not allow.')
       if (!str(secrets.token)) problems.push('The robot access token is required.')
+      if (
+        config.firebase_connection_id !== undefined &&
+        config.firebase_connection_id !== null &&
+        config.firebase_connection_id !== '' &&
+        firebaseConnectionId(config) === null
+      )
+        problems.push('The Firebase connection must be a connection id (a whole number).')
       return problems
     }
   },
@@ -749,13 +777,17 @@ export const expoAdapter: ProviderAdapter = {
 
   observe: observeType,
   list: listType,
-  plan: (_ctx, desired, observed) => planOps(desired, observed),
+  plan: (_ctx, desired, observed) =>
+    (desired?.type ?? observed?.type) === T_PUSH
+      ? planPush(desired, observed)
+      : planOps(desired, observed),
 
   /** Plan time: what a create would collide with, by project slug / branch, channel or variable name. */
   async findExisting(ctx, type, desired): Promise<Observed | null> {
     try {
       if (type === 'expo.project')
         return await projectByName(ctx, String(desired.fields.name ?? ''))
+      if (type === T_PUSH) return await findExistingPush(ctx, desired)
       if (type !== 'expo.branch' && type !== 'expo.channel' && type !== 'expo.env_var') return null
       const appId = appIdOf(desired)
       await requireApp(ctx, appId)
@@ -792,6 +824,11 @@ export const expoAdapter: ProviderAdapter = {
         return await createFor(ctx, { ...op, kind: 'create' }, { ...desired, externalId: null })
       }
       // update
+      if (desired.type === T_PUSH) {
+        if (desired.externalId && op.externalId && desired.externalId !== op.externalId)
+          throw new ProviderError('TARGET_MISMATCH', 'The credentials are not the ones planned.')
+        return await linkKey(ctx, desired, requireApp, account(ctx))
+      }
       if (op.action === 'point') return await pointChannel(ctx, op, desired)
       if (desired.type === 'expo.env_var')
         return await upsertEnvVar(ctx, desired, splitId(String(op.externalId)).id)

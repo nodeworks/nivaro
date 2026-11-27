@@ -1,5 +1,6 @@
 import type { FieldSpec, ResourceCapabilities, ResourceTypeSpec } from '../types.js'
 import { expoBuildEstimate, expoProjectEstimate } from './pricing.js'
+import { APPLICATION_ID_PATTERN, T_PUSH } from './push.js'
 
 /** Resource type specs of the Expo adapter. Expo has no tags, so `tag` is false everywhere. */
 
@@ -173,6 +174,46 @@ export const EXPO_TYPES: ResourceTypeSpec[] = [
     refs: [{ field: 'project', type: 'expo.project' }],
     nameField: 'name',
     risk: (op) => (op.kind === 'delete' || op.kind === 'replace' ? ['destructive'] : [])
+  },
+  {
+    key: T_PUSH,
+    label: 'Android push credentials',
+    scope: 'app',
+    fields: [
+      projectRef,
+      {
+        key: 'application_id',
+        label: 'Android application id',
+        kind: 'string',
+        required: true,
+        createOnly: true,
+        replaceOnChange: true,
+        pattern: APPLICATION_ID_PATTERN,
+        help: 'The package name, e.g. com.example.fieldapp.'
+      },
+      {
+        key: 'fcm_key_resource_id',
+        label: 'Firebase key (Hub resource id)',
+        kind: 'number',
+        required: true,
+        min: 1,
+        help: 'The Hub id of a Firebase FCM key resource of this app, on the Firebase connection a Hub administrator set on the Expo connection. The key is uploaded to Expo from the Hub’s sealed copy; it is never shown.'
+      },
+      {
+        key: 'upload_key',
+        label: 'Upload the key again',
+        kind: 'boolean',
+        trigger: true,
+        help: 'Uploads the Firebase key to Expo once more on the next apply (after the Firebase key was rotated).'
+      }
+    ],
+    capabilities: caps({}),
+    // A key that was replaced cannot be put back by the Hub (the old one is not stored here).
+    reversible: false,
+    refs: [{ field: 'project', type: 'expo.project' }],
+    nameField: 'application_id',
+    // Removing the push key stops Android pushes for the app until another key is linked.
+    risk: (op) => (op.kind === 'delete' || op.kind === 'replace' ? ['destructive', 'downtime'] : [])
   },
   {
     key: 'expo.build',

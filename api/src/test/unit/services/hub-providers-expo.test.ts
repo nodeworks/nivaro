@@ -77,6 +77,7 @@ describe('expo adapter: registration', () => {
       'expo.branch',
       'expo.channel',
       'expo.env_var',
+      'expo.android_push_credentials',
       'expo.build'
     ])
     expect(expoAdapter.connection.hosts({})).toEqual(['api.expo.dev'])
