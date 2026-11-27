@@ -264,7 +264,7 @@ export const APPS_HUB: HubDef = {
     {
       path: 'costs',
       label: 'Costs',
-      hint: 'A rough monthly cost per app, department and owner.'
+      hint: 'What your apps cost now, the month so far and the forecast against budget; chargeback per department and owner.'
     },
     {
       path: 'ask',

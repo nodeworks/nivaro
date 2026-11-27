@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
+import { ResourceEstimate } from '../costs/ResourceEstimate'
 import { HUB_MASK } from '../hub-api'
 import { ChoiceCombobox, Field, ghostButton, SecretInput } from '../hub-parts'
 import { ChangeView } from './ChangeView'
@@ -525,6 +526,18 @@ export function ResourceForm({
             refOptions={refOptions}
             fieldOptions={fieldOptions}
           />
+          {type.has_estimate !== false && (
+            <ResourceEstimate
+              connectionId={connectionId}
+              type={type.key}
+              fields={type.fields}
+              payload={payload}
+              resourceId={resource?.id}
+              appId={scope === 'app' ? appId : undefined}
+              environmentId={scope === 'app' ? environmentId : undefined}
+              ready={!nothingChanged}
+            />
+          )}
           {plan.isError && (
             <ErrorNotice description={providerError(plan.error, 'Could not plan the change')} />
           )}

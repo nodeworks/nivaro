@@ -136,11 +136,11 @@ const REPORT: ChargebackReport = {
   unrated: false
 }
 
-function wrap(ui: ReactNode) {
+function wrap(ui: ReactNode, path = '/') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter>{ui}</MemoryRouter>
+      <MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>
     </QueryClientProvider>
   )
 }
@@ -208,7 +208,7 @@ describe('Hosts tab', () => {
 
 describe('Costs tab', () => {
   it('shows the totals, the department bars and the per-app breakdown', async () => {
-    wrap(<HubCosts />)
+    wrap(<HubCosts />, '/hub/costs?view=chargeback')
     expect((await screen.findAllByText('$34.80')).length).toBeGreaterThan(0)
     expect(screen.getByText('By department')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Owner' }))
@@ -219,7 +219,7 @@ describe('Costs tab', () => {
   })
 
   it('saves an app’s department', async () => {
-    wrap(<HubCosts />)
+    wrap(<HubCosts />, '/hub/costs?view=chargeback')
     fireEvent.click(await screen.findByRole('button', { name: 'Edit the department of Shop' }))
     fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'Sales' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
@@ -229,6 +229,40 @@ describe('Costs tab', () => {
         cost_center: 'CC-1'
       })
     )
+  })
+
+  it('opens on Now; an app owner never gets Chargeback (Task 44c)', async () => {
+    const live = {
+      currency: 'USD',
+      sampledAt: null,
+      nowCents: 0,
+      monthToDateCents: 0,
+      forecastCents: 0,
+      month: '2026-11',
+      billed: null,
+      gapCents: null,
+      byApp: [],
+      byProvider: [],
+      series: []
+    }
+    h.get.mockImplementation(async (url: string) => {
+      if (url.startsWith('/hub/costs/live')) return { data: { data: live } }
+      if (url === '/hub/apps') return { data: { data: [] } }
+      if (url === '/hub/costs/settings')
+        return { data: { data: { cost_auto_approve_under_cents: 0 } } }
+      if (url === '/hub/chargeback') return { data: { data: REPORT } }
+      throw new Error(`unexpected GET ${url}`)
+    })
+    const admin = wrap(<HubCosts />, '/hub/costs')
+    expect(await admin.findByText('No bill yet')).toBeTruthy()
+    expect(admin.getByRole('button', { name: 'Chargeback' })).toBeTruthy()
+    admin.unmount()
+    h.admin = false
+    const owner = wrap(<HubCosts />, '/hub/costs?view=chargeback')
+    expect(await owner.findByText('No bill yet')).toBeTruthy()
+    expect(owner.queryByRole('button', { name: 'Chargeback' })).toBeNull()
+    expect(owner.queryByText('By department')).toBeNull()
+    expect(h.get.mock.calls.some((c) => c[0] === '/hub/chargeback')).toBe(false)
   })
 })
 

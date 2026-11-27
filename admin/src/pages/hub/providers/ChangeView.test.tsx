@@ -237,6 +237,43 @@ describe('ChangeView', () => {
     ])
   })
 
+  it('the approval card shows each op’s cost now → after and the stored total with its price time (Task 44c)', async () => {
+    const usd = (monthlyCents: number) => ({
+      currency: 'USD',
+      monthlyCents,
+      oneTimeCents: 0,
+      yearlyCents: 0,
+      basis: 'price_list' as const,
+      confidence: 'list_price' as const,
+      lines: [],
+      priceAsOf: '2026-11-26'
+    })
+    const costTotal = {
+      deltaMonthlyCents: 7373,
+      oneTimeCents: 0,
+      yearlyCents: 0,
+      unknownOps: 0,
+      checkedAt: new Date(Date.now() - 7 * 60_000).toISOString()
+    }
+    const plan: Plan = {
+      ...basePlan,
+      changeId: 16,
+      status: 'pending_approval',
+      ops: basePlan.ops.map((op) => ({
+        ...op,
+        cost: { before: usd(6074), after: usd(13447), deltaMonthlyCents: 7373 }
+      }))
+    }
+    const stored = row({}, plan)
+    const withTotal = { ...stored, plan: { ...stored.plan, costTotal } } as unknown as typeof stored
+    mount(plan, true, withTotal)
+    expect(await screen.findByText('Estimated cost of what you approve')).toBeTruthy()
+    expect(screen.getByText('+$73.73 a month')).toBeTruthy()
+    expect(screen.getByText(/Prices checked 7/)).toBeTruthy()
+    expect(screen.getByText('$60.74')).toBeTruthy()
+    expect(screen.getByText('$134.47')).toBeTruthy()
+  })
+
   it('an owner sees a pending change as waiting, without approve', async () => {
     const plan: Plan = { ...basePlan, changeId: 15, status: 'pending_approval' }
     mount(plan, false)

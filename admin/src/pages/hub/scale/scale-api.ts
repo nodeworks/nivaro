@@ -1,4 +1,5 @@
 import { api } from '@/lib/api'
+import type { BeforeAfter } from '../costs/cost-api'
 
 /**
  * Nivaro Hub Scaling tab: types, query keys and calls for /api/hub/scale* (routes/hub-scale.ts).
@@ -181,6 +182,8 @@ export interface ScalePlan {
   warnings: Pause[]
   confirm: string | null
   plan_hash: string
+  /** Task 44a: the shape's cost before → after at the Hub's rates (never in plan_hash). */
+  cost?: BeforeAfter | null
 }
 
 export interface DbServer {

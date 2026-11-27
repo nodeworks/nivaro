@@ -1,8 +1,8 @@
 import { QueryErrorState } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Download, Pencil, SlidersHorizontal } from 'lucide-react'
-import { type FormEvent, Fragment, useState } from 'react'
-import { Link } from 'react-router'
+import { type FormEvent, Fragment, type ReactNode, useState } from 'react'
+import { Link, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { HubToolbar } from '@/components/hub-page'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime } from '@/lib/utils'
+import { HubCostsNow } from '../costs/HubCostsNow'
 import { hubToast } from '../hub-api'
 import { Field, ghostButton, SectionCard, segmentButton, segmentGroup } from '../hub-parts'
 import {
@@ -28,27 +29,75 @@ import {
 } from './placement-api'
 
 /**
- * Costs (Apps hub tab, idea 49): a rough monthly cost per app from what the Hub measures (CPU,
- * memory, files, database size) times the rates set here, with each host region's factor; per
- * department and per owner; CSV for the finance team. An estimate for showback, not an invoice.
+ * Costs (Apps hub tab, idea 49 + Task 44c): Now (the live run-rate, month to date, forecast
+ * against budgets and Billed) for app owners and Hub administrators; Chargeback (the rate-card
+ * showback per department and owner) for administrators.
  */
 export default function HubCosts() {
   const { user } = useAuth()
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
+  const [params, setParams] = useSearchParams()
+  // Now (live run-rate, budgets) for everyone who owns an app; Chargeback (the rate-card
+  // showback per department and owner) for Hub administrators.
+  const view = isAdmin && params.get('view') === 'chargeback' ? 'chargeback' : 'now'
+  const setView = (v: 'now' | 'chargeback') =>
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p)
+        if (v === 'now') n.delete('view')
+        else n.set('view', v)
+        return n
+      },
+      { replace: true }
+    )
+  const switcher = isAdmin ? (
+    <fieldset className={segmentGroup} aria-label='Costs view'>
+      <button
+        type='button'
+        aria-pressed={view === 'now'}
+        className={segmentButton(view === 'now')}
+        onClick={() => setView('now')}
+      >
+        Now
+      </button>
+      <button
+        type='button'
+        aria-pressed={view === 'chargeback'}
+        className={segmentButton(view === 'chargeback')}
+        onClick={() => setView('chargeback')}
+      >
+        Chargeback
+      </button>
+    </fieldset>
+  ) : null
+  if (view === 'chargeback') return <Chargeback switcher={switcher} />
+  return (
+    <div className='flex min-h-0 flex-1 flex-col'>
+      <HubToolbar
+        description='What your apps cost running now, the month so far and the forecast. Estimates, beside what the providers billed.'
+        actions={switcher}
+      />
+      <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
+        <div className='space-y-4 p-4 sm:p-6'>
+          <HubCostsNow isAdmin={isAdmin} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Chargeback (Hub administrators): a rough monthly cost per app from what the Hub measures (CPU,
+ * memory, files, database size) times the rates set here, with each host region's factor; per
+ * department and per owner; CSV for the finance team. An estimate for showback, not an invoice.
+ */
+function Chargeback({ switcher }: { switcher: ReactNode }) {
   const report = useQuery({
     queryKey: placementKeys.chargeback(),
-    queryFn: fetchChargeback,
-    enabled: isAdmin
+    queryFn: fetchChargeback
   })
   const [rates, setRates] = useState(false)
   const [csvBusy, setCsvBusy] = useState(false)
-
-  if (!isAdmin)
-    return (
-      <div className='p-6 text-[13px] text-slate-600 dark:text-muted-foreground'>
-        Costs are for Hub administrators.
-      </div>
-    )
 
   const csv = async () => {
     setCsvBusy(true)
@@ -72,6 +121,7 @@ export default function HubCosts() {
         }
         actions={
           <>
+            {switcher}
             <button
               type='button'
               className={ghostButton}
