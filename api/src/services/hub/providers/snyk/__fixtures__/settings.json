@@ -1,0 +1,5 @@
+{
+  "pullRequestTestEnabled": true,
+  "pullRequestFailOnAnyVulns": true,
+  "pullRequestFailOnlyForHighSeverity": false
+}

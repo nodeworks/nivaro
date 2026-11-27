@@ -1,0 +1,42 @@
+{
+  "issues": [
+    {
+      "id": "SNYK-JS-FAKE-0001",
+      "isIgnored": false,
+      "isPatched": false,
+      "fixInfo": {
+        "isUpgradable": true,
+        "isPatchable": false,
+        "isPinnable": false
+      }
+    },
+    {
+      "id": "SNYK-JS-FAKE-0002",
+      "isIgnored": false,
+      "isPatched": false,
+      "fixInfo": {
+        "isUpgradable": false,
+        "isPatchable": true,
+        "isPinnable": false
+      }
+    },
+    {
+      "id": "SNYK-JS-FAKE-0003",
+      "isIgnored": false,
+      "isPatched": false,
+      "fixInfo": {
+        "isUpgradable": false,
+        "isPatchable": false,
+        "isPinnable": false
+      }
+    },
+    {
+      "id": "SNYK-JS-FAKE-0004",
+      "isIgnored": true,
+      "isPatched": false,
+      "fixInfo": {
+        "isUpgradable": true
+      }
+    }
+  ]
+}

@@ -409,7 +409,9 @@ export interface ProviderAdapter {
   readOutputs?(
     ctx: ProviderContext,
     type: string,
-    externalId: string
+    externalId: string,
+    /** The Hub resource row the outputs belong to (additive): lets an adapter refuse another row's. */
+    resourceId?: number
   ): Promise<Record<string, string>>
   /**
    * Task 13: sends one message through this resource (a Slack channel, a Teams webhook, a

@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>User is not authorized to perform: iam:CreateUser</Message></Error><RequestId>req-fake-iam</RequestId></ErrorResponse>

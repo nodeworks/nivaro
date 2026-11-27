@@ -1,0 +1,12 @@
+{
+  "id": "44444444-4444-4444-8444-555555555555",
+  "name": "example-org/example-repo:Dockerfile",
+  "type": "dockerfile",
+  "isMonitored": false,
+  "issueCountsBySeverity": {
+    "critical": 0,
+    "high": 1,
+    "medium": 0,
+    "low": 0
+  }
+}

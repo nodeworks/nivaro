@@ -1,0 +1,1 @@
+<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><Error><Type>Sender</Type><Code>Throttling</Code><Message>Rate exceeded</Message></Error><RequestId>req-fake-iam</RequestId></ErrorResponse>

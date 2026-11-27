@@ -89,7 +89,18 @@ describe('aws data+edge testConnection', () => {
         body: '{"__type":"AccessDeniedException","message":"no"}'
       },
       'pricing:GetProducts': 'pricing-empty.json',
-      'monitoring:GetMetricData': 'cloudwatch-metric-data-empty.xml'
+      'monitoring:GetMetricData': 'cloudwatch-metric-data-empty.xml',
+      'ecr:DescribeRepositories': { body: '{"repositories":[]}' },
+      'ecr:GetLifecyclePolicy': {
+        status: 400,
+        body: '{"__type":"RepositoryNotFoundException","message":"not found"}'
+      },
+      'ses:GET /v2/email/identities': { body: '{"EmailIdentities":[]}' },
+      'ses:GET /v2/email/configuration-sets': { body: '{"ConfigurationSets":[]}' },
+      'secretsmanager:ListSecrets': { body: '{"SecretList":[]}' },
+      'iam:ListUsers': {
+        body: '<ListUsersResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><ListUsersResult><Users/><IsTruncated>false</IsTruncated></ListUsersResult></ListUsersResponse>'
+      }
     })
     const h = harness(handlers as never)
     const t = await awsProvider.testConnection(h.ctx)

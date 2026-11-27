@@ -52,6 +52,7 @@ export * from './sections/hub-api.js'
 export * from './sections/hub-capacity.js'
 export * from './sections/hub-changes.js'
 export * from './sections/hub-config.js'
+export * from './sections/hub-costs-live.js'
 export * from './sections/hub-data.js'
 export * from './sections/hub-fleet.js'
 export * from './sections/hub-incidents.js'
@@ -64,8 +65,10 @@ export * from './sections/hub-providers.js'
 export * from './sections/hub-providers-cloudflare.js'
 export * from './sections/hub-providers-entra.js'
 export * from './sections/hub-providers-gitlab.js'
+export * from './sections/hub-providers-livekit.js'
 export * from './sections/hub-providers-redis.js'
 export * from './sections/hub-providers-teams.js'
+export * from './sections/hub-providers-twilio.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
 export * from './sections/hub-security.js'
@@ -357,6 +360,7 @@ import { hubApiDocs, sdkHubDocs } from './sections/hub-api.js'
 import { hubCapacityDocs } from './sections/hub-capacity.js'
 import { hubChangesDocs } from './sections/hub-changes.js'
 import { hubConfigDocs } from './sections/hub-config.js'
+import { hubCostsLiveDocs } from './sections/hub-costs-live.js'
 import { hubDataDocs } from './sections/hub-data.js'
 import { hubFleetDocs } from './sections/hub-fleet.js'
 import { hubIncidentsDocs } from './sections/hub-incidents.js'
@@ -377,19 +381,27 @@ import {
   hubProvidersSentryDocs,
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
+import { hubProvidersAnthropicDocs } from './sections/hub-providers-anthropic.js'
+import { hubProvidersAwsPart3Docs } from './sections/hub-providers-aws-part3.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
 import { hubProvidersJiraDocs } from './sections/hub-providers-jira.js'
+import { hubProvidersLivekitDocs } from './sections/hub-providers-livekit.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
+import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
+import { hubProvidersPortainerDocs } from './sections/hub-providers-portainer.js'
 import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
 } from './sections/hub-providers-redis.js'
 import { hubProvidersSendgridDocs } from './sections/hub-providers-sendgrid.js'
 import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
+import { hubProvidersSnykDocs } from './sections/hub-providers-snyk.js'
+import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
+import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1238,6 +1250,7 @@ export const navSections: NavGroup[] = [
       hubCapacityDocs,
       hubScaleDocs,
       hubPlacementDocs,
+      hubCostsLiveDocs,
       hubIssuesDocs,
       hubSecretsDocs,
       hubStorageDocs,
@@ -1254,7 +1267,9 @@ export const navSections: NavGroup[] = [
       hubProvidersDocs,
       hubProvidersGithubDocs,
       hubProvidersGitlabDocs,
+      hubProvidersLivekitDocs,
       hubProvidersAwsDocs,
+      hubProvidersAwsPart3Docs,
       hubProvidersVercelDocs,
       hubProvidersAuth0Docs,
       hubProvidersExpoDocs,
@@ -1264,12 +1279,18 @@ export const navSections: NavGroup[] = [
       hubProvidersRedisCloudDocs,
       hubProvidersDockerhubDocs,
       hubProvidersNeonDocs,
+      hubProvidersOpenaiDocs,
       hubProvidersEntraDocs,
+      hubProvidersTwilioDocs,
+      hubProvidersStripeDocs,
       hubProvidersSlackDocs,
       hubProvidersPagerdutyDocs,
+      hubProvidersSnykDocs,
+      hubProvidersPortainerDocs,
       hubProvidersSendgridDocs,
       hubProvidersTeamsDocs,
       hubProvidersJiraDocs,
+      hubProvidersAnthropicDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]

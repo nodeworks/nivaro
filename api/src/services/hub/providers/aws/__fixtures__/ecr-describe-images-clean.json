@@ -1,0 +1,22 @@
+{
+  "imageDetails": [
+    {
+      "repositoryName": "shop/api",
+      "imageDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "imageTags": [
+        "v3"
+      ],
+      "imageSizeInBytes": 536870912,
+      "imagePushedAt": 1790200000.0,
+      "imageScanStatus": {
+        "status": "COMPLETE"
+      },
+      "imageScanFindingsSummary": {
+        "imageScanCompletedAt": 1790200100.0,
+        "findingSeverityCounts": {
+          "LOW": 2
+        }
+      }
+    }
+  ]
+}

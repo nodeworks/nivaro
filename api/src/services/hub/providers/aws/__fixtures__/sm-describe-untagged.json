@@ -1,0 +1,10 @@
+{
+  "ARN": "arn:aws:secretsmanager:us-east-1:123456789012:secret:shop/db-AbCdEf",
+  "Name": "shop/db",
+  "Tags": [
+    {
+      "Key": "team",
+      "Value": "finance"
+    }
+  ]
+}

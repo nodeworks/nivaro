@@ -32,6 +32,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import { type ChecklistState, PreDeployChecklist } from '../changes/PreDeployChecklist'
 import { EnvWindowGate } from '../changes/WindowGate'
+import { PlanBeforeAfter } from '../costs/StackEstimate'
 import { RunnerError } from '../HubPromotePanel'
 import { type HubEnvironment, hubKeys } from '../hub-api'
 import { CopyButton, dangerArmed, dangerGhost, Field, ghostButton } from '../hub-parts'
@@ -961,6 +962,8 @@ function MovePlanView({
           )}
         </span>
       </div>
+
+      <PlanBeforeAfter cost={plan.cost} />
 
       {plan.blockers.length > 0 && (
         <div

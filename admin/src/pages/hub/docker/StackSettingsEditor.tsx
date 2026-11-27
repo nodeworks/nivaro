@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
+import { StackEstimate } from '../costs/StackEstimate'
 import {
   BLOCKER_COPY,
   fetchComponents,
@@ -657,6 +658,8 @@ export function StackSettingsEditor({
           The stored extension pins cannot be read, so they are left alone.
         </p>
       )}
+
+      <StackEstimate envId={env.id} size={size} />
 
       {listNotice && (
         <p role='alert' className='m-0 text-[12px] text-red-600 dark:text-red-400'>

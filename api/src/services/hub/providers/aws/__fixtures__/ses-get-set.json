@@ -1,0 +1,22 @@
+{
+  "ConfigurationSetName": "shop-mail",
+  "DeliveryOptions": {
+    "TlsPolicy": "REQUIRE"
+  },
+  "ReputationOptions": {
+    "ReputationMetricsEnabled": false
+  },
+  "SendingOptions": {
+    "SendingEnabled": true
+  },
+  "Tags": [
+    {
+      "Key": "nivaro-hub:managed",
+      "Value": "true"
+    },
+    {
+      "Key": "nivaro-hub:resource",
+      "Value": "41"
+    }
+  ]
+}

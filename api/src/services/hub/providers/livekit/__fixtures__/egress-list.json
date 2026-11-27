@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "egressId": "EG_fakeegress01",
+      "roomName": "nvr-0000000000000000000000000000bbbb",
+      "status": "EGRESS_ACTIVE",
+      "startedAt": "1764000700000000000"
+    },
+    {
+      "egressId": "EG_fakeegress02",
+      "roomName": "nvr-0000000000000000000000000000aaaa",
+      "status": "EGRESS_COMPLETE",
+      "startedAt": "1764000700000000000"
+    }
+  ]
+}

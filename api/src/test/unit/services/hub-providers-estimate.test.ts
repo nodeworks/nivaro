@@ -525,3 +525,22 @@ describe('auto-approve', () => {
     expect(autoApproves(small, planCostTotal(small, now), 5_000)).toBe(true)
   })
 })
+
+describe('unknown after-figure', () => {
+  it('is no change of figure, never a saving', async () => {
+    const { opCostOf } = await import('../../../services/hub/providers/estimate.js')
+    const e = (monthlyCents: number, confidence: CostEstimate['confidence']): CostEstimate => ({
+      currency: 'USD',
+      monthlyCents,
+      oneTimeCents: 0,
+      yearlyCents: 0,
+      basis: 'price_list',
+      confidence,
+      lines: [],
+      priceAsOf: null
+    })
+    expect(opCostOf(e(5_000, 'list_price'), e(0, 'unknown')).deltaMonthlyCents).toBe(0)
+    // A delete (no after) is still the saving.
+    expect(opCostOf(e(5_000, 'list_price'), null).deltaMonthlyCents).toBe(-5_000)
+  })
+})

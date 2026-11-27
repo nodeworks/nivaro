@@ -1,0 +1,15 @@
+{
+  "id": "txr_TESTtaxrate0001",
+  "object": "tax_rate",
+  "active": true,
+  "livemode": false,
+  "display_name": "Sales tax",
+  "percentage": 8.25,
+  "inclusive": false,
+  "jurisdiction": "TX",
+  "country": "US",
+  "state": "TX",
+  "tax_type": "sales_tax",
+  "description": null,
+  "metadata": {}
+}

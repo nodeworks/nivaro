@@ -1,0 +1,33 @@
+{
+  "data": [
+    {
+      "starting_at": "2026-11-24T00:00:00Z",
+      "ending_at": "2026-11-25T00:00:00Z",
+      "group": {
+        "workspace_id": "wrkspc_test0001"
+      },
+      "cost": {
+        "currency": "USD",
+        "amount": "1250.500000",
+        "list_amount": "1500.000000",
+        "requests": 10
+      }
+    },
+    {
+      "starting_at": "2026-11-25T00:00:00Z",
+      "ending_at": "2026-11-26T00:00:00Z",
+      "group": {
+        "workspace_id": "wrkspc_test0002"
+      },
+      "cost": {
+        "currency": "USD",
+        "amount": "300.000000",
+        "list_amount": "300.000000",
+        "requests": 3
+      }
+    }
+  ],
+  "has_more": false,
+  "next_page": null,
+  "data_refreshed_at": "2026-11-26T09:00:00Z"
+}

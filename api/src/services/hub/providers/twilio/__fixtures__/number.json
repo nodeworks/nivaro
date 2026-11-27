@@ -1,0 +1,14 @@
+{
+  "sid": "PNbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb01",
+  "account_sid": "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+  "friendly_name": "demo-sms",
+  "phone_number": "+15555550101",
+  "sms_url": "",
+  "status_callback": "",
+  "capabilities": {
+    "sms": true,
+    "voice": true,
+    "mms": true
+  },
+  "date_created": "Thu, 26 Nov 2026 11:58:00 +0000"
+}

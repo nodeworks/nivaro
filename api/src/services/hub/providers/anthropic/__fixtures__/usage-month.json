@@ -1,0 +1,20 @@
+{
+  "data": [
+    {
+      "starting_at": "2026-11-01T00:00:00Z",
+      "ending_at": "2026-11-26T12:00:00Z",
+      "group": {
+        "workspace_id": null
+      },
+      "usage": {
+        "uncached_input_tokens": 1000,
+        "output_tokens": 500,
+        "total_tokens": 5590800,
+        "requests": 4210
+      }
+    }
+  ],
+  "has_more": false,
+  "next_page": null,
+  "data_refreshed_at": "2026-11-26T09:00:00Z"
+}

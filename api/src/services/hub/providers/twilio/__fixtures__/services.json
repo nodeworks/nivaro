@@ -1,0 +1,14 @@
+{
+  "services": [
+    {
+      "sid": "MGcccccccccccccccccccccccccccccc01",
+      "account_sid": "ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa11",
+      "friendly_name": "demo-pool",
+      "status_callback": null
+    }
+  ],
+  "meta": {
+    "next_page_url": null,
+    "key": "services"
+  }
+}

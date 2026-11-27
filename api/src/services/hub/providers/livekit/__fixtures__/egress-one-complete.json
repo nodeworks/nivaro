@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "egressId": "EG_fakeegress01",
+      "roomName": "nvr-0000000000000000000000000000bbbb",
+      "status": "EGRESS_COMPLETE",
+      "startedAt": "1764000700000000000"
+    }
+  ]
+}

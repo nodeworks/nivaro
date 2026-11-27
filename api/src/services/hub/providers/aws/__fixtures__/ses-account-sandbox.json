@@ -1,0 +1,11 @@
+{
+  "DedicatedIpAutoWarmupEnabled": false,
+  "EnforcementStatus": "HEALTHY",
+  "ProductionAccessEnabled": false,
+  "SendQuota": {
+    "Max24HourSend": 200.0,
+    "MaxSendRate": 1.0,
+    "SentLast24Hours": 0.0
+  },
+  "SendingEnabled": true
+}

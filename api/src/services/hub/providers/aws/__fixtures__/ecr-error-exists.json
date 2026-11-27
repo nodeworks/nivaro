@@ -1,0 +1,4 @@
+{
+  "__type": "RepositoryAlreadyExistsException",
+  "message": "The repository with name 'shop/api' already exists"
+}

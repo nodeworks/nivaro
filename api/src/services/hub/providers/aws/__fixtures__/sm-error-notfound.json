@@ -1,0 +1,4 @@
+{
+  "__type": "ResourceNotFoundException",
+  "Message": "Secrets Manager can't find the specified secret."
+}

@@ -1,0 +1,1 @@
+<ListAccessKeysResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><ListAccessKeysResult><AccessKeyMetadata></AccessKeyMetadata><IsTruncated>false</IsTruncated></ListAccessKeysResult><ResponseMetadata><RequestId>req-fake-iam</RequestId></ResponseMetadata></ListAccessKeysResponse>

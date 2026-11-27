@@ -1,0 +1,15 @@
+{
+  "EmailIdentities": [
+    {
+      "IdentityType": "DOMAIN",
+      "IdentityName": "example.com",
+      "SendingEnabled": true,
+      "VerificationStatus": "SUCCESS"
+    },
+    {
+      "IdentityType": "EMAIL_ADDRESS",
+      "IdentityName": "rob@example.com",
+      "SendingEnabled": true
+    }
+  ]
+}

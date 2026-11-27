@@ -18,6 +18,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { BeforeAfterLine, PlanCostTotalRow, planCurrency } from '../costs/ChangeCost'
 import { dangerArmed, dangerGhost, ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import {
   CHANGE_STATUS_COPY,
@@ -139,6 +140,9 @@ export function ChangeView({
     short: OP_KIND_COPY[op.kind],
     state: runState(steps[i])
   }))
+  // The cost totals show once some op carries a figure (a plan of free things says nothing).
+  const costTotal = model.ops.some((o) => o.cost) ? model.costTotal : null
+  const currency = planCurrency(model.ops)
   const confirmId = `hub-change-${id}-confirm`
   const reasonId = `hub-change-${id}-reason`
 
@@ -208,6 +212,10 @@ export function ChangeView({
             />
           ))}
         </ol>
+      )}
+
+      {costTotal && status !== 'pending_approval' && (
+        <PlanCostTotalRow total={costTotal} currency={currency} />
       )}
 
       {model.gates.length > 0 && <Gates gates={model.gates} />}
@@ -318,6 +326,7 @@ export function ChangeView({
               An app owner asked for this change because it costs money. Approving starts it if the
               plan still holds; otherwise the owner plans again.
             </p>
+            {costTotal && <PlanCostTotalRow total={costTotal} currency={currency} approval />}
             {declining ? (
               <div className='space-y-1.5'>
                 <label
@@ -378,6 +387,11 @@ export function ChangeView({
           </div>
         ) : (
           <div className='flex flex-wrap items-center gap-2'>
+            {costTotal && (
+              <div className='w-full'>
+                <PlanCostTotalRow total={costTotal} currency={currency} />
+              </div>
+            )}
             <p className='m-0 text-[12px] text-slate-600 dark:text-slate-300'>
               Waiting for a Hub administrator to approve it. You are told when they do.
             </p>
@@ -542,6 +556,9 @@ function OpItem({
         {step && <StepState step={step} />}
       </div>
       <p className='m-0 mt-1 text-[12px] text-slate-700 dark:text-slate-300'>{op.reason}</p>
+      {op.cost && (
+        <BeforeAfterLine cost={op.cost} label={`the cost of ${typeLabel}`} className='mt-1' />
+      )}
       {op.risk.length > 0 && <RiskChips risk={op.risk} />}
       {op.changes.length > 0 && (
         <table className='mt-2 w-full max-w-[760px] table-fixed text-[11.5px]'>

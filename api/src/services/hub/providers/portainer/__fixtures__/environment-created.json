@@ -1,0 +1,13 @@
+{
+  "Id": 4,
+  "Name": "test-new-host",
+  "Type": 4,
+  "URL": "https://portainer.test.example:9443",
+  "PublicURL": "",
+  "GroupId": 1,
+  "Status": 2,
+  "EdgeKey": "test-secret-edge-key-0002",
+  "EdgeCheckinInterval": 5,
+  "TeamAccessPolicies": {},
+  "Snapshots": []
+}

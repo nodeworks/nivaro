@@ -1,0 +1,9 @@
+{
+  "Id": 11,
+  "Name": "test-web",
+  "Type": 2,
+  "EndpointId": 3,
+  "Status": 1,
+  "CreatedBy": "test-admin",
+  "Env": [{ "name": "TEST_VAR", "value": "test-secret-stack-env-0001" }]
+}

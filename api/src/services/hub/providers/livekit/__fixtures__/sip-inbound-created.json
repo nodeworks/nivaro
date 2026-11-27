@@ -1,0 +1,11 @@
+{
+  "sip_trunk_id": "ST_fakein000002",
+  "name": "new-line",
+  "numbers": [
+    "+15105550102"
+  ],
+  "allowed_addresses": [
+    "198.51.100.0/24"
+  ],
+  "allowed_numbers": []
+}
