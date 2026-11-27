@@ -381,6 +381,7 @@ import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
+import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
 import { hubProvidersPagerdutyDocs } from './sections/hub-providers-pagerduty.js'
 import {
   hubProvidersRedisCloudDocs,
@@ -1263,6 +1264,7 @@ export const navSections: NavGroup[] = [
       hubProvidersRedisCloudDocs,
       hubProvidersDockerhubDocs,
       hubProvidersNeonDocs,
+      hubProvidersOpenaiDocs,
       hubProvidersEntraDocs,
       hubProvidersSlackDocs,
       hubProvidersPagerdutyDocs,

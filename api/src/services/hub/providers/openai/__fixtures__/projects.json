@@ -1,0 +1,22 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "organization.project",
+      "id": "proj_test0001",
+      "name": "demo-app",
+      "created_at": 1764000000,
+      "status": "active"
+    },
+    {
+      "object": "organization.project",
+      "id": "proj_test0002",
+      "name": "old",
+      "created_at": 1764000000,
+      "status": "archived"
+    }
+  ],
+  "first_id": "proj_test0001",
+  "last_id": "proj_test0002",
+  "has_more": false
+}

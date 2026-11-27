@@ -1,0 +1,57 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1793491200,
+      "end_time": 1793577600,
+      "results": [
+        {
+          "object": "organization.costs.result",
+          "amount": {
+            "value": 1.234,
+            "currency": "usd"
+          },
+          "line_item": "gpt-4o, input",
+          "project_id": "proj_test0001"
+        },
+        {
+          "object": "organization.costs.result",
+          "amount": {
+            "value": 0.5,
+            "currency": "usd"
+          },
+          "line_item": "embeddings",
+          "project_id": "proj_test0001"
+        },
+        {
+          "object": "organization.costs.result",
+          "amount": {
+            "value": 2.0,
+            "currency": "usd"
+          },
+          "line_item": "gpt-4o, input",
+          "project_id": "proj_test0002"
+        }
+      ]
+    },
+    {
+      "object": "bucket",
+      "start_time": 1795651200,
+      "end_time": 1795737600,
+      "results": [
+        {
+          "object": "organization.costs.result",
+          "amount": {
+            "value": 0.456,
+            "currency": "usd"
+          },
+          "line_item": "gpt-4o, input",
+          "project_id": "proj_test0001"
+        }
+      ]
+    }
+  ],
+  "has_more": false,
+  "next_page": null
+}
