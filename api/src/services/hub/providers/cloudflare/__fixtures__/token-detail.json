@@ -1,0 +1,32 @@
+{
+  "success": true,
+  "errors": [],
+  "messages": [],
+  "result": {
+    "id": "tok00000000000000000000000000001",
+    "status": "active",
+    "policies": [
+      {
+        "effect": "allow",
+        "permission_groups": [
+          {
+            "id": "g1",
+            "name": "Zone Read"
+          },
+          {
+            "id": "g2",
+            "name": "DNS Write"
+          },
+          {
+            "id": "g3",
+            "name": "Cloudflare Tunnel Write"
+          },
+          {
+            "id": "g4",
+            "name": "Workers R2 Storage Write"
+          }
+        ]
+      }
+    ]
+  }
+}

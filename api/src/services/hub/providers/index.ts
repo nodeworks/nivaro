@@ -1,5 +1,6 @@
 import { auth0Provider } from './auth0/index.js'
 import { awsProvider } from './aws/adapter.js'
+import { cloudflareProvider } from './cloudflare/index.js'
 import { dockerhubAdapter } from './dockerhub/index.js'
 import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
@@ -24,6 +25,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   // github, aws, vercel, auth0, expo adapters are appended here.
   auth0Provider,
   awsProvider,
+  cloudflareProvider,
   dockerhubAdapter,
   entraAdapter,
   expoAdapter,
