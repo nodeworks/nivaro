@@ -59,7 +59,11 @@ vi.mock('../../../services/hub/providers/engine/contract.js', async (importOrigi
   approveResourceChange: engine.approve,
   declineResourceChange: engine.decline
 }))
-const observe = vi.hoisted(() => ({ listUnmanaged: vi.fn(), adoptResource: vi.fn() }))
+const observe = vi.hoisted(() => ({
+  listUnmanaged: vi.fn(),
+  adoptResource: vi.fn(),
+  registerResourceObserveCron: vi.fn()
+}))
 vi.mock('../../../services/hub/providers/observe.js', () => observe)
 
 const { db } = (await import('../../../db/index.js')) as unknown as { db: Knex }
@@ -602,6 +606,62 @@ describe('plan and changes', () => {
     ).toBe(200)
     expect(engine.decline).toHaveBeenCalledWith(7, 'too costly', expect.anything())
     expect((await inject('POST', '/resource-changes/nope/cancel')).statusCode).toBe(404)
+  })
+
+  it('masks fail-closed: a resourceId-only op takes its stored resource type; an unknown type masks everything', async () => {
+    const c = await makeConnection()
+    const res = await makeResource(c.id)
+    const mk = (ops: unknown[], extra: Record<string, unknown> = {}) =>
+      store.insertChange({
+        connection_id: c.id,
+        app_id: appA,
+        scope: 'app',
+        plan_hash: 'h',
+        plan: {
+          request: { connectionId: c.id, scope: 'app', appId: appA, ops },
+          ops: [],
+          gates: [],
+          needsConfirm: null,
+          needsApproval: false,
+          blockers: [],
+          preconditionFingerprint: 'p',
+          resourceIds: [],
+          ...extra
+        } as never
+      })
+    // Update with only resourceId: the type comes from the stored resource row.
+    const upd = await mk([
+      { action: 'update', resourceId: res.id, fields: { name: 'n2', password: SECRET } }
+    ])
+    const a = await inject('GET', `/resource-changes/${upd.id}`, undefined, owner)
+    expect(a.body).not.toContain(SECRET)
+    expect(a.json().data.plan.request.ops[0].fields.name).toBe('n2')
+    // Resource row gone: the type comes from the plan's computed op.
+    const viaPlan = await mk(
+      [{ action: 'update', resourceId: 99999, fields: { name: 'n3', password: SECRET } }],
+      { ops: [{ type: 'demo.thing', resourceId: 99999 }] }
+    )
+    const b = await inject('GET', `/resource-changes/${viaPlan.id}`, undefined, owner)
+    expect(b.body).not.toContain(SECRET)
+    expect(b.json().data.plan.request.ops[0].fields.name).toBe('n3')
+    // Nothing resolves, or the type is unknown: every value is masked.
+    const unknown = await mk([
+      { action: 'update', resourceId: 99998, fields: { name: 'n4', password: SECRET } },
+      { action: 'create', type: 'nope.thing', fields: { name: 'n5', token: SECRET2 } }
+    ])
+    const d = await inject('GET', `/resource-changes/${unknown.id}`, undefined, owner)
+    expect(d.body).not.toContain(SECRET)
+    expect(d.body).not.toContain(SECRET2)
+    expect(d.body).not.toContain('n4')
+    expect(d.body).not.toContain('n5')
+    expect(d.json().data.plan.request.ops[0].fields.name).toBe('••••••')
+    // An unknown key on a known type is masked too.
+    const extra = await mk([
+      { action: 'create', type: 'demo.thing', fields: { name: 'n6', apiKey: SECRET } }
+    ])
+    const e = await inject('GET', `/resource-changes/${extra.id}`, undefined, owner)
+    expect(e.body).not.toContain(SECRET)
+    expect(e.json().data.plan.request.ops[0].fields.name).toBe('n6')
   })
 
   it('an owner reads only changes of their own app; a plain secret in a stored plan never leaves', async () => {

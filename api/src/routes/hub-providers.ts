@@ -27,7 +27,11 @@ import {
   type ResourceTypeSpec,
   RISK_FLAGS
 } from '../services/hub/providers/index.js'
-import { adoptResource, listUnmanaged } from '../services/hub/providers/observe.js'
+import {
+  adoptResource,
+  listUnmanaged,
+  registerResourceObserveCron
+} from '../services/hub/providers/observe.js'
 import {
   APP_CONNECTIONS,
   appAllowedConnections,
@@ -203,52 +207,59 @@ function resourceOut(row: HubResourceRow) {
   return { ...row, desired: desiredOut(row.desired) }
 }
 
-function secretFieldKeys(type: string | null | undefined): Set<string> {
-  const keys = new Set<string>()
-  if (!type) return keys
+function specFor(type: string | null | undefined): ResourceTypeSpec | null {
+  if (!type) return null
   ensureCoreProviders()
   const dot = type.indexOf('.')
-  const spec: ResourceTypeSpec | undefined =
-    dot > 0 ? getProvider(type.slice(0, dot))?.types.find((t) => t.key === type) : undefined
-  for (const f of spec?.fields ?? []) if (f.kind === 'secret') keys.add(f.key)
-  return keys
+  return dot > 0
+    ? (getProvider(type.slice(0, dot))?.types.find((t) => t.key === type) ?? null)
+    : null
 }
 
+/**
+ * Fail closed: with a resolved type spec only the keys it declares as non-secret pass through;
+ * a secret field, an unknown key, or no spec at all masks the value.
+ */
 function maskedFields(
   fields: Record<string, unknown> | undefined,
-  secrets: Set<string>
+  spec: ResourceTypeSpec | null
 ): Record<string, unknown> | undefined {
   if (!fields) return fields
+  const plainKeys = new Set(
+    (spec?.fields ?? []).filter((f) => f.kind !== 'secret').map((f) => f.key)
+  )
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(fields)) {
     if (isSealed(v))
       out[k] = { secret: true, fingerprint: (v as { fingerprint?: unknown }).fingerprint ?? null }
-    else if (secrets.has(k)) {
+    else if (spec && plainKeys.has(k)) out[k] = v
+    else {
       const sv = plainObject(v)
-      // A SecretValue keeps its fingerprint / changed flag but never `plain`; a raw string is masked.
-      out[k] = sv ? { ...sv, plain: undefined } : HUB_MASK
-    } else out[k] = v
+      // A SecretValue keeps its fingerprint / changed flag but never `plain`; anything else is masked.
+      out[k] = sv && typeof sv.fingerprint === 'string' ? { ...sv, plain: undefined } : HUB_MASK
+    }
   }
   return out
 }
 
 /**
  * A change row for the answer: a plain secret the person sent with the request (kept in the
- * stored plan's request, or a `plain` value inside an op) never leaves.
+ * stored plan's request) never leaves. An op without a type (update / delete by resourceId) takes
+ * the type of its stored resource row, else of the plan's computed op for that resource.
  */
-function changeOut(row: HubResourceChangeRow) {
+async function changeOut(row: HubResourceChangeRow) {
   const plan = row.plan
   if (!plan) return row
-  const request = plan.request
-    ? {
-        ...plan.request,
-        ops: (plan.request.ops ?? []).map((op: PlanRequestOp) => ({
-          ...op,
-          fields: maskedFields(op.fields, secretFieldKeys(op.type))
-        }))
-      }
-    : plan.request
-  return { ...row, plan: { ...plan, request } }
+  if (!plan.request) return row
+  const ops: unknown[] = []
+  for (const op of plan.request.ops ?? []) {
+    let type = op.type ?? null
+    if (!type && op.resourceId != null) type = (await readResource(op.resourceId))?.type ?? null
+    if (!type && op.resourceId != null)
+      type = plan.ops?.find((p) => p.resourceId === op.resourceId)?.type ?? null
+    ops.push({ ...op, fields: maskedFields(op.fields, specFor(type)) })
+  }
+  return { ...row, plan: { ...plan, request: { ...plan.request, ops } } }
 }
 
 // ── Who may see what ──
@@ -419,6 +430,9 @@ function typeOut(t: ResourceTypeSpec) {
 
 export async function hubProviderRoutes(app: FastifyInstance) {
   if (!hubModeEnabled()) return
+
+  // The periodic read of managed resources (drift, gone); a no-op where crons do not tick.
+  registerResourceObserveCron(app)
 
   // ── Types ──
 
@@ -670,7 +684,7 @@ export async function hubProviderRoutes(app: FastifyInstance) {
       if (!row) return notFound(reply, 'connection')
       const q = (req.query ?? {}) as { type?: string; cursor?: string }
       if (!q.type) return invalid(reply, ['type is required.'])
-      const page = await listUnmanaged(row.id, q.type, q.cursor || null, actorOf(req))
+      const page = await listUnmanaged(row.id, q.type, q.cursor || undefined, actorOf(req))
       return { data: page }
     })
   )
@@ -883,7 +897,7 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         const own = await ownedAppIds(req)
         rows = rows.filter((r) => r.scope === 'app' && r.app_id !== null && own.has(r.app_id))
       }
-      return { data: rows.map(changeOut) }
+      return { data: await Promise.all(rows.map(changeOut)) }
     })
   )
 
@@ -897,7 +911,7 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         (row.scope !== 'app' || row.app_id === null || !(await isAppOwner(row.app_id, userId(req))))
       )
         return notFound(reply, 'change')
-      return { data: changeOut(row) }
+      return { data: await changeOut(row) }
     })
   )
 
