@@ -1,0 +1,10 @@
+{
+  "Id": 5,
+  "Name": "test-registry",
+  "Type": 3,
+  "URL": "registry.test.example:5000",
+  "Authentication": true,
+  "Username": "test-puller",
+  "Password": "",
+  "RegistryAccesses": {}
+}
