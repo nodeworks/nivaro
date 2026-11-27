@@ -1,0 +1,12 @@
+{
+  "database_id": "aaaaaaaa-2222-3333-4444-555555555555",
+  "database_name": "free-cache",
+  "database_type": "Free",
+  "primary_region": "eu-west-1",
+  "port": 6379,
+  "state": "active",
+  "password": "test-secret-upstash-pw-0002",
+  "endpoint": "free-cache-99999.upstash.io",
+  "tls": true,
+  "eviction": true
+}
