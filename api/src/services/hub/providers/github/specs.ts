@@ -7,6 +7,7 @@ import type {
   ResourceTypeSpec,
   RiskFlag
 } from '../types.js'
+import { githubRepositoryEstimate, githubWorkflowEstimate } from './pricing.js'
 
 /**
  * The GitHub adapter's connection form and resource type specs. External ids:
@@ -174,6 +175,7 @@ export const TYPES: ResourceTypeSpec[] = [
         help: 'Off (default): removing archives the repository. On: the next apply deletes it for good.'
       }
     ],
+    estimate: githubRepositoryEstimate,
     capabilities: caps(),
     reversible: (field) => field !== 'destroy' && field !== 'template',
     refs: [],
@@ -349,6 +351,7 @@ export const TYPES: ResourceTypeSpec[] = [
         trigger: true
       }
     ],
+    estimate: githubWorkflowEstimate,
     capabilities: NO_CREATE_CAPS,
     // Runs cannot be taken back; enabled/disabled can.
     reversible: (field) => field === 'enabled',

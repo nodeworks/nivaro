@@ -1,0 +1,24 @@
+<GetMetricDataResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">
+  <GetMetricDataResult>
+    <MetricDataResults>
+      <member>
+        <Id>size</Id>
+        <Label>BucketSizeBytes</Label>
+        <StatusCode>Complete</StatusCode>
+        <Timestamps>
+          <member>2026-11-25T00:00:00Z</member>
+          <member>2026-11-26T00:00:00Z</member>
+        </Timestamps>
+        <Values>
+          <member>5.36870912E10</member>
+          <member>1.073741824E11</member>
+        </Values>
+        <Messages/>
+      </member>
+    </MetricDataResults>
+    <Messages/>
+  </GetMetricDataResult>
+  <ResponseMetadata>
+    <RequestId>11111111-2222-3333-4444-555555555557</RequestId>
+  </ResponseMetadata>
+</GetMetricDataResponse>

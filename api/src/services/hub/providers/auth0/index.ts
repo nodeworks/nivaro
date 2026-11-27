@@ -24,6 +24,7 @@ import {
   mintToken,
   tokenScopes
 } from './client.js'
+import { AUTH0_BUNDLED, auth0Estimate } from './pricing.js'
 
 /**
  * Auth0 provider (Hub third-party providers, Task 9). Types: auth0.application (callbacks, allowed
@@ -219,7 +220,8 @@ const types: ResourceTypeSpec[] = [
     },
     reversible: true,
     refs: [],
-    risk: (op) => riskApp(op)
+    risk: (op) => riskApp(op),
+    estimate: auth0Estimate
   },
   {
     key: API,
@@ -236,7 +238,8 @@ const types: ResourceTypeSpec[] = [
     },
     reversible: (field) => field !== 'identifier',
     refs: [],
-    risk: (op) => riskApi(op)
+    risk: (op) => riskApi(op),
+    estimate: auth0Estimate
   },
   {
     key: BINDING,
@@ -254,7 +257,8 @@ const types: ResourceTypeSpec[] = [
     reversible: true,
     refs: [{ field: 'client', type: APP, required: true }],
     nameField: 'connection_id',
-    risk: (op) => riskBinding(op)
+    risk: (op) => riskBinding(op),
+    estimate: auth0Estimate
   }
 ]
 
@@ -892,6 +896,7 @@ async function readsAllowed(ctx: ProviderContext): Promise<Set<string>> {
 }
 
 export const auth0Provider: ProviderAdapter = {
+  bundledPrices: AUTH0_BUNDLED,
   key: 'auth0',
   label: 'Auth0',
   connection: {

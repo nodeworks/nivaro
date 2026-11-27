@@ -1,0 +1,6 @@
+{
+  "FormatVersion": "aws_v1",
+  "PriceList": [
+    "{\"product\":{\"productFamily\":\"DNS Zone\",\"attributes\":{\"servicecode\":\"AmazonRoute53\",\"location\":\"Global\",\"locationType\":\"AWS Region\",\"regionCode\":\"\",\"usagetype\":\"HostedZone\"},\"sku\":\"HG7T0016\"},\"serviceCode\":\"AmazonRoute53\",\"terms\":{\"OnDemand\":{\"HG7T0016.JRTCKXETXF\":{\"priceDimensions\":{\"HG7T0016.JRTCKXETXF.6YS6EN2CT7\":{\"unit\":\"Hosted Zone/Month\",\"endRange\":\"Inf\",\"description\":\"$0.50 per hosted zone for the first 25 hosted zones\",\"appliesTo\":[],\"rateCode\":\"HG7T0016.JRTCKXETXF.6YS6EN2CT7\",\"beginRange\":\"0\",\"pricePerUnit\":{\"USD\":\"0.5000000000\"}}},\"sku\":\"HG7T0016\",\"effectiveDate\":\"2026-11-20T00:00:00Z\",\"offerTermCode\":\"JRTCKXETXF\",\"termAttributes\":{}}}},\"version\":\"20261120000000\",\"publicationDate\":\"2026-11-20T00:00:00Z\"}"
+  ]
+}

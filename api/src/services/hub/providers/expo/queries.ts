@@ -18,6 +18,11 @@ export const Q_ACCOUNT = `query HubAccount($name: String!) {
   account { byName(accountName: $name) { id name } }
 }`
 
+/** UNVERIFIED: the account's subscription plan name (Account.subscription { name }); only the cost estimates read it. */
+export const Q_ACCOUNT_PLAN = `query HubAccountPlan($name: String!) {
+  account { byName(accountName: $name) { id subscription { name } } }
+}`
+
 /** UNVERIFIED: Account.apps(offset, limit) — older schemas call it `apps`, newer `appsPaginated`. */
 export const Q_ACCOUNT_APPS = `query HubAccountApps($name: String!, $offset: Int!, $limit: Int!) {
   account { byName(accountName: $name) { id apps(offset: $offset, limit: $limit) { id slug name fullName privacy } } }

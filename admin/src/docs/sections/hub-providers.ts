@@ -251,7 +251,7 @@ export const hubProvidersAwsDocs: DocSection = {
     { type: 'h1', id: 'hub-providers-aws', text: 'Provider: Amazon Web Services — Hub mode only' },
     {
       type: 'p',
-      text: 'The adapter signs AWS requests itself (SigV4, no SDK) and talks to exact per-region endpoints only: `ec2`, `rds`, `elasticloadbalancing`, `sts`, `acm` and `s3` for each region you allow, plus `route53.amazonaws.com`. S3 is path-style, so no wildcard host is needed. Commercial partition only.'
+      text: 'The adapter signs AWS requests itself (SigV4, no SDK) and talks to exact per-region endpoints only: `ec2`, `rds`, `elasticloadbalancing`, `sts`, `acm`, `s3` and `monitoring` (CloudWatch) for each region you allow, plus `route53.amazonaws.com` and the Price List endpoint `api.pricing.us-east-1.amazonaws.com`. S3 is path-style, so no wildcard host is needed. Commercial partition only.'
     },
     {
       type: 'p',
@@ -348,6 +348,19 @@ export const hubProvidersAwsDocs: DocSection = {
         'Waits are bounded polling where a dependent needs them (NAT available, instance state, volume available, RDS gone on replace); other creates return a pending status. Allow one to two minutes per step.',
         'Needs a live check: nothing ran against real AWS or LocalStack. Fixtures are hand-written from the documented shapes; request shapes (query parameter names, S3 and Route 53 bodies, Content-MD5 rules) need one run on a throwaway account.'
       ]
+    },
+    { type: 'h2', id: 'hub-providers-aws-costs', text: 'Cost estimates and measured traffic' },
+    {
+      type: 'p',
+      text: 'EC2 instances, EBS volumes, NAT gateways, Elastic IPs, RDS instances, load balancers, S3 buckets and Route 53 zones show a list-price estimate in a plan; ACM public certificates are free. Prices come from the AWS Price List (`GetProducts`), are cached for seven days and fall back to a bundled table with its date when AWS cannot be read. A month is 730 hours. Data transfer out, NAT data processed and cross-zone data are separate lines from the traffic figure; S3 counts the bucket size CloudWatch reports.'
+    },
+    {
+      type: 'p',
+      text: 'Two optional read permissions turn the live prices and measured traffic on. The connection test shows a row for each and a missing one never fails the connection. Measured data out (EC2 `NetworkOut`, NAT `BytesOutToDestination`, load balancer `ProcessedBytes`, S3 `BytesDownloaded` where request metrics are on) is read in one batched CloudWatch call per connection and region, at most once an hour, because AWS bills CloudWatch by the metric.'
+    },
+    {
+      type: 'pre',
+      code: '{\n  "Version": "2012-10-17",\n  "Statement": [\n    {\n      "Sid": "NivaroHubCostEstimates",\n      "Effect": "Allow",\n      "Action": ["pricing:GetProducts", "cloudwatch:GetMetricData"],\n      "Resource": "*"\n    }\n  ]\n}'
     }
   ]
 }

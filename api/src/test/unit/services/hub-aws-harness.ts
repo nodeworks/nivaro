@@ -41,7 +41,8 @@ const PREFIX: Record<string, string> = {
   sts: 'sts',
   acm: 'acm',
   s3: 's3',
-  route53: 'route53'
+  route53: 'route53',
+  monitoring: 'monitoring'
 }
 
 export const CONFIG = {
@@ -66,12 +67,14 @@ export function harness(
     init: { method?: string; headers?: Record<string, string>; body?: unknown }
   ) => {
     const u = new URL(url)
-    const service = PREFIX[u.hostname.split('.')[0]] ?? u.hostname
+    const service = u.hostname.startsWith('api.pricing.')
+      ? 'pricing'
+      : (PREFIX[u.hostname.split('.')[0]] ?? u.hostname)
     const body = typeof init.body === 'string' ? init.body : ''
     const headers = (init.headers ?? {}) as Record<string, string>
     const params = Object.fromEntries(new URLSearchParams(body))
     let action = params.Action ?? ''
-    if (service === 'acm')
+    if (service === 'acm' || service === 'pricing')
       action =
         String(headers['x-amz-target'] ?? '')
           .split('.')
@@ -116,7 +119,12 @@ export function harness(
     now: () => new Date('2026-11-26T12:00:00Z'),
     fetch: { fetchImpl: fetchImpl as never }
   }) as ProviderContext
-  return { ctx, calls, of: (action: string) => calls.filter((c) => c.action === action) }
+  return {
+    ctx,
+    calls,
+    fetchImpl: fetchImpl as unknown as (...args: any[]) => Promise<unknown>,
+    of: (action: string) => calls.filter((c) => c.action === action)
+  }
 }
 
 export function desired(
@@ -159,5 +167,7 @@ export const OTHER_PROBES_OK = {
   'route53:GET /2013-04-01/hostedzone/Z0AAA1111FAKE/rrset': 'r53-list-rrsets.xml',
   'elbv2:DescribeLoadBalancers': 'elb-describe-lbs.xml',
   'elbv2:DescribeTargetGroups': 'elb-describe-tg.xml',
-  'acm:ListCertificates': { body: '{"CertificateSummaryList":[]}' }
+  'acm:ListCertificates': { body: '{"CertificateSummaryList":[]}' },
+  'pricing:GetProducts': 'pricing-empty.json',
+  'monitoring:GetMetricData': 'cloudwatch-metric-data-empty.xml'
 }

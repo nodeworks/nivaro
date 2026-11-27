@@ -1,6 +1,7 @@
 import { type Observed, type ProviderContext, ProviderError } from '../types.js'
 import { awsRest, orNull, restXml } from './client.js'
 import { type AwsListPage, type AwsTypeDef, cap, riskOf } from './kit.js'
+import { route53Estimate } from './pricing.js'
 import { type XmlValue, xmlChild, xmlList, xmlText } from './xml.js'
 
 /**
@@ -154,6 +155,7 @@ export const route53ZoneDef: AwsTypeDef = {
       { key: 'comment', label: 'Comment', kind: 'string', readOnly: true },
       { key: 'record_count', label: 'Records', kind: 'number', readOnly: true }
     ],
+    estimate: route53Estimate,
     capabilities: cap({ create: false, update: false, delete: false, tag: false }),
     reversible: false,
     refs: [],

@@ -15,6 +15,7 @@ import type {
 } from '../types.js'
 import { ProviderError } from '../types.js'
 import { composeId, gql, isGone, pageAll, splitId } from './client.js'
+import { EXPO_BUNDLED } from './pricing.js'
 import * as Q from './queries.js'
 import { EXPO_TYPE_KEYS, EXPO_TYPES } from './specs.js'
 
@@ -671,6 +672,7 @@ async function listType(
 // ── The adapter ──
 
 export const expoAdapter: ProviderAdapter = {
+  bundledPrices: EXPO_BUNDLED,
   key: 'expo',
   label: 'Expo (EAS)',
   connection: {

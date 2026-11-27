@@ -14,6 +14,7 @@ import {
   regionField,
   riskOf
 } from './kit.js'
+import { s3Estimate } from './pricing.js'
 import { xmlChild, xmlList, xmlText } from './xml.js'
 
 /**
@@ -223,6 +224,7 @@ export const s3BucketDef: AwsTypeDef = {
       { key: 'versioning', label: 'Versioning', kind: 'boolean', default: false },
       { key: 'encryption', label: 'Encryption (SSE-S3)', kind: 'boolean', default: true }
     ],
+    estimate: s3Estimate,
     capabilities: cap(),
     reversible: (f) => f === 'block_public_access' || f === 'versioning',
     refs: [],

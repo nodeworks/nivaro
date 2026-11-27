@@ -1,4 +1,5 @@
 import type { FieldSpec, ResourceCapabilities, ResourceTypeSpec } from '../types.js'
+import { expoBuildEstimate, expoProjectEstimate } from './pricing.js'
 
 /** Resource type specs of the Expo adapter. Expo has no tags, so `tag` is false everywhere. */
 
@@ -59,6 +60,7 @@ export const EXPO_TYPES: ResourceTypeSpec[] = [
       },
       { key: 'account', label: 'Account', kind: 'string', readOnly: true }
     ],
+    estimate: expoProjectEstimate,
     capabilities: caps({}),
     reversible: false,
     refs: [],
@@ -200,6 +202,7 @@ export const EXPO_TYPES: ResourceTypeSpec[] = [
       { key: 'gitRef', label: 'Git ref', kind: 'string', createOnly: true }
     ],
     // A build is triggered once and read afterwards; it cannot be edited or deleted here.
+    estimate: expoBuildEstimate,
     capabilities: caps({ update: false, delete: false }),
     reversible: false,
     refs: [{ field: 'project', type: 'expo.project' }],

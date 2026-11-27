@@ -1,0 +1,6 @@
+{
+  "FormatVersion": "aws_v1",
+  "PriceList": [
+    "{\"product\":{\"productFamily\":\"Data Transfer\",\"attributes\":{\"servicecode\":\"AWSDataTransfer\",\"location\":\"US East (N. Virginia)\",\"locationType\":\"AWS Region\",\"regionCode\":\"us-east-1\",\"transferType\":\"IntraRegion\",\"fromRegionCode\":\"us-east-1\",\"toRegionCode\":\"us-east-1\"},\"sku\":\"HG7T0018\"},\"serviceCode\":\"AWSDataTransfer\",\"terms\":{\"OnDemand\":{\"HG7T0018.JRTCKXETXF\":{\"priceDimensions\":{\"HG7T0018.JRTCKXETXF.6YS6EN2CT7\":{\"unit\":\"GB\",\"endRange\":\"Inf\",\"description\":\"$0.01 per GB in/out - Regional Data Transfer\",\"appliesTo\":[],\"rateCode\":\"HG7T0018.JRTCKXETXF.6YS6EN2CT7\",\"beginRange\":\"0\",\"pricePerUnit\":{\"USD\":\"0.0100000000\"}}},\"sku\":\"HG7T0018\",\"effectiveDate\":\"2026-11-20T00:00:00Z\",\"offerTermCode\":\"JRTCKXETXF\",\"termAttributes\":{}}}},\"version\":\"20261120000000\",\"publicationDate\":\"2026-11-20T00:00:00Z\"}"
+  ]
+}

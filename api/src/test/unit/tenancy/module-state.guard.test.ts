@@ -693,6 +693,8 @@ const SHARED: Record<string, string> = {
   'services/hub/providers/estimate.ts :: current': HUB_ONLY,
   'services/hub/providers/pricing/index.ts :: COST_CONNECTION_KEYS': FIXED,
   'services/hub/providers/aws/client.ts :: AWS_AUTH_CODES': FIXED,
+  'services/hub/providers/aws/egress.ts :: snapshots': HUB_ONLY,
+  'services/hub/providers/aws/egress.ts :: inflight': HUB_ONLY,
   'services/hub/providers/engine/locks.ts :: memResourceLocks': HUB_ONLY,
   'services/hub/providers/registry.ts :: providers': REGISTRY,
   'services/hub/promote-lock.ts :: memBranch': HUB_ONLY,

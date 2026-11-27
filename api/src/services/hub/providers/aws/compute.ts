@@ -27,6 +27,7 @@ import {
   regionField,
   riskOf
 } from './kit.js'
+import { ebsEstimate, ec2Estimate } from './pricing.js'
 import type { XmlValue } from './xml.js'
 
 /** aws.ec2_instance and aws.ebs_volume. */
@@ -153,6 +154,7 @@ export const ec2InstanceDef: AwsTypeDef = {
       { key: 'private_ip', label: 'Private address', kind: 'string', readOnly: true },
       { key: 'public_ip', label: 'Public address', kind: 'string', readOnly: true }
     ],
+    estimate: ec2Estimate,
     capabilities: cap(),
     reversible: (f) => f === 'instance_type' || f === 'security_groups' || f === 'name',
     refs: [
@@ -383,6 +385,7 @@ export const ebsVolumeDef: AwsTypeDef = {
         pattern: '^/dev/[a-z0-9]+$'
       }
     ],
+    estimate: ebsEstimate,
     capabilities: cap({ snapshot: true }),
     reversible: (f) => f === 'name' || f === 'instance',
     refs: [{ field: 'instance', type: 'aws.ec2_instance', required: false }],

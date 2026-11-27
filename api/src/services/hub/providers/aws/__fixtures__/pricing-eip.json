@@ -1,0 +1,6 @@
+{
+  "FormatVersion": "aws_v1",
+  "PriceList": [
+    "{\"product\":{\"productFamily\":\"IP Address\",\"attributes\":{\"servicecode\":\"AmazonVPC\",\"location\":\"US East (N. Virginia)\",\"locationType\":\"AWS Region\",\"regionCode\":\"us-east-1\",\"group\":\"VPCPublicIPv4Address\",\"usagetype\":\"PublicIPv4:InUseAddress\"},\"sku\":\"HG7T0009\"},\"serviceCode\":\"AmazonVPC\",\"terms\":{\"OnDemand\":{\"HG7T0009.JRTCKXETXF\":{\"priceDimensions\":{\"HG7T0009.JRTCKXETXF.6YS6EN2CT7\":{\"unit\":\"Hrs\",\"endRange\":\"Inf\",\"description\":\"$0.005 per In-use public IPv4 address per hour\",\"appliesTo\":[],\"rateCode\":\"HG7T0009.JRTCKXETXF.6YS6EN2CT7\",\"beginRange\":\"0\",\"pricePerUnit\":{\"USD\":\"0.0050000000\"}}},\"sku\":\"HG7T0009\",\"effectiveDate\":\"2026-11-20T00:00:00Z\",\"offerTermCode\":\"JRTCKXETXF\",\"termAttributes\":{}}}},\"version\":\"20261120000000\",\"publicationDate\":\"2026-11-20T00:00:00Z\"}"
+  ]
+}

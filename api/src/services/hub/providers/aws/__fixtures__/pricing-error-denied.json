@@ -1,0 +1,4 @@
+{
+  "__type": "com.amazon.coral.service#AccessDeniedException",
+  "Message": "User: arn:aws:sts::123456789012:assumed-role/nivaro-hub/session is not authorized to perform: pricing:GetProducts"
+}

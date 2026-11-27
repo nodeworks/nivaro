@@ -1,0 +1,8 @@
+<ErrorResponse xmlns="http://monitoring.amazonaws.com/doc/2010-08-01/">
+  <Error>
+    <Type>Sender</Type>
+    <Code>AccessDenied</Code>
+    <Message>User: arn:aws:sts::123456789012:assumed-role/nivaro-hub/session is not authorized to perform: cloudwatch:GetMetricData</Message>
+  </Error>
+  <RequestId>11111111-2222-3333-4444-555555555558</RequestId>
+</ErrorResponse>
