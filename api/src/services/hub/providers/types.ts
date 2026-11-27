@@ -31,6 +31,10 @@ export type ResourceScope = 'app' | 'shared'
 
 export type OpKind = 'create' | 'update' | 'replace' | 'delete' | 'noop'
 
+/** How a resource type bills (Task 34 widened it from none | monthly). */
+export type CostClass = 'none' | 'monthly' | 'yearly' | 'one_time'
+export const COST_CLASSES: readonly CostClass[] = ['none', 'monthly', 'yearly', 'one_time']
+
 // ── Outbound calls ──
 
 export interface ProviderFetchInit {
@@ -209,8 +213,12 @@ export interface ResourceTypeSpec {
   nameField?: string
   /** Risk flags of one planned op (pure). `desired` is null for a delete. */
   risk(op: PlannedOp, desired: DesiredResource | null): RiskFlag[]
-  /** `monthly` = the resource bills while it exists above a small free/cheap class. */
-  costClass?(desired: DesiredResource): 'none' | 'monthly'
+  /**
+   * `monthly` = the resource bills while it exists above a small free/cheap class; `yearly` = it
+   * bills once a year (a domain); `one_time` = one charge at create (Task 34). Every value but
+   * `none` adds the `cost` risk to a create or replace (owner → `pending_approval`).
+   */
+  costClass?(desired: DesiredResource): CostClass
   /**
    * Task 13: values the provider hands out for this resource (a DSN, an API key, a URL) that the
    * Hub seals and pushes into bound settings. Never part of `fields`, `Observed` or a plan.
@@ -629,4 +637,38 @@ export interface ProviderAdapter {
    * pricing/aws-price-list.ts). null = no price there. May throw; the price book falls back.
    */
   priceApi?(ctx: ProviderContext, skuKey: string, region: string): Promise<PriceAnswer | null>
+}
+
+// ── Cost feed and domains (Task 34) ──
+// Additive, like the block above. Spec: "Wave 3 providers" (cost feed, domains).
+
+export interface ProviderAdapter {
+  /**
+   * Optional (Task 34): the provider's billed spend per day in `range` (YYYY-MM-DD, both ends
+   * included, UTC) — AWS Cost Explorer, Azure Cost Management, Anthropic / OpenAI cost reports.
+   * Read once a day by the `hub-provider-costs` job. Set `externalId` when a row names one
+   * resource and `appTag` when it carries the `nivaro-hub:app` tag; set `recordType` (tax,
+   * credit, discount, refund) so the price book learns tax and discount rates. Throws
+   * ProviderError on failure (the job records the scrubbed message and tries again tomorrow).
+   */
+  costs?(ctx: ProviderContext, range: { from: string; to: string }): Promise<CostRow[]>
+}
+
+export interface ResourceTypeSpec {
+  /**
+   * Task 34: a domain registration at a registrar (Route 53 Domains, Cloudflare Registrar,
+   * Namecheap). Its adapter's `health` answers `details` with `expiresAt` (ISO date),
+   * `autoRenew` and `locked` (booleans) — see `DomainHealthDetails`; the Hub's domain watch
+   * lists it beside TLS expiry on /hub/security and warns 45 and 14 days before it expires.
+   */
+  registrar?: boolean
+}
+
+/** What a registrar type's `health().details` carries (Task 34). */
+export interface DomainHealthDetails {
+  /** When the registration ends (ISO 8601). */
+  expiresAt: string
+  autoRenew?: boolean
+  /** The registrar transfer lock is on. */
+  locked?: boolean
 }

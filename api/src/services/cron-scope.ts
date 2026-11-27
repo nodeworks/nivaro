@@ -101,6 +101,7 @@ export const CORE_CRON_SCOPES: Record<string, CronScope> = {
   'hub-vuln-scan': 'app', // Hub security: image scan (HUB=on only, never shared)
   'hub-data-tick': 'app', // Hub data care: the Hub's own backup policies and data runs (HUB=on only, never shared)
   'hub-resources-observe': 'app', // Hub providers: drift check of the Hub's own resource rows (HUB=on only, never shared)
+  'hub-provider-costs': 'app', // Hub providers: daily cost feed into the Hub's own rows (HUB=on only, never shared)
   'hub-signins-prune': 'app', // Hub phase 7: the Hub's own sign-in rows (HUB=on only, never shared)
   'hub-ops-collect': 'app', // Hub ops: the Hub's own issue/storage rows (HUB=on only, never shared)
   'hub-secrets': 'app', // Hub ops: the Hub's own secret rows (HUB=on only, never shared)

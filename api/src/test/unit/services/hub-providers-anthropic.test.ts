@@ -819,6 +819,32 @@ describe('anthropic adapter: health', () => {
   })
 })
 
+describe('anthropic adapter: costs (Task 34 feed)', () => {
+  it('answers the same cost rows as usageNow, at most the last 31 days', async () => {
+    const h = harness([
+      {
+        method: 'GET',
+        path: /\/analytics\/cost$/,
+        search: /time_bucket_width=1d/,
+        body: fx('cost-daily')
+      },
+      {
+        method: 'GET',
+        path: /\/analytics\/cost$/,
+        search: /time_bucket_width=1h/,
+        body: { data: [], has_more: false }
+      }
+    ])
+    const rows = await anthropicAdapter.costs!(h.ctx, { from: '2025-11-26', to: '2026-11-26' })
+    expect(rows.map((r) => [r.date, r.externalId, r.recordType])).toEqual([
+      ['2026-11-24', WS, 'usage'],
+      ['2026-11-25', WS2, 'usage']
+    ])
+    const daily = h.calls.find((c) => c.search.includes('time_bucket_width=1d'))
+    expect(daily?.search).toContain('starting_at=2026-10-26T00:00:00Z')
+  })
+})
+
 describe('anthropic adapter: usageNow', () => {
   it('answers cost rows per workspace and day, a daily query for finished days and hourly for today', async () => {
     const h = harness([

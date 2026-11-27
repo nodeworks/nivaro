@@ -239,6 +239,16 @@ async function scanFor(req: FastifyRequest, mine: string[]) {
   }
 }
 
+/** Task 34: the registrar domain watch, beside the TLS one (never throws). */
+async function domainTick(): Promise<{ checked: number; warned: number }> {
+  try {
+    const { domainWatchTick } = await import('../services/hub/providers/domains.js')
+    return await domainWatchTick()
+  } catch {
+    return { checked: 0, warned: 0 }
+  }
+}
+
 /** When the last manual certificate check started (this process; Hub mode is one app). */
 const tlsCheck = appBox<number>(() => 0)
 const TLS_EVERY_MS = 6 * 3_600_000
@@ -722,6 +732,10 @@ export function hubSecurityRoutes(app: FastifyInstance) {
         certificates: (await listCerts(envIds)).map((c) =>
           req.isAdmin ? c : { ...c, addresses: null, subject: null }
         ),
+        // Task 34: registrar domains the Hub manages (expiry, auto-renew, transfer lock).
+        domains: await (await import('../services/hub/providers/domains.js')).listDomains(
+          await visibleApps(req)
+        ),
         environments: await envDirectory(await visibleApps(req)),
         running: tlsCheck.value > Date.now() - 10 * 60_000
       }
@@ -735,6 +749,7 @@ export function hubSecurityRoutes(app: FastifyInstance) {
     await logActivity({ action: 'hub-tls-check', user: userId(req), req })
     void tlsWatchTick()
       .catch(() => undefined)
+      .then(() => domainTick())
       .finally(() => {
         tlsCheck.value = 0
         tlsLast.value = Date.now()
@@ -917,6 +932,8 @@ export function hubSecurityRoutes(app: FastifyInstance) {
         ) {
           tlsLast.value = Date.now()
           tls = await tlsWatchTick()
+          const d = await domainTick()
+          tls = { checked: tls.checked + d.checked, warned: tls.warned + d.warned }
         }
         if (r.resumed.length || r.started.length || r.reminded.length || tls.warned)
           app.log.info(
@@ -927,7 +944,7 @@ export function hubSecurityRoutes(app: FastifyInstance) {
         quiet: true,
         idempotent: 'safe',
         description:
-          'Every 30 minutes (Hub only) — starts the access reviews each app’s cadence makes due, resumes review runs whose process stopped, reminds owners of overdue reviews; every 6 hours checks certificate expiry and DNS of every environment name.'
+          'Every 30 minutes (Hub only) — starts the access reviews each app’s cadence makes due, resumes review runs whose process stopped, reminds owners of overdue reviews; every 6 hours checks certificate expiry and DNS of every environment name, and the expiry of every registrar domain the Hub manages (nivaro_hub_domain_checks).'
       }
     )
     app.cron.schedule(

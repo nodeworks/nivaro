@@ -998,6 +998,22 @@ async function usageNow(
   return out
 }
 
+/**
+ * Task 34: the daily cost feed. `range` names whole days (both ends included), so the last day's
+ * end is the next midnight, never later than now; the rows are usageNow's (project id = the
+ * managed resource).
+ */
+async function costs(
+  ctx: ProviderContext,
+  range: { from: string; to: string }
+): Promise<CostRow[]> {
+  const from = new Date(`${range.from.slice(0, 10)}T00:00:00Z`)
+  const dayAfter = new Date(`${range.to.slice(0, 10)}T00:00:00Z`).getTime() + 86_400_000
+  const end = new Date(Math.min(dayAfter, ctx.now().getTime()))
+  if (Number.isNaN(from.getTime()) || Number.isNaN(end.getTime()) || end <= from) return []
+  return usageNow(ctx, { from: from.toISOString(), to: end.toISOString() })
+}
+
 /** What a service account costs: nothing fixed, whatever its key spends. */
 async function serviceAccountEstimate(
   _ctx: ProviderContext,
@@ -1199,6 +1215,7 @@ export const openaiAdapter: ProviderAdapter = {
   },
   types: TYPES,
   usageNow,
+  costs,
 
   async testConnection(ctx): Promise<ConnectionTest> {
     const needs = (has: boolean, costs: boolean) => [

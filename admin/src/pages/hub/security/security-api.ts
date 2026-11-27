@@ -239,10 +239,29 @@ export const saveAppSecurity = (id: number, every: number, dueDays: number) =>
     api.put(`/hub/apps/${id}/security`, { review_every_months: every, review_due_days: dueDays })
   )
 
+/** Task 34: a registrar domain the Hub manages (expiry, auto-renew, transfer lock). */
+export interface DomainRow {
+  id: number
+  resource_id: number
+  connection_id: number
+  app_id: number | null
+  domain: string
+  state: CertState
+  expires_at: string | null
+  days_left: number | null
+  auto_renew: boolean | null
+  locked: boolean | null
+  error_code: string | null
+  checked_at: string | null
+}
+
 export const fetchCerts = () =>
-  data<{ certificates: CertRow[]; environments: EnvLabel[]; running: boolean }>(
-    api.get('/hub/security/certificates')
-  )
+  data<{
+    certificates: CertRow[]
+    domains?: DomainRow[]
+    environments: EnvLabel[]
+    running: boolean
+  }>(api.get('/hub/security/certificates'))
 export const checkCerts = () => api.post('/hub/security/certificates/check', {})
 export const fetchVulns = () =>
   data<{

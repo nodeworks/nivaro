@@ -13,6 +13,7 @@ import { cn, formatDateTime } from '@/lib/utils'
 import { HubCostsNow } from '../costs/HubCostsNow'
 import { hubToast } from '../hub-api'
 import { Field, ghostButton, SectionCard, segmentButton, segmentGroup } from '../hub-parts'
+import HubOutsideSpend from './HubOutsideSpend'
 import {
   type AppCost,
   type ChargebackReport,
@@ -214,6 +215,7 @@ function Report({ r, openRates }: { r: ChargebackReport; openRates: () => void }
       >
         <AppTable r={r} />
       </SectionCard>
+      <HubOutsideSpend />
     </>
   )
 }

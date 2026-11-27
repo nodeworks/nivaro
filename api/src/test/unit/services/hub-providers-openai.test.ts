@@ -991,6 +991,21 @@ describe('openai adapter: health and usage', () => {
     expect(calls[0].search).toContain('group_by[]=project_id')
     expect(await openaiAdapter.usageNow?.(ctx, { from: 'x', to: 'y' })).toEqual([])
   })
+
+  it('costs() (Task 34 feed) reads whole days through the last one asked, never past now', async () => {
+    const { ctx, calls } = harness([{ method: 'GET', path: /\/costs$/, body: fx('costs') }])
+    const rows = await openaiAdapter.costs?.(ctx, { from: '2026-11-01', to: '2026-11-26' })
+    expect(rows?.map((r) => [r.date, r.amountCents, r.externalId])).toEqual([
+      ['2026-11-01', 173, PROJ],
+      ['2026-11-01', 200, 'proj_test0002'],
+      ['2026-11-26', 46, PROJ]
+    ])
+    const q = new URLSearchParams(calls[0].search)
+    expect(q.get('start_time')).toBe(String(Date.parse('2026-11-01T00:00:00Z') / 1000))
+    // The harness clock is 2026-11-26 12:00 UTC: the end stops there, not at the next midnight.
+    expect(q.get('end_time')).toBe(String(Date.parse('2026-11-26T12:00:00Z') / 1000))
+    expect(await openaiAdapter.costs?.(ctx, { from: 'x', to: 'y' })).toEqual([])
+  })
 })
 
 describe('openai adapter: estimates', () => {

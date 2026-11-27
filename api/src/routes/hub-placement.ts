@@ -46,6 +46,7 @@ import {
   setHostRegion,
   updateRegion
 } from '../services/hub/placement/regions.js'
+import { outsideSpend, outsideSpendCsv } from '../services/hub/providers/costs.js'
 import { createEstimate, liveCosts, stackEstimate } from '../services/hub/providers/costs-live.js'
 import { ResourceChangeError } from '../services/hub/providers/engine/contract.js'
 import {
@@ -248,6 +249,8 @@ export function hubPlacementRoutes(app: FastifyInstance, deps: PlacementRouteDep
 
   app.get('/chargeback.csv', { preHandler: requireAdmin }, async (req, reply) => {
     const r = await chargebackReport()
+    // Task 34: the providers' billed spend follows the Hub's own estimate.
+    const outside = outsideSpendCsv(await outsideSpend())
     await logActivity({
       action: 'hub-chargeback-export',
       user: userId(req),
@@ -258,8 +261,13 @@ export function hubPlacementRoutes(app: FastifyInstance, deps: PlacementRouteDep
       .header('Content-Type', 'text/csv; charset=utf-8')
       .header('Cache-Control', 'no-store')
       .header('Content-Disposition', 'attachment; filename="hub-chargeback.csv"')
-      .send(chargebackCsv(r))
+      .send(outside.length ? `${chargebackCsv(r)}${outside.join('\r\n')}\r\n` : chargebackCsv(r))
   })
+
+  // Task 34: what provider cost feeds billed, per app and provider (month to date, 12 months).
+  app.get('/costs/outside', { preHandler: requireAdmin }, async () => ({
+    data: await outsideSpend()
+  }))
 
   app.get('/chargeback/settings', { preHandler: requireAdmin }, async () => ({
     data: await readChargeback()
