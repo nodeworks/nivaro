@@ -69,6 +69,7 @@ export * from './sections/hub-providers-livekit.js'
 export * from './sections/hub-providers-redis.js'
 export * from './sections/hub-providers-teams.js'
 export * from './sections/hub-providers-twilio.js'
+export * from './sections/hub-providers-wave2.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
 export * from './sections/hub-security.js'
@@ -404,6 +405,7 @@ import { hubProvidersSnykDocs } from './sections/hub-providers-snyk.js'
 import { hubProvidersStripeDocs } from './sections/hub-providers-stripe.js'
 import { hubProvidersTeamsDocs } from './sections/hub-providers-teams.js'
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
+import { hubProvidersOutputsDocs, hubProvidersRulesDocs } from './sections/hub-providers-wave2.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1267,6 +1269,8 @@ export const navSections: NavGroup[] = [
       hubPeopleDocs,
       hubSecurityDocs,
       hubProvidersDocs,
+      hubProvidersOutputsDocs,
+      hubProvidersRulesDocs,
       hubProvidersGithubDocs,
       hubProvidersGitlabDocs,
       hubProvidersLivekitDocs,

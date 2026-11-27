@@ -9,6 +9,10 @@ export const hubProvidersAnthropicDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-anthropic', text: 'Provider: Anthropic — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'One secret connection field, `credential`: an Admin API key (`sk-ant-admin…`, Console → Settings → Admin keys) or an `org:admin` OAuth token. A regular API key is refused when you save the connection. The key is the organization, so the connection is the pin. The only host is `api.anthropic.com`; every call sends `anthropic-version: 2026-10-21`.'
     },
@@ -50,7 +54,7 @@ export const hubProvidersAnthropicDocs: DocSection = {
         'Binding: `api_key` → the app setting `anthropic_api_key` (a credential setting). The Hub does not push it anywhere on its own; a person sets the binding and confirms it.',
         'A create that finds a workspace of the same name, or a person already in the workspace, stops with `ALREADY_EXISTS`: adopt it instead.',
         'Health: for a workspace, cost and tokens for the last 24 hours and the month so far from the Usage and Cost Analytics API (cost in US dollars). Anthropic data lands within 4 to 24 hours, so a very young workspace reads "unknown" until it does. An inactive key is a warning.',
-        'Costs: near-live workspace spend feeds the run-rate (`usageNow`, daily rows for finished days and hourly for today). The billed cost feed (`costs()`) belongs to Task 34 and is not built here.',
+        'Costs: near-live workspace spend feeds the run-rate (`usageNow`, daily rows for finished days and hourly for today). The billed-cost feed is not part of this adapter yet, so Billed on the Costs tab stays empty for it.',
         'Needs a live check: the paging of the older list endpoints (the adapter follows both `next_page` and `has_more` / `last_id`), the `email` filter on the user list, the key hint format, and the Spend Limits shape for a workspace scope (the public documentation describes only the per-member Enterprise form).'
       ]
     }

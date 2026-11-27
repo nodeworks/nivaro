@@ -10,6 +10,10 @@ export const hubProvidersGitlabDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-gitlab', text: 'Provider: GitLab — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). This is the full GitLab provider: projects, protections, environments, CI/CD variables, deploy tokens and keys, webhooks, pipeline schedules and runners. The Hub’s older GitLab code (targets for new apps, drivers, promotions) is untouched and keeps working with its own tokens.'
     },

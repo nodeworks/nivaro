@@ -70,7 +70,7 @@ export const hubProvidersTeamsDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'Not yet checked against a live tenant: creating a private channel with an application permission, and the exact Workflows webhook answer. Run the live check (Task 32) before relying on them.'
+      text: 'Not yet checked against a live tenant: creating a private channel with an application permission, and the exact Workflows webhook answer. Do a live check before relying on them.'
     }
   ]
 }

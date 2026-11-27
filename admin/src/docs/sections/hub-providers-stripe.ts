@@ -10,6 +10,10 @@ export const hubProvidersStripeDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-stripe', text: 'Provider: Stripe — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection field: secret `apiKey`, a restricted key (`rk_…`, preferred) or a secret key (`sk_…`). Test or live mode is read from the key’s prefix; the key is the account, so the connection is the pin, and an object whose mode disagrees with the key reads as gone. The only host is `api.stripe.com`. Test reads each area (products, prices, webhook endpoints, billing portal configurations, tax rates), names the account and the mode, and lists the areas the key cannot read. A restricted key shows its write permissions only in the Stripe dashboard, so write access is checked when a change is applied. Give a restricted key write access to Products, Prices, Webhook endpoints, Customer portal and Tax rates, and nothing else.'
     },

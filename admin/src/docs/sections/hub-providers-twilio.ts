@@ -9,6 +9,10 @@ export const hubProvidersTwilioDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-twilio', text: 'Provider: Twilio — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: `accountSid` (`AC…`, pinned: every path the Hub calls is built from it and every read checks the answer belongs to it), an optional `keySid` (`SK…`), `sms_countries` (two-letter codes, default `US,CA`: the only countries the Hub texts) and a secret `secret`. With a key SID the connection signs in as that API key (preferred); without one it signs in as the account SID with the auth token in `secret`. Hosts: `api.twilio.com` and `messaging.twilio.com`. Test reads the account, then probes phone numbers, messaging services and API keys, and lists what is missing. Managing API keys needs the main account’s auth token or a main API key; a standard key cannot.'
     },

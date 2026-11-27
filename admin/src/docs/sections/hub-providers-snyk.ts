@@ -9,6 +9,10 @@ export const hubProvidersSnykDocs: DocSection = {
   content: [
     { type: 'h1', id: 'hub-providers-snyk', text: 'Provider: Snyk — Hub mode only' },
     {
+      type: 'warn',
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). A regular install, Nivaro Cloud and a Hub shared deployment have none of it.'
+    },
+    {
       type: 'p',
       text: 'Connection fields: `host` (the region: `api.snyk.io`, `api.eu.snyk.io` or `api.au.snyk.io`; no other host is ever called), `organization` (the organization id, a uuid) and a secret `token` (a service account token is preferred over a personal one). The organization id is in every call, so an id from another organization answers 404 and reads as missing. Snyk lists no rights for a token and a write cannot be tried without changing something: Test checks that the token can read integrations, targets and projects and assumes a token that reads can also write (a read-only role fails at its first change). Snyk bills the organization plan, not each resource, so no type has a cost estimate.'
     },
@@ -38,7 +42,11 @@ export const hubProvidersSnykDocs: DocSection = {
         ]
       ]
     },
-    { type: 'h2', id: 'hub-providers-snyk-protection', text: 'Weakening protection is an administrator’s change' },
+    {
+      type: 'h2',
+      id: 'hub-providers-snyk-protection',
+      text: 'Weakening protection is an administrator’s change'
+    },
     {
       type: 'p',
       text: 'The plan judges the risk on what it sends. Switching monitoring off, switching pull request checks off, failing pull requests only on high severity, deleting a target and ignoring an issue with no expiry are all `public_exposure`: an owner’s change waits for an administrator’s approval. Turning protection on, or setting an ignore to expire, is not flagged.'
@@ -51,8 +59,9 @@ export const hubProvidersSnykDocs: DocSection = {
     {
       type: 'ul',
       items: [
+        'Costs: Snyk bills the organization’s plan, not each resource, so no type has an estimate.',
         'No type hands out an output and none sends messages.',
-        'Needs a live check: the import call’s answer (the job id in the body or the `Location` header), the REST target\'s `display_name` for a GitLab target, and whether `PUT /ignore/<issue>` replaces every path of the issue.'
+        "Needs a live check: the import call’s answer (the job id in the body or the `Location` header), the REST target's `display_name` for a GitLab target, and whether `PUT /ignore/<issue>` replaces every path of the issue."
       ]
     }
   ]
