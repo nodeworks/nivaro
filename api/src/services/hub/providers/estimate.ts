@@ -358,6 +358,9 @@ export type { PlanCostTotal }
 export type OpCost = NonNullable<PlannedOp['cost']>
 
 export function opCostOf(before: CostEstimate | null, after: CostEstimate | null): OpCost {
+  // An after-figure the Hub could not price is no change of figure, never "now free": a reader
+  // that only looks at the delta must not see a saving that is not there.
+  if (after && after.confidence === 'unknown') return { before, after, deltaMonthlyCents: 0 }
   const b = before && before.confidence !== 'unknown' ? before.monthlyCents : 0
   const a = after && after.confidence !== 'unknown' ? after.monthlyCents : 0
   return { before, after, deltaMonthlyCents: a - b }
