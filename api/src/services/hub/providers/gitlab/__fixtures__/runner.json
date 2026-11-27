@@ -1,0 +1,20 @@
+{
+  "id": 301,
+  "description": "build box",
+  "runner_type": "project_type",
+  "paused": false,
+  "online": true,
+  "status": "online",
+  "tag_list": ["docker"],
+  "run_untagged": true,
+  "locked": false,
+  "access_level": "not_protected",
+  "maximum_timeout": null,
+  "projects": [
+    {
+      "id": 1001,
+      "path_with_namespace": "acme/web-app"
+    }
+  ],
+  "groups": []
+}

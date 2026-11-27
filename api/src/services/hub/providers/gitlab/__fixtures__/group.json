@@ -1,0 +1,9 @@
+{
+  "id": 100,
+  "name": "Acme",
+  "path": "acme",
+  "full_path": "acme",
+  "visibility": "private",
+  "description": "Acme root group",
+  "web_url": "https://gitlab.test.example/groups/acme"
+}

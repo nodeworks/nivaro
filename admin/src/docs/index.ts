@@ -62,6 +62,7 @@ export * from './sections/hub-people.js'
 export * from './sections/hub-placement.js'
 export * from './sections/hub-providers.js'
 export * from './sections/hub-providers-entra.js'
+export * from './sections/hub-providers-gitlab.js'
 export * from './sections/hub-providers-redis.js'
 export * from './sections/hub-releases.js'
 export * from './sections/hub-scale.js'
@@ -375,6 +376,7 @@ import {
   hubProvidersVercelDocs
 } from './sections/hub-providers.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
+import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import {
   hubProvidersRedisCloudDocs,
@@ -1243,6 +1245,7 @@ export const navSections: NavGroup[] = [
       hubSecurityDocs,
       hubProvidersDocs,
       hubProvidersGithubDocs,
+      hubProvidersGitlabDocs,
       hubProvidersAwsDocs,
       hubProvidersVercelDocs,
       hubProvidersAuth0Docs,

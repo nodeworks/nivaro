@@ -1,0 +1,8 @@
+{
+  "id": 81,
+  "url": "https://hooks.example.test/gitlab",
+  "push_events": true,
+  "merge_requests_events": true,
+  "enable_ssl_verification": true,
+  "alert_status": "executable"
+}

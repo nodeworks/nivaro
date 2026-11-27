@@ -1,0 +1,9 @@
+{
+  "id": 302,
+  "description": "shared",
+  "runner_type": "instance_type",
+  "online": true,
+  "tag_list": [],
+  "projects": [],
+  "groups": []
+}

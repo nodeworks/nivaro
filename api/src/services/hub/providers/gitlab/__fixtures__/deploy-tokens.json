@@ -1,0 +1,11 @@
+[
+  {
+    "id": 55,
+    "name": "ci-pull",
+    "username": "gitlab+deploy-token-55",
+    "expires_at": "2099-01-01T00:00:00.000Z",
+    "scopes": ["read_repository"],
+    "revoked": false,
+    "expired": false
+  }
+]

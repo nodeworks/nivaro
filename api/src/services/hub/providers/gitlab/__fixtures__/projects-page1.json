@@ -1,0 +1,24 @@
+[
+  {
+    "id": 1001,
+    "name": "web-app",
+    "path": "web-app",
+    "path_with_namespace": "acme/web-app",
+    "namespace": {
+      "id": 100
+    },
+    "visibility": "private",
+    "archived": false
+  },
+  {
+    "id": 1002,
+    "name": "api",
+    "path": "api",
+    "path_with_namespace": "acme/platform/api",
+    "namespace": {
+      "id": 101
+    },
+    "visibility": "internal",
+    "archived": false
+  }
+]
