@@ -561,7 +561,12 @@ describe('aws apply', () => {
 
   it('security group create writes ingress rules and drops the default egress when egress is given', async () => {
     const h = harness({
-      'ec2:DescribeSecurityGroups': [{ body: EMPTY_SG }, { file: 'ec2-describe-sg.xml' }],
+      // tag lookup, name lookup (both empty), then the read after the create
+      'ec2:DescribeSecurityGroups': [
+        { body: EMPTY_SG },
+        { body: EMPTY_SG },
+        { file: 'ec2-describe-sg.xml' }
+      ],
       'ec2:CreateSecurityGroup': 'ec2-create-sg.xml',
       'ec2:AuthorizeSecurityGroupIngress': 'ec2-ok.xml',
       'ec2:AuthorizeSecurityGroupEgress': 'ec2-ok.xml',
@@ -629,6 +634,53 @@ describe('aws create collisions never bind a resource the Hub did not make', () 
       retryable: false
     })
     expect(h.calls).toHaveLength(0)
+  })
+})
+
+describe('aws findExisting (plan-time collision)', () => {
+  it('a security group of that name in the VPC is a collision; the lookup is a read', async () => {
+    const h = harness({
+      'ec2:DescribeSecurityGroups': [{ body: EMPTY_SG }, { file: 'ec2-describe-sg.xml' }]
+    })
+    const d = desired(
+      'aws.security_group',
+      { name: 'web', description: 'x' },
+      { refs: { vpc: 'vpc-0aaa1111' } }
+    )
+    const hit = await awsProvider.findExisting?.(h.ctx, 'aws.security_group', d)
+    expect(hit).toMatchObject({ type: 'aws.security_group', externalId: 'sg-0ccc3333' })
+    const byName = h.of('DescribeSecurityGroups')[1]
+    expect(byName.params['Filter.1.Name']).toBe('group-name')
+    expect(byName.params['Filter.1.Value.1']).toBe('web')
+    expect(byName.params['Filter.2.Name']).toBe('vpc-id')
+    expect(byName.params['Filter.2.Value.1']).toBe('vpc-0aaa1111')
+    expect(h.calls.every((c) => c.action.startsWith('Describe'))).toBe(true)
+  })
+
+  it('no collision when the name is free, the VPC is made in the same change, or the run is resumed', async () => {
+    const free = harness({ 'ec2:DescribeSecurityGroups': { body: EMPTY_SG } })
+    const d = desired(
+      'aws.security_group',
+      { name: 'web', description: 'x' },
+      { refs: { vpc: 'vpc-0aaa1111' } }
+    )
+    expect(await awsProvider.findExisting?.(free.ctx, 'aws.security_group', d)).toBeNull()
+    const n = free.calls.length
+    expect(
+      await awsProvider.findExisting?.(
+        free.ctx,
+        'aws.security_group',
+        desired('aws.security_group', { name: 'web', description: 'x' })
+      )
+    ).toBeNull()
+    expect(free.calls.length).toBe(n + 1) // only the tag lookup; no name lookup without a VPC
+    expect(
+      await awsProvider.findExisting?.(free.ctx, 'aws.security_group', {
+        ...d,
+        externalId: 'sg-0ccc3333'
+      })
+    ).toBeNull()
+    expect(free.calls.length).toBe(n + 1)
   })
 })
 

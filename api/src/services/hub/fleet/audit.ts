@@ -31,6 +31,7 @@ export type AuditCategory =
   | 'creation'
   | 'signin'
   | 'database'
+  | 'resources'
   | 'config'
 
 export const AUDIT_CATEGORIES: readonly AuditCategory[] = [
@@ -43,6 +44,7 @@ export const AUDIT_CATEGORIES: readonly AuditCategory[] = [
   'creation',
   'signin',
   'database',
+  'resources',
   'config'
 ]
 
@@ -126,7 +128,23 @@ const LABELS: Record<string, string> = {
   'hub-fleet-check': 'Fleet checked now',
   'hub-audit-export': 'Audit exported',
   'hub-deploy-run': 'Deploy run',
-  'hub-move-run': 'Move run'
+  'hub-move-run': 'Move run',
+  'hub-resource-change-start': 'Resource change started',
+  'hub-resource-change-end': 'Resource change finished',
+  'hub-resource-change-cancel': 'Resource change cancelled',
+  'hub-resource-change-resume': 'Resource change resumed',
+  'hub-resource-change-interrupted': 'Resource change interrupted',
+  'hub-resource-change-approval-request': 'Resource change: approval requested',
+  'hub-resource-change-approve': 'Resource change approved',
+  'hub-resource-change-decline': 'Resource change declined',
+  'hub-resource-change-undo-plan': 'Resource change: undo planned',
+  'hub-resource-create': 'Resource created',
+  'hub-resource-update': 'Resource changed',
+  'hub-resource-replace': 'Resource replaced',
+  'hub-resource-delete': 'Resource deleted',
+  'hub-resource-adopt': 'Resource adopted',
+  'hub-resource-accept': 'Resource: provider state accepted',
+  'hub-resource-action': 'Resource: operation run'
 }
 
 const TABLE_NAMES: Record<string, string> = {
@@ -143,7 +161,10 @@ const TABLE_NAMES: Record<string, string> = {
   nivaro_hub_shared_deployments: 'Shared deployment',
   nivaro_hub_oidc_clients: 'Sign-in client',
   nivaro_hub_oidc_keys: 'Signing key',
-  nivaro_hub_deploys: 'Deploy'
+  nivaro_hub_deploys: 'Deploy',
+  nivaro_hub_resources: 'Resource',
+  nivaro_hub_resource_changes: 'Resource change',
+  nivaro_hub_connections: 'Provider connection'
 }
 
 const VERB: Record<string, string> = { create: 'added', update: 'changed', delete: 'deleted' }
@@ -174,6 +195,8 @@ export function categoryOf(
   )
     return 'keys'
   if (action.startsWith('hub-shared-upgrade') || action === 'hub-shared-observed') return 'upgrade'
+  if (action.startsWith('hub-resource') || collection === 'nivaro_hub_resource_changes')
+    return 'resources'
   if (action.startsWith('hub-create') || action === 'hub-name-ready') return 'creation'
   if (action.startsWith('hub-signin') || collection === 'nivaro_hub_oidc_clients') return 'signin'
   if (
@@ -211,6 +234,26 @@ export function readComment(raw: unknown): {
     }
   }
   return { note: null, detail: text.slice(0, 500), json: null }
+}
+
+/**
+ * What a `hub-resource-*` row shows: the change, the resource type, what kind of step and the
+ * NAMES of the fields it changed. Only these keys are read, so a value an audit comment might one
+ * day carry (a secret included) never reaches the timeline or its CSV.
+ */
+export function resourceDetail(json: Record<string, unknown> | null): string | null {
+  if (!json) return null
+  const parts: string[] = []
+  const word = (v: unknown) => (typeof v === 'string' && v ? v.slice(0, 80) : null)
+  if (idNum(json.change_id)) parts.push(`change ${idNum(json.change_id)}`)
+  if (idNum(json.resource_id)) parts.push(`resource ${idNum(json.resource_id)}`)
+  for (const k of ['type', 'kind', 'op_action', 'from'])
+    if (word(json[k])) parts.push(`${k === 'op_action' ? 'operation' : k}: ${word(json[k])}`)
+  if (Array.isArray(json.fields)) {
+    const names = json.fields.map(word).filter((x): x is string => !!x)
+    if (names.length) parts.push(`fields: ${names.slice(0, 20).join(', ')}`)
+  }
+  return parts.join(' · ').slice(0, 500) || null
 }
 
 function iso(v: unknown): string | null {
@@ -449,6 +492,11 @@ export async function listAudit(filter: AuditFilter): Promise<AuditAnswer> {
       envId = envId ?? run.environment_id
       appId = appId ?? run.app_id
     }
+    const isResource = action.startsWith('hub-resource')
+    if (isResource && p.c.json) {
+      envId = idNum(p.c.json.environment_id)
+      appId = idNum(p.c.json.app_id)
+    }
     const category = categoryOf(action, p.collection, run?.kind ?? null)
     const label =
       action === 'hub-promote-start' && run?.kind === 'rollback'
@@ -466,7 +514,11 @@ export async function listAudit(filter: AuditFilter): Promise<AuditAnswer> {
       result: run ? run.status : null,
       note: p.c.note,
       detail:
-        [run?.version ? `version ${run.version}` : null, run?.error ? run.error : null, p.c.detail]
+        [
+          run?.version ? `version ${run.version}` : null,
+          run?.error ? run.error : null,
+          isResource ? resourceDetail(p.c.json) : p.c.detail
+        ]
           .filter(Boolean)
           .join(' · ')
           .slice(0, 600) || null,

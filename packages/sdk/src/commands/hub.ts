@@ -101,6 +101,70 @@ export interface HubShared {
   [key: string]: unknown
 }
 
+/** A third-party provider connection. Secret fields are never returned: only a mask and names. */
+export interface HubConnection {
+  id: number
+  provider: string
+  name: string
+  status: string
+  config: Record<string, unknown>
+  secret_mask?: string | null
+  secret_fingerprint?: string | null
+  secret_keys?: string[]
+  [key: string]: unknown
+}
+
+/** A managed provider resource (observed state, drift flag, refs). Secret fields are fingerprints. */
+export interface HubResource {
+  id: number
+  connection_id: number
+  provider: string
+  type: string
+  name: string | null
+  scope: 'app' | 'shared'
+  app_id: number | null
+  environment_id: number | null
+  drift: boolean
+  [key: string]: unknown
+}
+
+/** A planned or running resource change. `plan_hash` must be sent back with the start call. */
+export interface HubResourceChange {
+  id: number
+  status: string
+  [key: string]: unknown
+}
+
+export interface HubResourcePlanRequest {
+  connectionId: number
+  scope: 'app' | 'shared'
+  appId?: number
+  environmentId?: number
+  /** `{action: create|update|delete|adopt|reapply|accept, resourceId?, type?, fields?, externalId?}` */
+  ops: Array<Record<string, unknown>>
+}
+
+export interface HubResourceFilter {
+  app?: number
+  environment?: number
+  provider?: string
+  connection?: number
+  type?: string
+  /** 1 = only resources that drifted */
+  drift?: 0 | 1
+  scope?: 'app' | 'shared'
+}
+
+export interface HubResourceChangeFilter {
+  app?: number
+  environment?: number
+  connection?: number
+  /** One status, or a comma list */
+  status?: string
+  limit?: number
+  before?: number
+}
+
 type Data<T> = { data: T }
 const p = (v: number | string) => encodeURIComponent(String(v))
 
@@ -223,7 +287,76 @@ export const hubCommands = {
   listTargets: (): Command<Data<Array<Record<string, unknown>>>> => cmd('GET', '/hub/targets'),
   // Creating apps
   planAppCreation: (input: Record<string, unknown>): Command<Data<HubPlan>> =>
-    cmd('POST', '/hub/apps/create/plan', undefined, input)
+    cmd('POST', '/hub/apps/create/plan', undefined, input),
+  // Third-party providers: connections
+  listProviderTypes: (): Command<Data<Record<string, unknown>>> =>
+    cmd('GET', '/hub/provider-types'),
+  listConnections: (provider?: string): Command<Data<HubConnection[]>> =>
+    cmd('GET', '/hub/connections', provider ? { provider } : undefined),
+  readConnection: (id: number): Command<Data<HubConnection>> =>
+    cmd('GET', `/hub/connections/${p(id)}`),
+  createConnection: (body: {
+    provider: string
+    name: string
+    config?: Record<string, unknown>
+    secrets?: Record<string, string>
+  }): Command<Data<HubConnection>> => cmd('POST', '/hub/connections', undefined, body),
+  updateConnection: (
+    id: number,
+    body: { name?: string; config?: Record<string, unknown>; secrets?: Record<string, string> }
+  ): Command<Data<HubConnection>> => cmd('PATCH', `/hub/connections/${p(id)}`, undefined, body),
+  deleteConnection: (id: number): Command<Data<unknown>> =>
+    cmd('DELETE', `/hub/connections/${p(id)}`),
+  testConnection: (id: number): Command<Data<Record<string, unknown>>> =>
+    cmd('POST', `/hub/connections/${p(id)}/test`),
+  listUnmanaged: (
+    id: number,
+    query: { type: string; cursor?: string }
+  ): Command<Data<{ items: Array<Record<string, unknown>>; cursor: string | null }>> =>
+    cmd('GET', `/hub/connections/${p(id)}/unmanaged`, query),
+  adoptResource: (
+    connectionId: number,
+    body: {
+      type: string
+      externalId: string
+      scope: 'app' | 'shared'
+      appId?: number
+      environmentId?: number
+    }
+  ): Command<Data<HubResource>> =>
+    cmd('POST', `/hub/connections/${p(connectionId)}/adopt`, undefined, body),
+  appConnections: (appId: number): Command<Data<Record<string, unknown>>> =>
+    cmd('GET', `/hub/apps/${p(appId)}/connections`),
+  setAppConnections: (appId: number, connectionIds: number[]): Command<Data<unknown>> =>
+    cmd('PUT', `/hub/apps/${p(appId)}/connections`, undefined, { connection_ids: connectionIds }),
+  // Third-party providers: resources and changes
+  listResources: (filter?: HubResourceFilter): Command<Data<HubResource[]>> =>
+    cmd('GET', '/hub/resources', filter as Record<string, unknown> | undefined),
+  readResource: (id: number): Command<Data<HubResource>> => cmd('GET', `/hub/resources/${p(id)}`),
+  planResources: (body: HubResourcePlanRequest): Command<Data<HubPlan>> =>
+    cmd('POST', '/hub/resources/plan', undefined, body),
+  listResourceChanges: (filter?: HubResourceChangeFilter): Command<Data<HubResourceChange[]>> =>
+    cmd('GET', '/hub/resource-changes', filter as Record<string, unknown> | undefined),
+  readResourceChange: (id: number): Command<Data<HubResourceChange>> =>
+    cmd('GET', `/hub/resource-changes/${p(id)}`),
+  startResourceChange: (
+    id: number,
+    body: { planHash: string; confirm?: string }
+  ): Command<Data<HubResourceChange>> =>
+    cmd('POST', `/hub/resource-changes/${p(id)}/start`, undefined, body),
+  cancelResourceChange: (id: number): Command<Data<HubResourceChange>> =>
+    cmd('POST', `/hub/resource-changes/${p(id)}/cancel`),
+  resumeResourceChange: (id: number): Command<Data<HubResourceChange>> =>
+    cmd('POST', `/hub/resource-changes/${p(id)}/resume`),
+  undoResourceChange: (id: number): Command<Data<HubPlan>> =>
+    cmd('POST', `/hub/resource-changes/${p(id)}/undo`),
+  approveResourceChange: (
+    id: number,
+    body: { planHash: string }
+  ): Command<Data<HubResourceChange>> =>
+    cmd('POST', `/hub/resource-changes/${p(id)}/approve`, undefined, body),
+  declineResourceChange: (id: number, body: { reason: string }): Command<Data<HubResourceChange>> =>
+    cmd('POST', `/hub/resource-changes/${p(id)}/decline`, undefined, body)
 }
 
 type Commands = typeof hubCommands

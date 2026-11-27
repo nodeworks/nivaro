@@ -437,6 +437,73 @@ describe('vercel adapter: plan', () => {
   })
 })
 
+describe('vercel adapter: findExisting (plan-time collision, reads only)', () => {
+  it('finds a project by name, a variable by key + target, a domain on the project', async () => {
+    const h = harness([
+      { method: 'GET', path: /^\/v9\/projects\/web-app$/, body: fx('project') },
+      { method: 'GET', path: /\/env$/, body: fx('env-list') },
+      { method: 'GET', path: /\/domains\/app\.example\.com$/, body: fx('domain') }
+    ])
+    const project = await vercelAdapter.findExisting?.(
+      h.ctx,
+      'vercel.project',
+      desired('vercel.project', { name: 'web-app' })
+    )
+    expect(project).toMatchObject({ type: 'vercel.project', externalId: PRJ })
+    const env = await vercelAdapter.findExisting?.(
+      h.ctx,
+      'vercel.env_var',
+      desired(
+        'vercel.env_var',
+        { key: 'API_URL', type: 'sensitive', target: ['production'], gitBranch: null },
+        { project: PRJ }
+      )
+    )
+    expect(env).toMatchObject({ type: 'vercel.env_var' })
+    const domain = await vercelAdapter.findExisting?.(
+      h.ctx,
+      'vercel.domain',
+      desired('vercel.domain', { name: 'app.example.com' }, { project: PRJ })
+    )
+    expect(domain).toMatchObject({ type: 'vercel.domain' })
+    expect(h.calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('null for a free name, a project made in the same change, a resumed resource and a deployment', async () => {
+    const h = harness([])
+    expect(
+      await vercelAdapter.findExisting?.(
+        h.ctx,
+        'vercel.project',
+        desired('vercel.project', { name: 'nothing-here' })
+      )
+    ).toBeNull()
+    const before = h.calls.length
+    expect(
+      await vercelAdapter.findExisting?.(
+        h.ctx,
+        'vercel.env_var',
+        desired('vercel.env_var', { key: 'A', target: ['production'] }, {})
+      )
+    ).toBeNull()
+    expect(
+      await vercelAdapter.findExisting?.(
+        h.ctx,
+        'vercel.project',
+        desired('vercel.project', { name: 'web-app' }, {}, PRJ)
+      )
+    ).toBeNull()
+    expect(
+      await vercelAdapter.findExisting?.(
+        h.ctx,
+        'vercel.deployment',
+        desired('vercel.deployment', {})
+      )
+    ).toBeNull()
+    expect(h.calls.length).toBe(before)
+  })
+})
+
 describe('vercel adapter: apply is idempotent (read before write)', () => {
   it('project create: a same-named project is refused ALREADY_EXISTS; a resumed run reuses it; missing -> POST', async () => {
     const want = desired('vercel.project', {

@@ -827,6 +827,37 @@ describe('aws data+edge apply', () => {
   })
 })
 
+describe('aws data+edge findExisting (plan-time collision)', () => {
+  it("S3: a bucket of that name the Hub did not tag is a collision; the Hub's own tagged one is not", async () => {
+    const other = harness(bucket({ 's3:GET /shop-assets?tagging=': 's3-tagging-other.xml' }))
+    const hit = await awsProvider.findExisting?.(
+      other.ctx,
+      'aws.s3_bucket',
+      desired('aws.s3_bucket', bucketWant)
+    )
+    expect(hit).toMatchObject({ type: 'aws.s3_bucket', externalId: 'shop-assets' })
+    expect(other.calls.every((c) => c.method === 'GET')).toBe(true)
+    const own = harness(bucket())
+    expect(
+      await awsProvider.findExisting?.(
+        own.ctx,
+        'aws.s3_bucket',
+        desired('aws.s3_bucket', bucketWant)
+      )
+    ).toBeNull()
+    const free = harness({
+      's3:GET /shop-assets?location=': { status: 404, file: 's3-error-nosuchbucket.xml' }
+    })
+    expect(
+      await awsProvider.findExisting?.(
+        free.ctx,
+        'aws.s3_bucket',
+        desired('aws.s3_bucket', bucketWant)
+      )
+    ).toBeNull()
+  })
+})
+
 describe('aws data+edge create collisions never bind or weaken a resource the Hub did not make', () => {
   it('S3: a bucket that exists without the Hub tag is ALREADY_EXISTS, and nothing is written', async () => {
     const h = harness(bucket({ 's3:GET /shop-assets?tagging=': 's3-tagging-other.xml' }))

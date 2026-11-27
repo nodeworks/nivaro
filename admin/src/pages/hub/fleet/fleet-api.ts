@@ -112,6 +112,7 @@ export type AuditCategory =
   | 'keys'
   | 'upgrade'
   | 'creation'
+  | 'resources'
   | 'signin'
   | 'database'
   | 'config'
@@ -163,6 +164,7 @@ export const CATEGORY_LABEL: Record<AuditCategory, string> = {
   keys: 'Keys and tokens',
   upgrade: 'Shared upgrades',
   creation: 'App creation',
+  resources: 'Resources',
   signin: 'Sign-in clients',
   database: 'Databases',
   config: 'Other settings'

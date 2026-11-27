@@ -475,6 +475,18 @@ export const githubAdapter: ProviderAdapter = {
       throw wrap(ctx, err)
     }
   },
+  /** Plan time: what a create would collide with (repository by name, environment by name …). */
+  async findExisting(ctx, type, desired): Promise<Observed | null> {
+    try {
+      const h = handlerFor(type)
+      const ext = await h.existing(ctx, desired)
+      return ext ? await h.observe(ctx, ext) : null
+    } catch (err) {
+      // A parent made in the same change has no id yet, so nothing can collide yet.
+      if (err instanceof ProviderError && err.code === 'REF_UNRESOLVED') return null
+      throw wrap(ctx, err)
+    }
+  },
   async list(ctx, type, cursor): Promise<ListPage> {
     try {
       return await handlerFor(type).list(ctx, cursor ?? null)

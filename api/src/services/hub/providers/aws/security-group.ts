@@ -249,7 +249,38 @@ export const securityGroupDef: AwsTypeDef = {
     return v ? sgMap(v, region) : null
   },
   list: describeLister('DescribeSecurityGroups', 'securityGroupInfo', sgMap),
-  findExisting: findByResourceTag('DescribeSecurityGroups', 'securityGroupInfo', sgMap),
+  /**
+   * The Hub's own earlier create (resource tag), else a group of the same name in the same VPC
+   * (names are unique per VPC). Without a resolved VPC (made in the same change) nothing collides.
+   */
+  async findExisting(ctx, desired, region) {
+    const own = await findByResourceTag('DescribeSecurityGroups', 'securityGroupInfo', sgMap)(
+      ctx,
+      desired,
+      region
+    )
+    if (own) return own
+    const name = typeof desired.fields.name === 'string' ? desired.fields.name : ''
+    const vpc = typeof desired.refs.vpc === 'string' ? desired.refs.vpc : ''
+    if (!name || !vpc) return null
+    const r = await awsQuery(
+      ctx,
+      'ec2',
+      'DescribeSecurityGroups',
+      {
+        Filter: [
+          { Name: 'group-name', Value: [name] },
+          { Name: 'vpc-id', Value: [vpc] }
+        ]
+      },
+      { region }
+    )
+    for (const it of items(r.securityGroupInfo)) {
+      const o = sgMap(it, region)
+      if (o) return o
+    }
+    return null
+  },
   async create(ctx, desired, region) {
     const r = await awsQuery(
       ctx,

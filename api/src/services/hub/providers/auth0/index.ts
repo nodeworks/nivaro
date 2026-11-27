@@ -946,6 +946,21 @@ export const auth0Provider: ProviderAdapter = {
     return listCrud(ctx, impl, cursor)
   },
 
+  /** Plan time: an API with the same identifier, an application-connection pair already enabled. */
+  async findExisting(ctx, type, desired) {
+    if (desired.externalId) return null
+    await managementToken(ctx)
+    if (type === BINDING) {
+      const connectionId = str(desired.fields.connection_id)
+      const clientId = desired.refs.client
+      if (!connectionId || typeof clientId !== 'string') return null
+      return observeBinding(ctx, bindingId(connectionId, clientId))
+    }
+    // Only an API has a unique name to look up; an application is found by the Hub's own tag at apply.
+    if (type !== API) return null
+    return findExisting(ctx, CRUD[API], desired)
+  },
+
   plan(_ctx, desired, observed) {
     const type = desired?.type ?? observed?.type
     if (type === BINDING) return planBinding(desired, observed)

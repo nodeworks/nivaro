@@ -742,6 +742,36 @@ export const expoAdapter: ProviderAdapter = {
   list: listType,
   plan: (_ctx, desired, observed) => planOps(desired, observed),
 
+  /** Plan time: what a create would collide with, by project slug / branch, channel or variable name. */
+  async findExisting(ctx, type, desired): Promise<Observed | null> {
+    try {
+      if (type === 'expo.project')
+        return await projectByName(ctx, String(desired.fields.name ?? ''))
+      if (type !== 'expo.branch' && type !== 'expo.channel' && type !== 'expo.env_var') return null
+      const appId = appIdOf(desired)
+      await requireApp(ctx, appId)
+      const name = String(desired.fields.name ?? '')
+      if (type === 'expo.branch') {
+        const row = (await branchRows(ctx, appId)).find((r) => r.name === name)
+        return row ? mapBranch(appId, row) : null
+      }
+      if (type === 'expo.channel') {
+        const row = (await channelRows(ctx, appId)).find((r) => r.name === name)
+        return row ? mapChannel(appId, row) : null
+      }
+      const row = (await envVarRows(ctx, appId)).find((r) => r.name === name)
+      return row ? mapEnvVar(appId, row) : null
+    } catch (err) {
+      // A parent made in the same change has no id yet, so nothing can collide yet.
+      if (
+        err instanceof ProviderError &&
+        ['EXPO_REF_UNRESOLVED', 'EXPO_NOT_FOUND'].includes(err.code)
+      )
+        return null
+      throw err
+    }
+  },
+
   async apply(ctx, op, desired): Promise<OpResult> {
     try {
       if (op.kind === 'noop') return done(op.externalId, null)

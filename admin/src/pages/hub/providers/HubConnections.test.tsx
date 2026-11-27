@@ -24,6 +24,7 @@ proto.hasPointerCapture ??= () => false
 proto.releasePointerCapture ??= vi.fn()
 
 const { HubConnections } = await import('./HubConnections')
+const { LinkedChange } = await import('./ChangeView')
 
 const types = {
   risk_flags: ['destructive', 'data_loss', 'public_exposure', 'downtime', 'cost'],
@@ -263,5 +264,48 @@ describe('HubConnections', () => {
     mount()
     expect(await screen.findByText('Waiting for your approval')).toBeTruthy()
     expect(await screen.findByText('Create repository')).toBeTruthy()
+  })
+})
+
+describe('a change link', () => {
+  const link = (id: string) =>
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <MemoryRouter initialEntries={[`/hub/connections?change=${id}`]}>
+          <LinkedChange isAdmin />
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+
+  it('opens the change named in ?change=', async () => {
+    h.get.mockImplementation(async (url: string) => {
+      if (url === '/hub/resource-changes/42')
+        return {
+          data: {
+            data: {
+              id: 42,
+              status: 'applied',
+              plan: { ops: [], gates: [], blockers: [] },
+              steps: [],
+              created_at: '2026-11-26T10:00:00Z'
+            }
+          }
+        }
+      return { data: { data: types } }
+    })
+    link('42')
+    expect(await screen.findByText('Change 42')).toBeTruthy()
+    await waitFor(() =>
+      expect(h.get.mock.calls.some((c) => c[0] === '/hub/resource-changes/42')).toBe(true)
+    )
+  })
+
+  it('says so for an id that is not a number, and reads nothing', async () => {
+    h.get.mockClear()
+    link('abc')
+    expect(await screen.findByText(/not a change number/)).toBeTruthy()
+    expect(h.get.mock.calls.some((c) => String(c[0]).includes('abc'))).toBe(false)
   })
 })

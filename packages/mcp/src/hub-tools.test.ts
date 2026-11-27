@@ -47,6 +47,23 @@ const answers: Handler = (c) => {
       ]
     }
   if (p.endsWith('/promotable')) return { data: { promote: ['0.3.216'], rollback: [] } }
+  if (p === '/hub/connections')
+    return {
+      data: [
+        {
+          id: 7,
+          provider: 'github',
+          name: 'GitHub · acme',
+          status: 'ok',
+          secret_mask: '••••••',
+          secret_fingerprint: 'abc123',
+          secret_keys: ['private_key']
+        }
+      ]
+    }
+  if (p === '/hub/resources/plan')
+    return { data: { changeId: 21, ops: [{ kind: 'create' }], plan_hash: 'h2' } }
+  if (p === '/hub/resource-changes/11') return { data: { id: 11, status: 'applied', steps: [] } }
   if (p.endsWith('/plan'))
     return {
       data: {
@@ -89,7 +106,7 @@ describe('Hub MCP tools', () => {
     for (const t of [...HUB_TOOL_NAMES, ...HUB_ADMIN_TOOL_NAMES]) expect(n).not.toContain(t)
   })
 
-  it('on a Hub: the six everyday tools for everyone, the admin three only with adminTools', async () => {
+  it('on a Hub: the ten everyday tools for everyone, the admin three only with adminTools', async () => {
     await setup({ hub: true, adminTools: false })
     const n = await names()
     for (const t of HUB_TOOL_NAMES) expect(n).toContain(t)
@@ -103,7 +120,7 @@ describe('Hub MCP tools', () => {
   it('every Hub tool is marked read-only', async () => {
     await setup({ hub: true, adminTools: true })
     const tools = (await mcp.listTools()).tools.filter((t) => t.name.startsWith('hub_'))
-    expect(tools).toHaveLength(9)
+    expect(tools).toHaveLength(13)
     for (const t of tools) expect(t.annotations?.readOnlyHint).toBe(true)
   })
 
@@ -202,6 +219,49 @@ describe('Hub MCP tools', () => {
     expect(JSON.stringify(shared)).not.toContain('token')
     const posts = calls.filter((c) => c._method !== 'GET').map((c) => c._path)
     expect(posts).toEqual(['/hub/environments/11/move/plan', '/hub/shared/2/upgrade/plan'])
+  })
+
+  it('provider tools: read connections (secrets never answered), resources, a change; plan POSTs only to /plan', async () => {
+    await setup()
+    const conns = textOf(await mcp.callTool({ name: 'hub_list_connections', arguments: {} }))
+    expect(JSON.stringify(conns)).not.toContain('secret')
+    await mcp.callTool({
+      name: 'hub_list_resources',
+      arguments: { app_id: 3, drift_only: true, connection_id: 7 }
+    })
+    const change = textOf(
+      await mcp.callTool({ name: 'hub_read_resource_change', arguments: { change_id: 11 } })
+    )
+    expect(change.link).toBe('https://hub.example.com/hub/connections?change=11')
+    const planned = textOf(
+      await mcp.callTool({
+        name: 'hub_plan_resources',
+        arguments: {
+          connection_id: 7,
+          scope: 'app',
+          app_id: 3,
+          environment_id: 11,
+          ops: [{ action: 'create', type: 'github.repository', fields: { name: 'web' } }]
+        }
+      })
+    )
+    expect(planned.note).toBe(PLAN_ONLY_NOTE)
+    expect(planned.link).toBe('https://hub.example.com/hub/connections?change=21')
+    expect(JSON.stringify(planned)).not.toContain('plan_hash')
+    expect(calls.map((c) => `${c._method} ${c._path}`)).toEqual([
+      'GET /hub/connections',
+      'GET /hub/resources',
+      'GET /hub/resource-changes/11',
+      'POST /hub/resources/plan'
+    ])
+    expect(calls[1]._params).toEqual({ app: 3, connection: 7, drift: 1 })
+    expect(calls[3]._body).toEqual({
+      connectionId: 7,
+      scope: 'app',
+      appId: 3,
+      environmentId: 11,
+      ops: [{ action: 'create', type: 'github.repository', fields: { name: 'web' } }]
+    })
   })
 
   it('no Hub tool ever calls a route that starts, cancels or changes something', async () => {

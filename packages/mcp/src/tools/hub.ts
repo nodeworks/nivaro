@@ -27,7 +27,11 @@ export const HUB_TOOL_NAMES = [
   'hub_app_status',
   'hub_fleet_status',
   'hub_deploy_history',
-  'hub_plan_promote'
+  'hub_plan_promote',
+  'hub_list_connections',
+  'hub_list_resources',
+  'hub_read_resource_change',
+  'hub_plan_resources'
 ] as const
 
 /** Hub tools for administrators only (registered with `adminTools`). */
@@ -106,7 +110,8 @@ export function hubLinks(base: string) {
   return {
     apps: `${b}/hub`,
     app: (appId: number) => `${b}/hub?app=${appId}`,
-    shared: (sharedId: number) => `${b}/hub/shared?shared=${sharedId}`
+    shared: (sharedId: number) => `${b}/hub/shared?shared=${sharedId}`,
+    change: (changeId: number) => `${b}/hub/connections?change=${changeId}`
   }
 }
 
@@ -321,6 +326,157 @@ export function registerHubTools(
           environment: pick(env, ['id', 'key']),
           plan: planForModel(res.data),
           link,
+          note: PLAN_ONLY_NOTE
+        })
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'hub_list_connections',
+    {
+      title: 'Hub provider connections',
+      description:
+        'The third-party provider accounts (GitHub, AWS, Vercel …) this Hub is connected to that you may see (administrators: all; an app owner: those allowed for their apps): id, provider, name and status. Secrets are never answered. Optional provider filter.',
+      inputSchema: { provider: z.string().min(1).max(64).optional().describe('Provider key.') },
+      annotations: READ
+    },
+    async (args: { provider?: string }) => {
+      try {
+        const res = await client.request(
+          get<{ data: Row[] }>('/hub/connections', args.provider ? { provider: args.provider } : {})
+        )
+        const connections = (res.data ?? []).map((c) => planForModel(c))
+        return ok({ count: connections.length, connections, link: `${links.apps}/connections` })
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'hub_list_resources',
+    {
+      title: 'Hub managed resources',
+      description:
+        'The provider resources the Hub manages that you may see (a repository, a VPC, a Vercel project …): type, name, which app environment they belong to and whether they drifted from what the Hub set. Filter by app, environment, provider, connection, type or drift.',
+      inputSchema: {
+        app_id: z.number().int().positive().optional(),
+        environment_id: z.number().int().positive().optional(),
+        provider: z.string().min(1).max(64).optional(),
+        connection_id: z.number().int().positive().optional(),
+        type: z.string().min(1).max(100).optional().describe('Resource type key, e.g. aws.vpc.'),
+        drift_only: z.boolean().optional().describe('Only resources that drifted.')
+      },
+      annotations: READ
+    },
+    async (args: {
+      app_id?: number
+      environment_id?: number
+      provider?: string
+      connection_id?: number
+      type?: string
+      drift_only?: boolean
+    }) => {
+      try {
+        const params: Row = {}
+        if (args.app_id) params.app = args.app_id
+        if (args.environment_id) params.environment = args.environment_id
+        if (args.provider) params.provider = args.provider
+        if (args.connection_id) params.connection = args.connection_id
+        if (args.type) params.type = args.type
+        if (args.drift_only) params.drift = 1
+        const res = await client.request(get<{ data: Row[] }>('/hub/resources', params))
+        const resources = (res.data ?? []).slice(0, 200).map((r) => planForModel(r))
+        return ok({ count: (res.data ?? []).length, resources, link: links.apps })
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'hub_read_resource_change',
+    {
+      title: 'Hub resource change',
+      description:
+        'One planned, running or finished change to provider resources: its status, operations, gates and steps, with the link where a person starts, approves or undoes it.',
+      inputSchema: { change_id: id('change') },
+      annotations: READ
+    },
+    async (args: { change_id: number }) => {
+      try {
+        const res = await client.request(
+          get<{ data: unknown }>(`/hub/resource-changes/${args.change_id}`)
+        )
+        return ok({ change: planForModel(res.data), link: links.change(args.change_id) })
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  server.registerTool(
+    'hub_plan_resources',
+    {
+      title: 'Plan changes to provider resources',
+      description:
+        'Plans (never runs) creating, changing, deleting or adopting provider resources: reads the provider and answers what would happen — operations, risks, blockers — and the link to the change where a person starts it. Never put secret values (keys, tokens, passwords) in fields: a person sends those from the Hub.',
+      inputSchema: {
+        connection_id: id('connection'),
+        scope: z.enum(['app', 'shared']),
+        app_id: z.number().int().positive().optional().describe('Required for scope app.'),
+        environment_id: z.number().int().positive().optional(),
+        ops: z
+          .array(
+            z.object({
+              action: z.enum(['create', 'update', 'delete', 'adopt', 'reapply', 'accept']),
+              resource_id: z.number().int().optional().describe('The managed resource id.'),
+              type: z.string().min(1).max(100).optional().describe('Resource type key.'),
+              fields: z.record(z.string(), z.unknown()).optional(),
+              external_id: z.string().min(1).max(512).optional().describe('For adopt.')
+            })
+          )
+          .min(1)
+          .max(20)
+      },
+      annotations: READ
+    },
+    async (args: {
+      connection_id: number
+      scope: 'app' | 'shared'
+      app_id?: number
+      environment_id?: number
+      ops: Array<{
+        action: string
+        resource_id?: number
+        type?: string
+        fields?: Row
+        external_id?: string
+      }>
+    }) => {
+      try {
+        const res = await client.request(
+          post<{ data: Row }>('/hub/resources/plan', {
+            connectionId: args.connection_id,
+            scope: args.scope,
+            ...(args.app_id ? { appId: args.app_id } : {}),
+            ...(args.environment_id ? { environmentId: args.environment_id } : {}),
+            ops: args.ops.map((o) => ({
+              action: o.action,
+              ...(o.resource_id != null ? { resourceId: o.resource_id } : {}),
+              ...(o.type ? { type: o.type } : {}),
+              ...(o.fields ? { fields: o.fields } : {}),
+              ...(o.external_id ? { externalId: o.external_id } : {})
+            }))
+          })
+        )
+        const changeId = Number((res.data as Row)?.changeId)
+        return ok({
+          plan: planForModel(res.data),
+          link: Number.isInteger(changeId) ? links.change(changeId) : `${links.apps}/connections`,
           note: PLAN_ONLY_NOTE
         })
       } catch (err) {

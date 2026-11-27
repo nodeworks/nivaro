@@ -1132,6 +1132,25 @@ export const vercelAdapter: ProviderAdapter = {
     return { items, cursor: next }
   },
 
+  /** Plan time: a project of that name, a variable with that key and target, a domain on the project. */
+  async findExisting(ctx, type, desired) {
+    if (desired.externalId) return null
+    if (type === TYPE_PROJECT) return readProject(ctx, String(desired.fields.name ?? ''))
+    if (type !== TYPE_ENV && type !== TYPE_DOMAIN) return null
+    const pid = desired.refs?.project
+    // A project made in the same change has no id yet, so nothing can collide yet.
+    if (typeof pid !== 'string' || !pid) return null
+    if (type === TYPE_DOMAIN) return readDomain(ctx, pid, String(desired.fields.name ?? ''))
+    return (
+      (await readEnvs(ctx, pid)).find(
+        (e) =>
+          e.fields.key === desired.fields.key &&
+          overlaps(e.fields.target, desired.fields.target) &&
+          sameValue(e.fields.gitBranch, desired.fields.gitBranch)
+      ) ?? null
+    )
+  },
+
   plan(_ctx, desired, observed) {
     const type = desired?.type ?? observed?.type
     if (type === TYPE_PROJECT) return planProject(desired, observed)

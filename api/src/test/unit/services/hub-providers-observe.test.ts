@@ -15,6 +15,10 @@ vi.mock('../../../db/index.js', async () => {
   return { db }
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
+vi.mock('../../../services/hub/providers/engine/contract.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/hub/providers/engine/contract.js')>()),
+  healResourceChanges: vi.fn(async () => 0)
+}))
 
 const { db } = await import('../../../db/index.js')
 const migration = await import('../../../db/migrations/582_hub_providers.js')
@@ -22,6 +26,7 @@ const registry = await import('../../../services/hub/providers/registry.js')
 const store = await import('../../../services/hub/providers/store.js')
 const observe = await import('../../../services/hub/providers/observe.js')
 const { logActivity } = await import('../../../services/activity.js')
+const { healResourceChanges } = await import('../../../services/hub/providers/engine/contract.js')
 
 import type { HubActor } from '../../../services/hub/providers/engine/contract.js'
 import type {
@@ -409,5 +414,32 @@ describe('unmanaged and adopt', () => {
     await expect(observe.adoptResource(connId, adoptApp('missing'), admin)).rejects.toMatchObject({
       code: 'NOT_FOUND'
     })
+  })
+})
+
+describe('the cron tick heals first', () => {
+  it('heals stopped changes Hub-wide, then observes', async () => {
+    const order: string[] = []
+    vi.mocked(healResourceChanges).mockImplementationOnce(async (id?: number) => {
+      order.push(`heal:${id ?? 'all'}`)
+      return 2
+    })
+    await managed('a', { name: 'a' })
+    world.set('a', obs('a', { name: 'a' }))
+    const warn = vi.fn()
+    const sum = await observe.observeTick(warn)
+    expect(order).toEqual(['heal:all'])
+    expect(sum.checked).toBe(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('marked 2'))
+  })
+
+  it('a failing heal is reported and never stops the observe pass', async () => {
+    vi.mocked(healResourceChanges).mockRejectedValueOnce(new Error('lock store down'))
+    await managed('a', { name: 'a' })
+    world.set('a', obs('a', { name: 'a' }))
+    const warn = vi.fn()
+    const sum = await observe.observeTick(warn)
+    expect(sum.checked).toBe(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('heal failed: lock store down'))
   })
 })
