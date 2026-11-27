@@ -22,6 +22,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { AppFilterNote, useAppFilter } from '../app-filter'
 import { hubToast } from '../hub-api'
 import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
 import { isoToLocalInput, localInputToIso, viewerTimeZone } from '../releases/releases-api'
@@ -52,6 +53,8 @@ export default function HubOnCall() {
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
   const [params] = useSearchParams()
   const focus = Number(params.get('page')) || null
+  // `?app=<id>`: one app's rota (the link on an app's page). Pages for you always all show.
+  const { appId, clear } = useAppFilter()
   const q = useQuery({
     queryKey: incidentKeys.onCall(),
     queryFn: fetchOnCall,
@@ -73,7 +76,24 @@ export default function HubOnCall() {
         ) : (
           <div className='space-y-4'>
             <PagesCard data={q.data} focus={focus} />
-            <RotasCard data={q.data} isAdmin={isAdmin} />
+            {appId != null && (
+              <AppFilterNote
+                name={q.data.apps.find((a) => a.id === appId)?.name ?? null}
+                onClear={clear}
+              />
+            )}
+            <RotasCard
+              data={
+                appId != null && q.data.apps.some((a) => a.id === appId)
+                  ? {
+                      ...q.data,
+                      apps: q.data.apps.filter((a) => a.id === appId),
+                      rotas: q.data.rotas.filter((r) => r.rota.app_id === appId)
+                    }
+                  : q.data
+              }
+              isAdmin={isAdmin}
+            />
           </div>
         )}
       </div>

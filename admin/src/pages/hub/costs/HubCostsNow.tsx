@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDate, formatDateTime, formatRelative } from '@/lib/utils'
+import { AppFilterNote, useAppFilter } from '../app-filter'
 import { fetchHubApps, type HubApp, hubKeys, hubToast, useHubApp } from '../hub-api'
 import { ghostButton, SectionCard } from '../hub-parts'
 import {
@@ -158,9 +159,12 @@ const ROW_GRID =
   'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 sm:grid-cols-[minmax(0,1fr)_7.5rem_7.5rem_minmax(11rem,15rem)]'
 
 function AppList({ d, apps, isAdmin }: { d: LiveCosts; apps: HubApp[]; isAdmin: boolean }) {
-  const [open, setOpen] = useState<Set<number>>(new Set())
+  // `?app=<id>`: one app's row, opened on its environments (the link on an app's page).
+  const { appId, clear } = useAppFilter()
+  const [open, setOpen] = useState<Set<number>>(() => new Set(appId != null ? [appId] : []))
   const [editing, setEditing] = useState<number | null>(null)
   const nameOf = (id: number) => apps.find((a) => a.id === id)
+  const only = appId != null && nameOf(appId) ? appId : null
   // Every app the caller sees, priced or not (an app with nothing priced still has a budget).
   const ids = [...new Set([...d.byApp.map((a) => a.app_id), ...apps.map((a) => a.id)])]
   const rows = ids
@@ -174,6 +178,7 @@ function AppList({ d, apps, isAdmin }: { d: LiveCosts; apps: HubApp[]; isAdmin: 
         }
     )
     .filter((r) => nameOf(r.app_id) || r.nowCents || r.monthToDateCents)
+    .filter((r) => only == null || r.app_id === only)
     .sort(
       (a, b) =>
         b.forecastCents - a.forecastCents ||
@@ -194,6 +199,11 @@ function AppList({ d, apps, isAdmin }: { d: LiveCosts; apps: HubApp[]; isAdmin: 
     })
   return (
     <div>
+      {appId != null && (
+        <div className='border-b border-slate-200 p-2 dark:border-border'>
+          <AppFilterNote name={nameOf(appId)?.name ?? null} onClear={clear} />
+        </div>
+      )}
       <div
         className={cn(
           ROW_GRID,

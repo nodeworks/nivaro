@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { AppFilterNote, useAppFilter } from '../app-filter'
 import { hubToast } from '../hub-api'
 import { dangerArmed, dangerGhost, Field, ghostButton, SectionCard } from '../hub-parts'
 import {
@@ -48,6 +49,24 @@ import {
  * rollback rules. Everyone who owns an app sees its rows; only administrators change anything.
  * Every time is shown in the viewer's own zone (the Hub stores UTC).
  */
+/**
+ * The page narrowed to one app (`?app=<id>`): its environments, trains, schedules, rollback
+ * rules and the freezes that bind it (its own and the Hub-wide ones). Forms then offer only it.
+ */
+function onlyApp(d: ReleasesOverview, appId: number): ReleasesOverview {
+  const envs = new Set(d.environments.filter((e) => e.app_id === appId).map((e) => e.id))
+  return {
+    ...d,
+    apps: d.apps.filter((a) => a.id === appId),
+    environments: d.environments.filter((e) => e.app_id === appId),
+    trains: d.trains.filter((t) => t.app_id === appId),
+    schedules: d.schedules.filter((s) => s.app_id === appId),
+    freezes: d.freezes.filter((f) => f.app_id == null || f.app_id === appId),
+    rules: d.rules.filter((r) => envs.has(r.environment_id)),
+    watches: d.watches.filter((w) => w.app_id === appId)
+  }
+}
+
 export default function HubReleases() {
   const { user } = useAuth()
   const isAdmin = !!(user as { is_admin?: boolean } | null)?.is_admin
@@ -60,6 +79,9 @@ export default function HubReleases() {
         ? 15_000
         : 60_000
   })
+  const { appId, clear } = useAppFilter()
+  const app = appId == null ? null : (q.data?.apps.find((a) => a.id === appId) ?? null)
+  const data = useMemo(() => (q.data && app ? onlyApp(q.data, app.id) : q.data), [q.data, app])
   return (
     <section aria-label='Releases' className='flex flex-1 min-h-0 flex-col'>
       <HubToolbar description={`Every time on this page is in ${viewerTimeZone()}.`} />
@@ -69,11 +91,13 @@ export default function HubReleases() {
         ) : q.isError ? (
           <QueryErrorState error={q.error} what='the releases' onRetry={() => void q.refetch()} />
         ) : (
-          <div className='space-y-4'>
-            <TrainsCard data={q.data} isAdmin={isAdmin} />
-            <SchedulesCard data={q.data} isAdmin={isAdmin} />
-            <FreezesCard data={q.data} isAdmin={isAdmin} />
-            <RollbackCard data={q.data} isAdmin={isAdmin} />
+          // Keyed on the app: the forms pick their first app when they mount.
+          <div key={app?.id ?? 'all'} className='space-y-4'>
+            {appId != null && <AppFilterNote name={app?.name ?? null} onClear={clear} />}
+            <TrainsCard data={data ?? q.data} isAdmin={isAdmin} />
+            <SchedulesCard data={data ?? q.data} isAdmin={isAdmin} />
+            <FreezesCard data={data ?? q.data} isAdmin={isAdmin} />
+            <RollbackCard data={data ?? q.data} isAdmin={isAdmin} />
           </div>
         )}
       </div>

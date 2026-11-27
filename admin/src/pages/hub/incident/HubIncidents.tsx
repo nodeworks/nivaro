@@ -26,6 +26,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useAuth } from '@/lib/auth'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
+import { AppFilterNote, useAppFilter } from '../app-filter'
 import { fetchHubApp, fetchHubApps, hubKeys, hubToast } from '../hub-api'
 import {
   countLabel,
@@ -99,8 +100,18 @@ export default function HubIncidents() {
   useEffect(() => {
     if (selectedStatus) setShow(selectedStatus)
   }, [selectedStatus])
-  const rows = (list.data ?? []).filter((r) => r.status === show)
-  const openCount = (list.data ?? []).filter((r) => r.status === 'open').length
+  // `?app=<id>`: one app's incidents (the link on an app's page).
+  const { appId, clear } = useAppFilter()
+  const apps = useQuery({ queryKey: hubKeys.apps(), queryFn: fetchHubApps, enabled: appId != null })
+  const appName =
+    appId == null
+      ? null
+      : (apps.data?.find((a) => a.id === appId)?.name ??
+        list.data?.find((r) => r.app_id === appId)?.app_name ??
+        null)
+  const mine = (list.data ?? []).filter((r) => appId == null || r.app_id === appId)
+  const rows = mine.filter((r) => r.status === show)
+  const openCount = mine.filter((r) => r.status === 'open').length
   const detailOpen = creating || selected != null
   return (
     <section aria-labelledby='hub-incidents-title' className='flex flex-1 min-h-0 flex-col'>
@@ -133,6 +144,11 @@ export default function HubIncidents() {
               )
             }
           />
+          {appId != null && (apps.isSuccess || appName) && (
+            <div className='border-b border-slate-200 p-2 dark:border-border'>
+              <AppFilterNote name={appName} onClear={clear} />
+            </div>
+          )}
           <div className='border-b border-slate-200 px-3 py-2 dark:border-border'>
             <fieldset className={cn(segmentGroup, 'flex w-full')}>
               <legend className='sr-only'>Show</legend>
@@ -196,7 +212,11 @@ export default function HubIncidents() {
             </div>
           )}
           {creating && isAdmin ? (
-            <OpenIncidentForm onDone={(id) => select(id)} onCancel={() => select(null)} />
+            <OpenIncidentForm
+              initialAppId={appId}
+              onDone={(id) => select(id)}
+              onCancel={() => select(null)}
+            />
           ) : selected ? (
             <IncidentPanel id={selected} />
           ) : (
@@ -282,14 +302,17 @@ function IncidentListItem({
 
 function OpenIncidentForm({
   onDone,
-  onCancel
+  onCancel,
+  initialAppId
 }: {
   onDone: (id: number) => void
   onCancel: () => void
+  /** The app the page is narrowed to, picked already. */
+  initialAppId?: number | null
 }) {
   const qc = useQueryClient()
   const apps = useQuery({ queryKey: hubKeys.apps(), queryFn: fetchHubApps })
-  const [appId, setAppId] = useState('')
+  const [appId, setAppId] = useState(initialAppId ? String(initialAppId) : '')
   const app = useQuery({
     queryKey: hubKeys.app(Number(appId)),
     queryFn: () => fetchHubApp(Number(appId)),

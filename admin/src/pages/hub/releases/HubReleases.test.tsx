@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // Hub release operations: the Releases tab (trains, schedules, freezes, rollback rules) and the
@@ -163,12 +164,14 @@ const overview = {
   now: '2026-11-30T12:00:00Z'
 }
 
-function mount() {
+function mount(url = '/hub/releases') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    <QueryClientProvider client={qc}>
-      <HubReleases />
-    </QueryClientProvider>
+    <MemoryRouter initialEntries={[url]}>
+      <QueryClientProvider client={qc}>
+        <HubReleases />
+      </QueryClientProvider>
+    </MemoryRouter>
   )
 }
 
@@ -221,6 +224,38 @@ describe('HubReleases', () => {
     expect(screen.getByText('runs as Rob Lee')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Start staging anyway' }))
     await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/trains/5/skip', { step: 0 }))
+  })
+
+  it('?app=<id> shows that app only, says so, and takes the filter off again', async () => {
+    const other = { id: 2, key: 'beta', name: 'Beta' }
+    h.get.mockResolvedValue({
+      data: {
+        data: {
+          ...overview,
+          apps: [...overview.apps, other],
+          trains: [
+            ...overview.trains,
+            { ...overview.trains[0], id: 99, app_id: 2, version: '9.9.9' }
+          ]
+        }
+      }
+    })
+    mount('/hub/releases?app=2')
+    expect(await screen.findByRole('status')).toHaveTextContent('Showing Beta only.')
+    expect(screen.getByText(/beta 9\.9\.9/)).toBeInTheDocument()
+    expect(screen.queryByText(new RegExp(`acme ${overview.trains[0].version}`))).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Show every app/ }))
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
+    expect(screen.getByText(new RegExp(`acme ${overview.trains[0].version}`))).toBeInTheDocument()
+  })
+
+  it('says so when ?app= names an app this person cannot see, and shows everything', async () => {
+    h.get.mockResolvedValue({ data: { data: overview } })
+    mount('/hub/releases?app=77')
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'That app is not one you can see here.'
+    )
+    expect(screen.getByText(new RegExp(`acme ${overview.trains[0].version}`))).toBeInTheDocument()
   })
 
   it('an owner reads but gets no buttons that change anything', async () => {
