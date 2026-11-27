@@ -855,6 +855,8 @@ describe('aws part 3 SES SMTP user (the IAM exception)', () => {
     expect(user.Path).toBe('/nivaro-hub/')
     expect(user['Tags.member.1.Key']).toBeTruthy()
     expect(Object.values(user)).toContain('nivaro-hub:managed')
+    // The user carries its row, so later rotations and deletes pass the row check.
+    expect(Object.values(user)).toContain('nivaro-hub:resource')
     const policy = JSON.parse(h.of('PutUserPolicy')[0].params.PolicyDocument)
     expect(policy.Statement).toHaveLength(1)
     expect(policy.Statement[0]).toEqual({

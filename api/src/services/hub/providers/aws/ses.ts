@@ -807,7 +807,11 @@ export const sesSmtpUserDef: AwsTypeDef = {
     await iam(ctx, region, 'CreateUser', {
       UserName: name,
       Path: IAM_PATH,
-      Tags: keyValueTags(hubTags(desired.tags))
+      // The row this user belongs to: every later rotate, policy write and delete checks it.
+      Tags: keyValueTags({
+        ...hubTags(desired.tags),
+        ...(desired.resourceId != null ? { 'nivaro-hub:resource': String(desired.resourceId) } : {})
+      })
     })
     try {
       await afterCreate(ctx, () => putPolicy(ctx, name, region, domain))
