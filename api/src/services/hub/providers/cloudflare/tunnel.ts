@@ -7,7 +7,7 @@ import type {
   RiskFlag
 } from '../types.js'
 import { ProviderError } from '../types.js'
-import { ACCESS_APP } from './access.js'
+import { ACCESS_APP, rawPolicyAdmitsEveryone } from './access.js'
 import { accountPath, cfCall, checkId, joinId, nextCursor, pageOf, splitId } from './client.js'
 import {
   arr,
@@ -44,45 +44,15 @@ const HOST_RE =
   '^(\\*\\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
 const SERVICE_RE =
   '^(https?://[^\\s]+|tcp://[^\\s]+|ssh://[^\\s]+|rdp://[^\\s]+|unix:[^\\s]+|http_status:\\d{3})$'
-const RAW_TCP = /^(tcp|ssh|rdp):\/\//i
-
-/** Services that must never be exposed without an admin's say: raw TCP, unix sockets, local targets. */
-export function sensitiveService(service: string): boolean {
-  const s = service.trim()
-  if (RAW_TCP.test(s) || /^unix:/i.test(s)) return true
-  let host = ''
-  try {
-    host = new URL(s).hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  } catch {
-    return false
-  }
-  if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0') return true
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])]
-    return (
-      a === 127 ||
-      a === 10 ||
-      a === 0 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168)
-    )
-  }
-  if (host.includes(':'))
-    return (
-      host === '::1' ||
-      host === '::' ||
-      /^f[cd]/.test(host) ||
-      /^fe[89ab]/.test(host) ||
-      host.startsWith('::ffff:')
-    )
-  return false
-}
-
-/** True when an Access application's hostname covers the tunnel hostname. */
+/**
+ * True when an Access application's hostname covers the tunnel hostname: the same host or a
+ * `*.` wildcard of it, and no path other than "" or "/" (a path-only app guards part of a host).
+ */
 export function accessCovers(domain: string, hostname: string): boolean {
-  const d = domain.split('/')[0].toLowerCase()
+  const slash = domain.indexOf('/')
+  const path = slash >= 0 ? domain.slice(slash) : ''
+  if (path !== '' && path !== '/') return false
+  const d = (slash >= 0 ? domain.slice(0, slash) : domain).toLowerCase()
   const h = hostname.toLowerCase()
   return d === h || (d.startsWith('*.') && h.endsWith(d.slice(1)))
 }
@@ -162,19 +132,15 @@ export const tunnelRouteSpec: ResourceTypeSpec = {
     { field: 'tunnel', type: TUNNEL, required: true },
     { field: 'access_application', type: ACCESS_APP, required: false }
   ],
-  risk(op, desired): RiskFlag[] {
+  risk(op): RiskFlag[] {
     if (op.kind === 'noop') return []
     const flags = new Set<RiskFlag>()
     if (op.kind === 'update' || op.kind === 'delete' || op.kind === 'replace') flags.add('downtime')
     if (op.kind === 'delete' || op.kind === 'replace') flags.add('destructive')
-    if (op.kind === 'create' || op.kind === 'update' || op.kind === 'replace') {
-      const service = String(desired?.fields.service ?? '')
-      // A public hostname is open to the internet unless a Hub-managed Access application guards
-      // it (the `access_application` ref, whose hostname apply checks). Raw TCP / SSH / RDP,
-      // unix sockets and loopback, link-local or private targets are always flagged.
-      const guarded = typeof desired?.refs.access_application === 'string'
-      if (!guarded || sensitiveService(service)) flags.add('public_exposure')
-    }
+    // A tunnel route puts an internal service on the internet: a Hub administrator always starts
+    // it, guarded by Access or not, whatever the target (host names cannot be judged reliably).
+    if (op.kind === 'create' || op.kind === 'update' || op.kind === 'replace')
+      flags.add('public_exposure')
     return [...flags]
   },
   estimate: includedEstimate('Cloudflare Tunnel is free.')
@@ -410,7 +376,19 @@ async function assertGuard(
   if (!app.result?.domain || !accessCovers(String(app.result.domain), hostname))
     throw new ProviderError(
       'ACCESS_NOT_COVERING',
-      `The Access application does not guard ${hostname}. Point it at that hostname or drop the guard.`
+      `The Access application does not guard ${hostname} (its hostname must match it exactly, or by wildcard, with no path). Point it at that hostname or drop the guard.`
+    )
+  const pols = await cfCall<Array<Record<string, unknown>>>(
+    ctx,
+    'GET',
+    `${accountPath(ctx)}/access/apps/${checkId(guard, 'application id')}/policies`,
+    { allow: [404] }
+  )
+  const list = Array.isArray(pols.result) ? pols.result : []
+  if (!list.length || list.some((p) => rawPolicyAdmitsEveryone(p)))
+    throw new ProviderError(
+      'ACCESS_NOT_RESTRICTING',
+      'The Access application has no policy, or one that lets everyone in, so it does not really guard the hostname.'
     )
 }
 
@@ -504,7 +482,19 @@ export const tunnelRouteImpl: TypeImpl = {
     const rule = cfg?.ingress.find((r) => r.hostname === hostname)
     return rule ? observedRoute(tunnelId, rule, String(ctx.config.accountId)) : null
   },
-  plan: (_ctx, desired, observed) => planGeneric(routeCfg, desired, observed),
+  plan(_ctx, desired, observed) {
+    const ops = planGeneric(routeCfg, desired, observed)
+    const service = String(desired?.fields.service ?? '')
+    const hostname = String(desired?.fields.hostname ?? '')
+    return ops.map((op) =>
+      op.kind === 'create' || op.kind === 'update' || op.kind === 'replace'
+        ? {
+            ...op,
+            reason: `Puts ${service} on the internet at ${hostname}; a Hub administrator starts it.`
+          }
+        : op
+    )
+  },
   async apply(ctx, op, desired): Promise<OpResult> {
     const accountId = String(ctx.config.accountId)
     const remove = async (externalId: string): Promise<OpResult> => {
