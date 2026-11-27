@@ -1,0 +1,7 @@
+{
+  "error": {
+    "type": "FORBIDDEN",
+    "status": "403 FORBIDDEN",
+    "description": "Not allowed"
+  }
+}

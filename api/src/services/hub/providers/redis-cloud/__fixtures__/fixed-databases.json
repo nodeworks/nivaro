@@ -1,0 +1,20 @@
+{
+  "accountId": 4242,
+  "subscription": {
+    "subscriptionId": 1001,
+    "numberOfDatabases": 1,
+    "databases": [
+      {
+        "databaseId": 3003,
+        "name": "demo-db",
+        "protocol": "redis",
+        "status": "active",
+        "dataEvictionPolicy": "noeviction",
+        "replication": false,
+        "dataPersistence": "none",
+        "memoryLimitInGb": 0.25,
+        "publicEndpoint": "redis-12000.c1.us-east-1-1.ec2.cloud.redislabs.com:12000"
+      }
+    ]
+  }
+}

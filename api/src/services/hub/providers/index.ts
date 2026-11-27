@@ -2,8 +2,10 @@ import { auth0Provider } from './auth0/index.js'
 import { awsProvider } from './aws/adapter.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
+import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import type { ProviderAdapter } from './types.js'
+import { upstashAdapter } from './upstash/index.js'
 import { vercelAdapter } from './vercel/index.js'
 
 /**
@@ -19,6 +21,8 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   awsProvider,
   expoAdapter,
   githubAdapter,
+  redisCloudAdapter,
+  upstashAdapter,
   vercelAdapter
 ]
 

@@ -1,0 +1,10 @@
+{
+  "account": {
+    "id": 4242,
+    "name": "Test Account",
+    "key": {
+      "name": "hub",
+      "accountId": 4242
+    }
+  }
+}
