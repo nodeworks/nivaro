@@ -38,6 +38,7 @@ import {
   type StoredChangePlan
 } from './contract.js'
 import { engineDeps } from './deps.js'
+import { CREATE_CHANGE_TAG } from './discard.js'
 import {
   assertMayWrite,
   claimResourceChecklist,
@@ -809,7 +810,8 @@ async function execute(changeId: number, runKey: string, hold: ResourceHold): Pr
           app_id: change.app_id,
           environment_id: change.environment_id,
           desired: rowFormOf(type, resolved ?? {}, source, sealed, null),
-          tags: {},
+          // Names this change until the provider answers (engine/discard.ts: "Create failed").
+          tags: { [CREATE_CHANGE_TAG]: String(changeId) },
           refs: refsIn(type, resolved),
           created_by: change.requested_by
         })

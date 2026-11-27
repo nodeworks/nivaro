@@ -22,7 +22,7 @@ import {
   SectionCard,
   ToneChip
 } from '../hub-parts'
-import { ChangesList, LinkedChange } from './ChangeView'
+import { LinkedChange, OpenChanges } from './ChangeView'
 import {
   adoptResource,
   CONNECTION_STATUS_COPY,
@@ -74,6 +74,7 @@ export default function HubConnectionsTab() {
 }
 
 const PENDING = { status: ['pending_approval' as const] }
+const ALL_CHANGES = {}
 
 export function HubConnections() {
   const [picked, setPicked] = useState<number | 'new' | null>(null)
@@ -118,21 +119,15 @@ export function HubConnections() {
       <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
           <LinkedChange isAdmin />
-          {(pending.data?.length ?? 0) > 0 && (
-            <SectionCard
-              title='Waiting for your approval'
-              description='App owners asked for these because they cost money. Approve or decline each.'
-            >
-              <div className='px-4 py-3'>
-                <ChangesList
-                  filter={PENDING}
-                  isAdmin
-                  label='Changes waiting for approval'
-                  empty={null}
-                />
-              </div>
-            </SectionCard>
-          )}
+          <OpenChanges
+            filter={ALL_CHANGES}
+            description={
+              (pending.data?.length ?? 0) > 0
+                ? `${pending.data?.length} waiting for your approval: app owners asked because they cost money. The rest are plans nobody started and runs that failed or stopped.`
+                : 'Changes not finished yet: plans nobody started, failed or stopped runs. Open one to start, resume or close it.'
+            }
+            connectionName={(id) => full.find((c) => c.id === id)?.name ?? null}
+          />
 
           {connections.isPending ? (
             <div className='grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3'>

@@ -45,6 +45,8 @@ export interface FieldSpec {
   help?: string
   default?: unknown
   options?: Array<{ value: string; label: string }>
+  /** The connection's list field whose values are this field's only choices (AWS regions). */
+  optionsFrom?: string
   items?: FieldSpec
   fields?: FieldSpec[]
   refType?: string
@@ -115,6 +117,8 @@ export interface HubConnectionSummary {
   name: string
   description: string | null
   status: ConnectionStatus
+  /** The connection's values resource fields choose from (FieldSpec.optionsFrom → values). */
+  field_options?: Record<string, string[]>
 }
 
 /** The full connection, for a Hub administrator. Never a secret value. */
@@ -267,6 +271,8 @@ export interface StoredChangePlan {
   blockers: ChangeBlocker[]
   preconditionFingerprint: string
   resourceIds: Array<number | null>
+  /** Which request op each computed op came from (when the engine reordered them). */
+  sources?: number[]
 }
 
 // ─── Rows (store.ts, as the routes answer them) ──────────────────────────────
@@ -298,6 +304,17 @@ export interface HubResource {
   deleted_at: string | null
   created_at: string | null
   updated_at: string | null
+  /**
+   * A row with no provider id: its create has not reached the provider (still running, or
+   * failed). `resumable` = Resume can run it again; otherwise Discard drops the row.
+   */
+  pending_create?: PendingCreate | null
+}
+
+export interface PendingCreate {
+  change_id: number | null
+  status: ChangeStatus | null
+  resumable: boolean
 }
 
 export interface HubResourceChange {
@@ -406,6 +423,7 @@ export interface ChangeFilter {
   app?: number
   environment?: number
   connection?: number
+  scope?: ResourceScope
   status?: ChangeStatus[]
   limit?: number
 }
@@ -507,6 +525,7 @@ export const fetchChanges = (f: ChangeFilter) => {
   if (f.app != null) p.app = f.app
   if (f.environment != null) p.environment = f.environment
   if (f.connection != null) p.connection = f.connection
+  if (f.scope) p.scope = f.scope
   if (f.status?.length) p.status = f.status.join(',')
   if (f.limit) p.limit = f.limit
   return api
@@ -562,6 +581,14 @@ export interface AdoptBody {
 
 export const adoptResource = (connectionId: number, body: AdoptBody) =>
   api.post<{ data: HubResource }>(`/hub/connections/${connectionId}/adopt`, body).then(data)
+
+/** Drops a resource row whose create never reached the provider (no provider call). */
+export const discardCreate = (resourceId: number) =>
+  api
+    .post<{ data: { resourceId: number; changeId: number | null } }>(
+      `/hub/resources/${resourceId}/discard`
+    )
+    .then(data)
 
 export const planChange = (req: PlanRequest) =>
   api.post<{ data: ChangePlan }>('/hub/resources/plan', req).then(data)
@@ -639,6 +666,23 @@ export const CONNECTION_STATUS_COPY: Record<ConnectionStatus, { label: string; t
 
 /** Changes the page keeps polling: they can still move on their own. */
 export const isLiveChange = (s: ChangeStatus) => s === 'applying'
+
+/** Changes someone still has to act on (or that still run): the "Open changes" lists. */
+export const OPEN_CHANGE_STATUSES: ChangeStatus[] = [
+  'planned',
+  'pending_approval',
+  'applying',
+  'failed',
+  'interrupted'
+]
+
+/** Resume can run it: interrupted, or failed on something a retry may fix (the engine's rule). */
+export function isResumable(status: ChangeStatus, steps: ChangeStep[]): boolean {
+  if (status === 'interrupted') return true
+  if (status !== 'failed') return false
+  const last = [...steps].reverse().find((s) => s.status === 'failed')
+  return last?.error?.retryable === true
+}
 
 /**
  * Plain words for every refusal the provider routes, the engine (RESOURCE_CHANGE_CODES) and the
@@ -797,6 +841,10 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
     title: 'The provider refused or did not answer',
     hint: 'Try again in a minute. Details for support has what it said.'
   },
+  AUTH_FAILED: {
+    title: 'The provider refused this connection’s keys',
+    hint: 'Check this connection’s keys under Connections, test it, then plan the change again.'
+  },
   CONNECTION_IN_USE: {
     title: 'This connection still manages resources',
     hint: 'Delete them or adopt them under another connection first.'
@@ -811,8 +859,19 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
   }
 }
 
-/** A refusal in plain words: the provider copy first, then the Hub's own, then describeError. */
-export function providerError(err: unknown, fallback: string): ErrorDescription {
+/** A provider refusal that waiting will not fix (not retryable): no "try again" in the hint. */
+const PROVIDER_REFUSED_HINT =
+  'The provider said no; trying again will not change that. Details for support has what it said.'
+
+/**
+ * A refusal in plain words: the provider copy first, then the Hub's own, then describeError.
+ * `retryable: false` (a failed step that a retry will not fix) drops "try again" advice.
+ */
+export function providerError(
+  err: unknown,
+  fallback: string,
+  opts: { retryable?: boolean } = {}
+): ErrorDescription {
   const d = describeError(err, fallback)
   const copy = d.code ? PROVIDER_CODE_COPY[d.code] : undefined
   if (!copy) return hubError(err, fallback)
@@ -824,7 +883,9 @@ export function providerError(err: unknown, fallback: string): ErrorDescription 
   if (d.code === 'INVALID_FIELDS' && Array.isArray(problems)) {
     const words = problems.filter((p): p is string => typeof p === 'string' && !isRawErrorText(p))
     if (words.length) out.hint = words.join(' ')
-  } else if (copy.hint) out.hint = copy.hint
+  } else if (d.code === 'PROVIDER_ERROR' && opts.retryable === false)
+    out.hint = PROVIDER_REFUSED_HINT
+  else if (copy.hint) out.hint = copy.hint
   else delete out.hint
   return out
 }
@@ -1047,10 +1108,14 @@ export const isFullConnection = (c: HubConnection | HubConnectionSummary): c is 
 
 // ─── Resource state ──────────────────────────────────────────────────────────
 
-export type ResourceState = 'gone' | 'drift' | 'ok' | 'unchecked'
+export type ResourceState = 'creating' | 'create_failed' | 'gone' | 'drift' | 'ok' | 'unchecked'
 
-/** One state per resource for its chips: gone beats drift beats in sync. */
+/**
+ * One state per resource for its chips. A row whose create never reached the provider is
+ * "Creating…" while its change runs, else "Create failed"; then gone beats drift beats in sync.
+ */
 export function resourceState(r: HubResource): ResourceState {
+  if (r.pending_create) return r.pending_create.status === 'applying' ? 'creating' : 'create_failed'
   if (r.observed_at == null) return 'unchecked'
   if (r.observed == null) return 'gone'
   if (r.drift) return 'drift'
@@ -1072,7 +1137,17 @@ export const RESOURCE_STATE_COPY: Record<
     tone: 'down',
     tip: 'The provider no longer has it. Someone removed it outside the Hub.'
   },
-  unchecked: { label: 'Not checked yet', tone: 'neutral', tip: 'Checked every 15 minutes.' }
+  unchecked: { label: 'Not checked yet', tone: 'neutral', tip: 'Checked every 15 minutes.' },
+  creating: {
+    label: 'Creating…',
+    tone: 'live',
+    tip: 'Its change is running; the provider has not answered yet.'
+  },
+  create_failed: {
+    label: 'Create failed',
+    tone: 'down',
+    tip: 'The provider never made it. Resume runs the create again; Discard drops this entry.'
+  }
 }
 
 /** The provider's own lifecycle word ('available', 'archived'…) as a tone, for the health chip. */
@@ -1139,11 +1214,62 @@ export function usedBy(id: number, all: HubResource[]): HubResource[] {
   return all.filter((r) => !r.deleted_at && r.refs.some((x) => x.resourceId === id))
 }
 
+/**
+ * The FieldSpec a change names (`rules.0.port` → the `port` field of an item of `rules`), or null.
+ */
+export function fieldSpecAt(fields: FieldSpec[] | undefined, path: string): FieldSpec | null {
+  let list = fields ?? []
+  let found: FieldSpec | null = null
+  for (const part of path.split('.')) {
+    if (/^\d+$/.test(part) && found?.items) {
+      found = found.items
+      list = found.fields ?? []
+      continue
+    }
+    found = list.find((f) => f.key === part) ?? null
+    if (!found) return null
+    list = found.fields ?? found.items?.fields ?? []
+  }
+  return found
+}
+
+/** How a change names its field: the FieldSpec label (item paths "Rules 1 · Port"), else the key. */
+export function fieldLabel(fields: FieldSpec[] | undefined, path: string): string {
+  const parts = path.split('.')
+  const words: string[] = []
+  let list = fields ?? []
+  let spec: FieldSpec | null = null
+  for (const part of parts) {
+    if (/^\d+$/.test(part) && spec?.items) {
+      words[words.length - 1] = `${words[words.length - 1]} ${Number(part) + 1}`
+      spec = spec.items
+      list = spec.fields ?? []
+      continue
+    }
+    spec = list.find((f) => f.key === part) ?? null
+    if (!spec) return words.length ? `${words.join(' · ')} · ${part}` : part.replace(/_/g, ' ')
+    words.push(spec.label)
+    list = spec.fields ?? spec.items?.fields ?? []
+  }
+  return words.join(' · ')
+}
+
+/** A value for the change table in the field's own words: On/Off, a choice's label, else short. */
+export function displayValue(spec: FieldSpec | null, v: unknown): string {
+  if (typeof v === 'boolean') return v ? 'On' : 'Off'
+  if (spec?.kind === 'enum' && typeof v === 'string')
+    return spec.options?.find((o) => o.value === v)?.label ?? v
+  if (Array.isArray(v) && spec?.kind === 'list' && spec.items)
+    return v.length === 0 ? '—' : v.map((x) => displayValue(spec.items ?? null, x)).join(', ')
+  return shortValue(v)
+}
+
 /** A field's value for the change table: short, never a secret. */
 export function shortValue(v: unknown): string {
   if (v === undefined || v === null || v === '') return '—'
   if (typeof v === 'string') return v.length > 80 ? `${v.slice(0, 79)}…` : v
-  if (typeof v === 'number' || typeof v === 'boolean') return String(v)
+  if (typeof v === 'boolean') return v ? 'On' : 'Off'
+  if (typeof v === 'number') return String(v)
   if (Array.isArray(v)) return v.length === 0 ? '—' : v.map(shortValue).join(', ')
   if (typeof v === 'object' && 'resourceId' in (v as object))
     return `resource #${(v as { resourceId: unknown }).resourceId}`

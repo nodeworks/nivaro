@@ -247,6 +247,23 @@ const THROTTLE = new Set([
   'Unavailable'
 ])
 
+/**
+ * AWS codes that mean the connection's keys themselves do not work (wrong, expired, badly
+ * signed) — not a missing permission (AccessDenied / UnauthorizedOperation keep their code).
+ * They become AUTH_FAILED, never retryable: waiting does not fix a bad key.
+ */
+export const AWS_AUTH_CODES = new Set([
+  'AuthFailure',
+  'InvalidClientTokenId',
+  'SignatureDoesNotMatch',
+  'UnrecognizedClientException',
+  'ExpiredToken',
+  'ExpiredTokenException',
+  'InvalidAccessKeyId',
+  'IncompleteSignature',
+  'MissingAuthenticationToken'
+])
+
 /** The ProviderError for a non-2xx answer (code + scrubbed message; retryable on 429 / 5xx). */
 export function errorFromAnswer(ctx: ProviderContext, res: AwsAnswer): ProviderError {
   let code = ''
@@ -268,6 +285,14 @@ export function errorFromAnswer(ctx: ProviderContext, res: AwsAnswer): ProviderE
   if (!code)
     code =
       res.status === 404 ? 'NotFound' : res.status === 403 ? 'AccessDenied' : `HTTP_${res.status}`
+  if (AWS_AUTH_CODES.has(code) || res.status === 401) {
+    const said = ctx.scrub(message || `AWS answered ${res.status}.`).slice(0, 360)
+    return new ProviderError(
+      'AUTH_FAILED',
+      `AWS refused the connection’s keys (${code.slice(0, 40)}): ${said}`,
+      { retryable: false, status: res.status }
+    )
+  }
   return new ProviderError(
     code,
     ctx.scrub(message || `AWS answered ${res.status}.`).slice(0, 400),

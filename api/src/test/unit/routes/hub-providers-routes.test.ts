@@ -47,7 +47,8 @@ const engine = vi.hoisted(() => ({
   resume: vi.fn(),
   undo: vi.fn(),
   approve: vi.fn(),
-  decline: vi.fn()
+  decline: vi.fn(),
+  discard: vi.fn()
 }))
 vi.mock('../../../services/hub/providers/engine/contract.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -57,7 +58,8 @@ vi.mock('../../../services/hub/providers/engine/contract.js', async (importOrigi
   resumeResourceChange: engine.resume,
   undoResourceChange: engine.undo,
   approveResourceChange: engine.approve,
-  declineResourceChange: engine.decline
+  declineResourceChange: engine.decline,
+  discardResourceCreate: engine.discard
 }))
 const observe = vi.hoisted(() => ({
   listUnmanaged: vi.fn(),
@@ -844,5 +846,134 @@ describe('credential gate', () => {
   it('requires a signed-in caller', async () => {
     expect((await inject('GET', '/connections', undefined, {})).statusCode).toBe(401)
     expect(other).toBeTruthy()
+  })
+})
+
+describe('Task 3b: failed creates, field options, open changes', () => {
+  const plan = (connectionId: number, scope: 'app' | 'shared') => ({
+    plan: {
+      request: { connectionId, scope, ops: [] },
+      ops: [],
+      gates: [],
+      needsConfirm: null,
+      needsApproval: false,
+      blockers: [],
+      preconditionFingerprint: '',
+      resourceIds: []
+    },
+    plan_hash: 'h'
+  })
+  it('a connection answers the values resource fields choose from, owners included', async () => {
+    const a = demoAdapter()
+    a.connection.fields.push({ key: 'zones', label: 'Zones', kind: 'list' })
+    a.types[0].fields.push({ key: 'zone', label: 'Zone', kind: 'string', optionsFrom: 'zones' })
+    registry.resetProvidersForTest()
+    registry.registerProvider(a)
+    const res = await inject('POST', '/connections', {
+      provider: 'demo',
+      name: 'Zoned',
+      config: { org: 'zz-conn-org-7f3', zones: ['z-1', 'z-2'] },
+      secrets: { token: SECRET }
+    })
+    expect(res.statusCode).toBe(201)
+    const id = res.json().data.id as number
+    expect(res.json().data.field_options).toEqual({ zones: ['z-1', 'z-2'] })
+    await store.setAppAllowedConnections(appA, [id])
+    const mine = (await inject('GET', '/connections', undefined, owner)).json().data
+    expect(mine[0]).toMatchObject({ id, field_options: { zones: ['z-1', 'z-2'] } })
+    expect(mine[0].config).toBeUndefined()
+  })
+
+  it('a row whose create never reached the provider carries pending_create', async () => {
+    const c = await makeConnection()
+    const change = await store.insertChange({
+      ...plan(c.id, 'app'),
+      connection_id: c.id,
+      scope: 'app',
+      app_id: appA,
+      status: 'failed',
+      requested_by: OWNER,
+      steps: [
+        {
+          index: 0,
+          status: 'failed',
+          resourceId: null,
+          before: null,
+          result: null,
+          snapshot: null,
+          error: { code: 'AUTH_FAILED', message: 'bad keys', retryable: false },
+          startedAt: null,
+          finishedAt: null
+        }
+      ]
+    })
+    const row = await store.insertResource({
+      connection_id: c.id,
+      provider: 'demo',
+      type: 'demo.thing',
+      external_id: null,
+      name: 'never',
+      scope: 'app',
+      app_id: appA,
+      tags: { 'nivaro-hub:create-change': String(change.id) }
+    })
+    const real = await makeResource(c.id)
+    const list = (await inject('GET', '/resources', undefined, owner)).json().data as Array<{
+      id: number
+      pending_create: unknown
+    }>
+    expect(list.find((r) => r.id === row.id)?.pending_create).toEqual({
+      change_id: change.id,
+      status: 'failed',
+      resumable: false
+    })
+    expect(list.find((r) => r.id === real.id)?.pending_create).toBeNull()
+    expect(
+      (await inject('GET', `/resources/${row.id}`, undefined, owner)).json().data.pending_create
+    ).toMatchObject({ change_id: change.id })
+  })
+
+  it('discard goes to the engine as the caller; another owner gets 404', async () => {
+    const c = await makeConnection()
+    const r = await makeResource(c.id, { app: appA })
+    engine.discard.mockResolvedValue({ resourceId: r.id, changeId: 3 })
+    const ok = await inject('POST', `/resources/${r.id}/discard`, undefined, owner)
+    expect(ok.statusCode).toBe(200)
+    expect(ok.json().data).toEqual({ resourceId: r.id, changeId: 3 })
+    expect(engine.discard).toHaveBeenCalledWith(
+      r.id,
+      expect.objectContaining({ id: OWNER, isAdmin: false })
+    )
+    engine.discard.mockClear()
+    expect((await inject('POST', `/resources/${r.id}/discard`, undefined, other)).statusCode).toBe(
+      404
+    )
+    expect((await inject('POST', '/resources/nope/discard')).statusCode).toBe(404)
+    expect(engine.discard).not.toHaveBeenCalled()
+    engine.discard.mockRejectedValue(new ResourceChangeError('RESOURCE_BUSY', 'running'))
+    const busy = await inject('POST', `/resources/${r.id}/discard`)
+    expect(busy.statusCode).toBe(409)
+    expect(busy.json().code).toBe('RESOURCE_BUSY')
+  })
+
+  it('the change list filters by scope', async () => {
+    const c = await makeConnection()
+    await store.insertChange({
+      ...plan(c.id, 'shared'),
+      connection_id: c.id,
+      scope: 'shared',
+      status: 'planned'
+    })
+    await store.insertChange({
+      ...plan(c.id, 'app'),
+      connection_id: c.id,
+      scope: 'app',
+      app_id: appA,
+      status: 'planned'
+    })
+    const shared = (await inject('GET', '/resource-changes?scope=shared&status=planned')).json()
+      .data as Array<{ scope: string }>
+    expect(shared.map((x) => x.scope)).toEqual(['shared'])
+    expect((await inject('GET', '/resource-changes?scope=galaxy')).statusCode).toBe(400)
   })
 })

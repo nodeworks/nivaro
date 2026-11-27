@@ -1,4 +1,4 @@
-import { ErrorNotice } from '@nivaro/shared'
+import { ConfirmButton, ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, ExternalLink, Pencil, Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { type ReactNode, useEffect, useState } from 'react'
@@ -9,11 +9,13 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 import type { HubAppFull, HubEnvironment } from '../hub-api'
-import { dangerGhost, ghostButton, SectionCard, ToneChip } from '../hub-parts'
+import { dangerArmed, dangerGhost, ghostButton, SectionCard, ToneChip } from '../hub-parts'
 import { ChangesList, ChangeView } from './ChangeView'
 import {
   type ChangeModel,
+  changeAction,
   changeFromPlan,
+  discardCreate,
   fetchAppConnections,
   fetchConnections,
   fetchProviderTypes,
@@ -320,6 +322,31 @@ export function ResourceRow({
   const copy = RESOURCE_STATE_COPY[state]
   const status = r.observed?.status ?? null
   const name = resourceName(r)
+  const pending = r.pending_create ?? null
+  const qc = useQueryClient()
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['hub-providers', 'resources'] })
+    void qc.invalidateQueries({ queryKey: ['hub-providers', 'changes'] })
+    if (pending?.change_id != null)
+      void qc.invalidateQueries({ queryKey: providerKeys.change(pending.change_id) })
+  }
+  const resume = useMutation({
+    mutationFn: () => changeAction(pending?.change_id as number, 'resume'),
+    onSuccess: refresh,
+    onError: (e) => {
+      providerToast(e, 'Could not resume the create')
+      refresh()
+    }
+  })
+  const discard = useMutation({
+    mutationFn: () => discardCreate(r.id),
+    onSuccess: refresh,
+    onError: (e) => {
+      providerToast(e, 'Could not discard it')
+      refresh()
+    }
+  })
+  const busy = resume.isPending || discard.isPending
   const pressed = (a: RowAction) => sameAction(active, a)
   const edit: RowAction = { kind: 'edit', resource: r }
   const del: RowAction = { kind: 'plan', resource: r, action: 'delete' }
@@ -347,9 +374,13 @@ export function ResourceRow({
           tone={copy.tone}
           compact
           tip={
-            r.observed_at
-              ? `${copy.tip} Checked ${formatRelative(r.observed_at)} (${formatDateTime(r.observed_at)}).`
-              : copy.tip
+            pending
+              ? state === 'create_failed' && !pending.resumable
+                ? 'The provider never made it, and a retry will not fix what stopped it. Fix the cause, discard this entry, then add it again.'
+                : copy.tip
+              : r.observed_at
+                ? `${copy.tip} Checked ${formatRelative(r.observed_at)} (${formatDateTime(r.observed_at)}).`
+                : copy.tip
           }
         >
           {copy.label}
@@ -364,9 +395,35 @@ export function ResourceRow({
             Adopted
           </ToneChip>
         )}
-        {extra}
+        {!pending && extra}
       </div>
       <div className='ml-auto flex flex-wrap items-center gap-0'>
+        {canDeploy && state === 'create_failed' && pending && (
+          <>
+            {pending.resumable && pending.change_id != null && (
+              <button
+                type='button'
+                className={ghostButton}
+                disabled={busy}
+                data-tip='Run the create again'
+                onClick={() => resume.mutate()}
+              >
+                <RotateCcw className='h-3.5 w-3.5' aria-hidden />{' '}
+                {resume.isPending ? 'Resuming…' : 'Resume'}
+              </button>
+            )}
+            <ConfirmButton
+              title={`Discard ${name} (nothing exists at the provider)`}
+              confirmLabel={`Discard ${name}?`}
+              className={dangerGhost}
+              armedClassName={dangerArmed}
+              disabled={busy}
+              onConfirm={() => discard.mutate()}
+            >
+              <Trash2 className='h-3.5 w-3.5' aria-hidden /> Discard
+            </ConfirmButton>
+          </>
+        )}
         {r.observed?.url && (
           <a
             href={r.observed.url}
@@ -379,7 +436,7 @@ export function ResourceRow({
             <ExternalLink className='h-3.5 w-3.5' aria-hidden />
           </a>
         )}
-        {canDeploy && state === 'drift' && (
+        {canDeploy && !pending && state === 'drift' && (
           <>
             <button
               type='button'
@@ -401,7 +458,7 @@ export function ResourceRow({
             </button>
           </>
         )}
-        {canDeploy && type?.capabilities.update && state !== 'gone' && (
+        {canDeploy && !pending && type?.capabilities.update && state !== 'gone' && (
           <button
             type='button'
             aria-label={`Change ${name}`}
@@ -413,7 +470,7 @@ export function ResourceRow({
             <Pencil className='h-3.5 w-3.5' aria-hidden />
           </button>
         )}
-        {canDeploy && type?.capabilities.delete && (
+        {canDeploy && !pending && type?.capabilities.delete && (
           <button
             type='button'
             aria-label={`Delete ${name}`}

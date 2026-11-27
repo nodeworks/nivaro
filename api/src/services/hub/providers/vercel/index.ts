@@ -1,3 +1,4 @@
+import { fieldWords, typedName } from '../plan-words.js'
 import {
   type ConnectionTest,
   type DesiredResource,
@@ -464,6 +465,12 @@ function secretChange(v: unknown): boolean {
   return isSecret(v) ? v.changed : v !== undefined
 }
 
+/** A type's label and the labels of its fields, for plan reasons. */
+const specOf = (type: string) => TYPES.find((t) => t.key === type)
+const labelOf = (type: string) => specOf(type)?.label ?? type
+const wordsOf = (type: string, changes: Array<{ field: string }>) =>
+  fieldWords(specOf(type)?.fields, changes)
+
 function planProject(desired: DesiredResource | null, observed: Observed | null): PlannedOp[] {
   if (!desired) {
     if (!observed) return []
@@ -473,7 +480,7 @@ function planProject(desired: DesiredResource | null, observed: Observed | null)
         type: TYPE_PROJECT,
         resourceId: null,
         externalId: observed.externalId,
-        reason: `Delete project ${observed.name} and all of its deployments.`,
+        reason: `Delete ${typedName(labelOf(TYPE_PROJECT), observed.name)} and all of its deployments.`,
         changes: [],
         preconditions: { name: observed.fields.name },
         risk: []
@@ -490,7 +497,7 @@ function planProject(desired: DesiredResource | null, observed: Observed | null)
         type: TYPE_PROJECT,
         resourceId: desired.resourceId,
         externalId: null,
-        reason: `Create project ${String(desired.fields.name)}.`,
+        reason: `Create ${typedName(labelOf(TYPE_PROJECT), String(desired.fields.name ?? ''))}.`,
         changes,
         preconditions: {},
         risk: []
@@ -507,7 +514,7 @@ function planProject(desired: DesiredResource | null, observed: Observed | null)
       type: TYPE_PROJECT,
       resourceId: desired.resourceId,
       externalId: observed.externalId,
-      reason: `Change ${changes.map((c) => c.field).join(', ')} on project ${observed.name}.`,
+      reason: `Change ${wordsOf(TYPE_PROJECT, changes)} on ${typedName(labelOf(TYPE_PROJECT), observed.name)}.`,
       changes,
       preconditions: pre,
       risk: []
@@ -524,7 +531,7 @@ function planEnv(desired: DesiredResource | null, observed: Observed | null): Pl
         type: TYPE_ENV,
         resourceId: null,
         externalId: observed.externalId,
-        reason: `Delete environment variable ${observed.name}.`,
+        reason: `Delete ${typedName(labelOf(TYPE_ENV), observed.name)}.`,
         changes: [],
         preconditions: { key: observed.fields.key, target: observed.fields.target },
         risk: []
@@ -540,7 +547,7 @@ function planEnv(desired: DesiredResource | null, observed: Observed | null): Pl
         type: TYPE_ENV,
         resourceId: desired.resourceId,
         externalId: null,
-        reason: `Add ${String(desired.fields.key)} to ${targets.join(', ') || 'no environment'}.`,
+        reason: `Create ${typedName(labelOf(TYPE_ENV), String(desired.fields.key ?? ''))} for ${targets.join(', ') || 'no environment'}.`,
         changes: [
           { field: 'key', to: desired.fields.key },
           { field: 'type', to: desired.fields.type ?? 'sensitive' },
@@ -564,7 +571,7 @@ function planEnv(desired: DesiredResource | null, observed: Observed | null): Pl
         type: TYPE_ENV,
         resourceId: desired.resourceId,
         externalId: observed.externalId,
-        reason: `${refChanged ? 'Project' : replaceChanges.map((c) => c.field).join(', ')} cannot change in place: ${observed.name} is deleted and added again.`,
+        reason: `Replace ${typedName(labelOf(TYPE_ENV), observed.name)}: ${refChanged ? 'its project' : wordsOf(TYPE_ENV, replaceChanges)} cannot change in place.`,
         changes: [
           ...replaceChanges,
           ...(refChanged
@@ -592,7 +599,7 @@ function planEnv(desired: DesiredResource | null, observed: Observed | null): Pl
       type: TYPE_ENV,
       resourceId: desired.resourceId,
       externalId: observed.externalId,
-      reason: `Change ${changes.map((c) => c.field).join(', ')} of ${observed.name}.`,
+      reason: `Change ${wordsOf(TYPE_ENV, changes)} on ${typedName(labelOf(TYPE_ENV), observed.name)}.`,
       changes,
       preconditions: pre,
       risk: []
@@ -609,7 +616,7 @@ function planDomain(desired: DesiredResource | null, observed: Observed | null):
         type: TYPE_DOMAIN,
         resourceId: null,
         externalId: observed.externalId,
-        reason: `Remove domain ${observed.name} from the project.`,
+        reason: `Remove ${typedName(labelOf(TYPE_DOMAIN), observed.name)} from the project.`,
         changes: [],
         preconditions: { name: observed.fields.name },
         risk: []
@@ -623,7 +630,7 @@ function planDomain(desired: DesiredResource | null, observed: Observed | null):
         type: TYPE_DOMAIN,
         resourceId: desired.resourceId,
         externalId: null,
-        reason: `Add domain ${String(desired.fields.name)} to the project.`,
+        reason: `Add ${typedName(labelOf(TYPE_DOMAIN), String(desired.fields.name ?? ''))} to the project.`,
         changes: ['name', 'redirect', 'redirectStatusCode', 'gitBranch']
           .filter((k) => norm(desired.fields[k]) !== null)
           .map((k) => ({ field: k, to: desired.fields[k] })),
@@ -642,7 +649,7 @@ function planDomain(desired: DesiredResource | null, observed: Observed | null):
         type: TYPE_DOMAIN,
         resourceId: desired.resourceId,
         externalId: observed.externalId,
-        reason: `The domain or its project changed: ${observed.name} is removed and added again.`,
+        reason: `Replace ${typedName(labelOf(TYPE_DOMAIN), observed.name)}: the domain or its project changed.`,
         changes: replace,
         preconditions: { name: observed.fields.name },
         risk: []
@@ -663,7 +670,7 @@ function planDomain(desired: DesiredResource | null, observed: Observed | null):
       type: TYPE_DOMAIN,
       resourceId: desired.resourceId,
       externalId: observed.externalId,
-      reason: `Change ${changes.map((c) => c.field).join(', ')} of ${observed.name}.`,
+      reason: `Change ${wordsOf(TYPE_DOMAIN, changes)} on ${typedName(labelOf(TYPE_DOMAIN), observed.name)}.`,
       changes,
       preconditions: pre,
       risk: []
@@ -703,7 +710,7 @@ function planDeployment(desired: DesiredResource | null, observed: Observed | nu
       resourceId: desired.resourceId,
       externalId: observed.externalId,
       action: mode,
-      reason: `${mode === 'rollback' ? 'Roll production back to' : 'Promote'} deployment ${observed.externalId} of project ${projectName} to production.${bad}`,
+      reason: `${mode === 'rollback' ? 'Roll production back to' : 'Promote'} ${typedName(labelOf(TYPE_DEPLOYMENT), observed.externalId)} of ${typedName(labelOf(TYPE_PROJECT), projectName)} to production.${bad}`,
       changes: [{ field: 'production', from: false, to: true }],
       preconditions: {
         production: false,

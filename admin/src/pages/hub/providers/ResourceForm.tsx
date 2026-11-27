@@ -1,19 +1,20 @@
 import { ErrorNotice } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Plus, RefreshCcw, X } from 'lucide-react'
-import { type ReactNode, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { HUB_MASK } from '../hub-api'
-import { Field, ghostButton, SecretInput } from '../hub-parts'
+import { ChoiceCombobox, Field, ghostButton, SecretInput } from '../hub-parts'
 import { ChangeView } from './ChangeView'
 import {
   type ChangeModel,
   changeFromPlan,
   type FieldSpec,
+  fetchConnections,
   fetchResources,
   fieldDefault,
   fieldErrors,
@@ -49,6 +50,7 @@ export function ResourceFields({
   idPrefix,
   errors = {},
   refOptions,
+  fieldOptions = {},
   pathPrefix = ''
 }: {
   fields: FieldSpec[]
@@ -59,6 +61,8 @@ export function ResourceFields({
   errors?: Record<string, string>
   /** Resources a `ref` field of `refType` may point at. */
   refOptions: (refType: string) => HubResource[]
+  /** The connection's lists `optionsFrom` fields pick from (null = not read yet). */
+  fieldOptions?: Record<string, string[]> | null
   pathPrefix?: string
 }) {
   // Read-only fields are the provider's (an ARN, a URL): shown on the resource, never on the form.
@@ -92,6 +96,7 @@ export function ResourceFields({
                   idPrefix={idPrefix}
                   errors={errors}
                   refOptions={refOptions}
+                  fieldOptions={fieldOptions}
                   pathPrefix={`${path}.`}
                 />
               </fieldset>
@@ -107,6 +112,7 @@ export function ResourceFields({
                 hint={hint}
                 errors={errors}
                 refOptions={refOptions}
+                fieldOptions={fieldOptions}
                 idPrefix={idPrefix}
               />
             ) : (
@@ -118,6 +124,7 @@ export function ResourceFields({
                   onChange={set}
                   disabled={locked}
                   refOptions={refOptions}
+                  fieldOptions={fieldOptions}
                 />
               </Field>
             )}
@@ -142,7 +149,8 @@ function ScalarInput({
   value,
   onChange,
   disabled,
-  refOptions
+  refOptions,
+  fieldOptions
 }: {
   spec: FieldSpec
   id: string
@@ -150,7 +158,33 @@ function ScalarInput({
   onChange: (v: unknown) => void
   disabled?: boolean
   refOptions: (refType: string) => HubResource[]
+  fieldOptions?: Record<string, string[]> | null
 }) {
+  // A field whose choices are a list on the connection (AWS region → allowed regions).
+  if (f.optionsFrom && f.kind !== 'list') {
+    const list = fieldOptions?.[f.optionsFrom] ?? []
+    const current = typeof value === 'string' ? value : ''
+    const options = list.map((v) => ({ value: v, label: v }))
+    // A stored value the connection no longer allows still shows (the adapter judges it).
+    if (current && !list.includes(current)) options.unshift({ value: current, label: current })
+    return (
+      <ChoiceCombobox
+        id={id}
+        value={current}
+        onChange={onChange}
+        options={options}
+        mono
+        disabled={disabled || (fieldOptions != null && options.length === 0)}
+        placeholder={
+          fieldOptions == null
+            ? 'Reading the connection…'
+            : options.length
+              ? 'Pick one'
+              : 'None set on the connection'
+        }
+      />
+    )
+  }
   switch (f.kind) {
     case 'boolean':
       return (
@@ -254,6 +288,7 @@ function ListField({
   hint,
   errors,
   refOptions,
+  fieldOptions,
   idPrefix
 }: {
   spec: FieldSpec
@@ -266,6 +301,7 @@ function ListField({
   hint: ReactNode
   errors: Record<string, string>
   refOptions: (refType: string) => HubResource[]
+  fieldOptions?: Record<string, string[]> | null
   idPrefix: string
 }) {
   const item: FieldSpec = f.items ?? { key: 'item', label: f.label, kind: 'string' }
@@ -300,6 +336,7 @@ function ListField({
                         idPrefix={idPrefix}
                         errors={errors}
                         refOptions={refOptions}
+                        fieldOptions={fieldOptions}
                         pathPrefix={`${itemPath}.`}
                       />
                     </div>
@@ -315,6 +352,7 @@ function ListField({
                         onChange={setAt}
                         disabled={locked}
                         refOptions={refOptions}
+                        fieldOptions={fieldOptions}
                       />
                       {errors[itemPath] && (
                         <p className='m-0 mt-1 text-[11px] text-red-600 dark:text-red-400'>
@@ -410,6 +448,27 @@ export function ResourceForm({
         !r.deleted_at &&
         (r.scope === 'shared' || (r.app_id === (appId ?? null) && r.id !== resource?.id))
     )
+  // Fields that pick from a connection list (regions): the connection as this person may read it.
+  const needsOptions = useMemo(() => hasOptionsFrom(type.fields), [type.fields])
+  const connections = useQuery({
+    queryKey: providerKeys.connections(),
+    queryFn: fetchConnections,
+    enabled: needsOptions
+  })
+  const fieldOptions = connections.data
+    ? (connections.data.find((c) => c.id === connectionId)?.field_options ?? {})
+    : null
+  // A new resource starts on the connection's first allowed value (AWS: the default region).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fill once the options arrive
+  useEffect(() => {
+    if (mode !== 'create' || !fieldOptions) return
+    const fill: Values = {}
+    for (const f of type.fields) {
+      const first = f.optionsFrom ? fieldOptions[f.optionsFrom]?.[0] : undefined
+      if (first && (values[f.key] === '' || values[f.key] == null)) fill[f.key] = first
+    }
+    if (Object.keys(fill).length) setValues((v) => ({ ...v, ...fill }))
+  }, [fieldOptions == null, connectionId])
   const errors = fieldErrors(type.fields, values, mode)
   const invalid = Object.keys(errors).length > 0
   const payload = fieldsPayload(type.fields, values, mode, initial)
@@ -433,7 +492,7 @@ export function ResourceForm({
     onSuccess: (p) => setChange(changeFromPlan(p))
   })
 
-  const title = resource ? `Change ${resourceName(resource)}` : `New ${type.label.toLowerCase()}`
+  const title = resource ? `Change ${resourceName(resource)}` : `New ${type.label}`
   return (
     <div className='space-y-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
       <div className='flex flex-wrap items-baseline gap-x-2 gap-y-1'>
@@ -464,6 +523,7 @@ export function ResourceForm({
             idPrefix={idPrefix}
             errors={tried ? errors : {}}
             refOptions={refOptions}
+            fieldOptions={fieldOptions}
           />
           {plan.isError && (
             <ErrorNotice description={providerError(plan.error, 'Could not plan the change')} />
@@ -506,6 +566,15 @@ export function ResourceForm({
 function addWord(list: FieldSpec, item: FieldSpec): string {
   const own = item.label && item.label !== list.label ? item.label : ''
   return (own || 'value').toLowerCase()
+}
+
+function hasOptionsFrom(fields: FieldSpec[]): boolean {
+  return fields.some(
+    (f) =>
+      !!f.optionsFrom ||
+      (f.items ? hasOptionsFrom([f.items]) : false) ||
+      (f.fields ? hasOptionsFrom(f.fields) : false)
+  )
 }
 
 function collectRefTypes(fields: FieldSpec[]): string[] {

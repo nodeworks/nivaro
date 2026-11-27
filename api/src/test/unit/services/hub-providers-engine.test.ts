@@ -1327,3 +1327,106 @@ describe('secrets', () => {
     expect(all).not.toContain(SECRET)
   })
 })
+
+const discard = await import('../../../services/hub/providers/engine/discard.js')
+
+describe('a create that never reached the provider (Task 3b D)', () => {
+  async function failedCreate(name: string, error: Error, actor: HubActor = ADMIN) {
+    const p = await engine.planResourceChange(
+      appReq([{ action: 'create', type: 'fake.box', fields: { name } }]),
+      actor
+    )
+    provider.failNext = error
+    const out = await engine.startResourceChange(p.changeId, { planHash: p.planHash }, actor)
+    expect(out.status).toBe('failed')
+    const row = (await store.listResources({ type: 'fake.box' })).find((r) => r.name === name)
+    if (!row) throw new Error('no row')
+    return { changeId: p.changeId, row }
+  }
+
+  it('marks the row with its change; AUTH_FAILED keeps its code and is not resumable', async () => {
+    const { changeId, row } = await failedCreate(
+      'keyless',
+      new PE('AUTH_FAILED', 'AWS refused the connection’s keys (AuthFailure).', { status: 401 })
+    )
+    expect(row.external_id).toBeNull()
+    expect(discard.createChangeIdOf(row)).toBe(changeId)
+    const ch = await store.readChange(changeId)
+    expect(ch?.error_code).toBe('AUTH_FAILED')
+    expect(ch?.steps[0].error).toMatchObject({ code: 'AUTH_FAILED', retryable: false })
+    expect(discard.pendingCreateOf(row, ch)).toEqual({
+      change_id: changeId,
+      status: 'failed',
+      resumable: false
+    })
+  })
+
+  it('a retryable failure is resumable, and the resumed create clears the mark', async () => {
+    const { changeId, row } = await failedCreate(
+      'later',
+      new PE('RATE_LIMITED', 'slow down', { retryable: true, status: 429 })
+    )
+    expect(discard.pendingCreateOf(row, await store.readChange(changeId))?.resumable).toBe(true)
+    const done = await engine.resumeResourceChange(changeId, ADMIN)
+    expect(done.status).toBe('applied')
+    const after = await store.readResource(row.id)
+    expect(after?.external_id).toBeTruthy()
+    expect(after && discard.createChangeIdOf(after)).toBeNull()
+    expect(after && discard.pendingCreateOf(after, null)).toBeNull()
+  })
+
+  it('discard drops the row with no provider call, closes the change and audits it', async () => {
+    const { changeId, row } = await failedCreate(
+      'gone-soon',
+      new PE('AUTH_FAILED', 'bad keys', { status: 403 })
+    )
+    provider.calls = []
+    const observes = provider.observes
+    vi.mocked(logActivity).mockClear()
+    const out = await engine.discardResourceCreate(row.id, ADMIN)
+    expect(out).toEqual({ resourceId: row.id, changeId })
+    expect(provider.calls).toEqual([])
+    expect(provider.observes).toBe(observes)
+    expect((await store.readResource(row.id))?.deleted_at).toBeTruthy()
+    expect((await store.listResources({ type: 'fake.box' })).map((r) => r.id)).not.toContain(row.id)
+    const ch = await store.readChange(changeId)
+    expect(ch).toMatchObject({ status: 'cancelled', error_code: 'DISCARDED' })
+    const audit = vi.mocked(logActivity).mock.calls.map((c) => c[0] as { action: string })
+    expect(audit.map((a) => a.action)).toEqual(['hub-resource-discard'])
+    // The change cannot be resumed into the row that is gone.
+    await expect(engine.resumeResourceChange(changeId, ADMIN)).rejects.toMatchObject({
+      code: 'BAD_STATUS'
+    })
+    await expect(engine.discardResourceCreate(row.id, ADMIN)).rejects.toMatchObject({
+      code: 'NOT_FOUND'
+    })
+  })
+
+  it('the person who started it may discard; anyone else may not', async () => {
+    const { row } = await failedCreate('owned', new PE('AUTH_FAILED', 'no', { status: 401 }), OWNER)
+    await expect(engine.discardResourceCreate(row.id, STRANGER)).rejects.toMatchObject({
+      code: 'ADMIN_ONLY'
+    })
+    await expect(
+      engine.discardResourceCreate(row.id, { ...OWNER, via: 'mcp' })
+    ).rejects.toMatchObject({ code: 'HUB_WRITE_NOT_FOR_AGENTS' })
+    await expect(engine.discardResourceCreate(row.id, OWNER)).resolves.toMatchObject({
+      resourceId: row.id
+    })
+  })
+
+  it('refuses while the change runs, and for a resource the provider has', async () => {
+    const { changeId, row } = await failedCreate('busy', new PE('AUTH_FAILED', 'no'))
+    await db('nivaro_hub_resource_changes')
+      .where({ id: changeId })
+      .update({ status: 'applying', heartbeat_at: new Date(), run_key: 'r1' })
+    await expect(engine.discardResourceCreate(row.id, ADMIN)).rejects.toMatchObject({
+      code: 'RESOURCE_BUSY'
+    })
+    const real = await createBox('real')
+    await expect(engine.discardResourceCreate(real.id, ADMIN)).rejects.toMatchObject({
+      code: 'BAD_STATUS'
+    })
+    expect((await store.readResource(real.id))?.deleted_at).toBeNull()
+  })
+})

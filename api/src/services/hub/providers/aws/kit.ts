@@ -1,3 +1,4 @@
+import { fieldWords } from '../plan-words.js'
 import {
   type ConnectionTest,
   type DesiredResource,
@@ -142,7 +143,7 @@ export function planFor(
   observed: Observed | null
 ): PlannedOp[] {
   const spec = def.spec
-  const label = spec.label.toLowerCase()
+  const label = spec.label
   if (!desired && !observed) return []
   const name = display(desired, observed, def)
   const base = {
@@ -228,7 +229,7 @@ export function planFor(
       )
     ]
   const kind: PlannedOp['kind'] = replace ? 'replace' : 'update'
-  const fields = changes.map((c) => c.field).join(', ')
+  const fields = fieldWords(spec.fields, changes)
   return [
     finish(
       {
@@ -369,7 +370,8 @@ const PERMISSION_CODES = new Set([
   'UnrecognizedClientException',
   'InvalidClientTokenId',
   'SignatureDoesNotMatch',
-  'Forbidden'
+  'Forbidden',
+  'AUTH_FAILED'
 ])
 
 export interface AwsAdapterParts {
@@ -565,7 +567,8 @@ export const regionField: FieldSpec = {
   createOnly: true,
   replaceOnChange: true,
   help: 'One of the connection’s allowed regions.',
-  pattern: '^[a-z]{2}(-[a-z]+)+-\\d$'
+  pattern: '^[a-z]{2}(-[a-z]+)+-\\d$',
+  optionsFrom: 'regions'
 }
 export const nameField: FieldSpec = { key: 'name', label: 'Name', kind: 'string', required: true }
 

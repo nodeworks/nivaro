@@ -9,7 +9,7 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useAuth } from '@/lib/auth'
 import { ghostButton, SectionCard, ToneChip } from '../hub-parts'
-import { LinkedChange } from './ChangeView'
+import { LinkedChange, OpenChanges } from './ChangeView'
 import {
   fetchConnections,
   fetchProviderTypes,
@@ -94,6 +94,11 @@ export function SharedInfra() {
       <div className='relative min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         <div className='space-y-4 p-4 sm:p-6'>
           <LinkedChange isAdmin />
+          <OpenChanges
+            filter={SHARED}
+            description='Shared changes not finished yet: plans nobody started, failed or stopped runs. Open one to start, resume or close it.'
+            connectionName={(id) => full.find((c) => c.id === id)?.name ?? null}
+          />
           {pending ? (
             <div className='space-y-3'>
               <Skeleton className='h-24 w-full' />

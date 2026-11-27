@@ -144,6 +144,12 @@ export interface FieldSpec {
   default?: unknown
   /** `enum` choices. */
   options?: Array<{ value: string; label: string }>
+  /**
+   * The key of a `list` field of the CONNECTION whose values are the only choices for this one
+   * (AWS `region` → the connection's `regions`). Forms offer those values; the adapter still
+   * refuses anything else.
+   */
+  optionsFrom?: string
   /** `list`: the spec of one item (its own `key` is ignored). */
   items?: FieldSpec
   /** `object`: its fields. */

@@ -121,7 +121,21 @@ export const PROVIDER_ROUTES: HubRoute[] = [
       scope: s('app or shared', { enum: ['app', 'shared'] })
     }
   }),
-  r('GET', '/resources/:id', 'owner', 'read', 'One managed resource'),
+  r('GET', '/resources/:id', 'owner', 'read', 'One managed resource', {
+    notes:
+      'A row with no provider id carries pending_create {change_id, status, resumable}: its create has not reached the provider (still running, or failed).'
+  }),
+  r(
+    'POST',
+    '/resources/:id/discard',
+    'owner',
+    'write',
+    'Discard a create that never reached the provider',
+    {
+      notes:
+        'No provider call: drops the resource row (it has no provider id) and closes its failed change as cancelled. Refused while the change runs (409 RESOURCE_BUSY) and for a resource the provider has (409 BAD_STATUS).'
+    }
+  ),
   r('POST', '/resources/plan', 'owner', 'plan', 'Plan changes to managed resources', {
     notes: `Reads the provider and stores a planned change; nothing is written at the provider. ${CHANGE_NOTE}`,
     body: {
@@ -140,6 +154,7 @@ export const PROVIDER_ROUTES: HubRoute[] = [
       app: n('An app id'),
       environment: n('An environment id'),
       connection: n('A connection id'),
+      scope: s('app or shared', { enum: ['app', 'shared'] }),
       status: s('One status, or a comma list'),
       limit: n('1–200, default 50'),
       before: n('Page back from this change id')

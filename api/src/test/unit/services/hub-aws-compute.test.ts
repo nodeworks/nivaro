@@ -108,6 +108,56 @@ describe('aws testConnection', () => {
     expect(t.ok).toBe(false)
     expect(t.message).not.toContain('test-secret-access-key-0001')
   })
+
+  // Task 3b F: bad keys are AUTH_FAILED and never retryable ("check the keys", not "try again").
+  it('maps every credential refusal to AUTH_FAILED, not retryable', async () => {
+    const ec2 = (code: string) =>
+      `<Response><Errors><Error><Code>${code}</Code><Message>key test-secret-access-key-0001 refused</Message></Error></Errors><RequestID>req-fake</RequestID></Response>`
+    for (const [code, status] of [
+      ['AuthFailure', 401],
+      ['InvalidClientTokenId', 403],
+      ['SignatureDoesNotMatch', 403],
+      ['UnrecognizedClientException', 400],
+      ['ExpiredToken', 400],
+      ['', 401]
+    ] as const) {
+      const h = harness({
+        'ec2:DescribeVpcs': { status, body: code ? ec2(code) : '' }
+      })
+      const err = await awsProvider.observe(h.ctx, 'aws.vpc', 'vpc-1').catch((e) => e)
+      expect(err).toBeInstanceOf(ProviderError)
+      expect(err).toMatchObject({ code: 'AUTH_FAILED', retryable: false, status })
+      expect(err.message).not.toContain('test-secret-access-key-0001')
+      if (code) expect(err.message).toContain(code)
+    }
+    // A missing permission keeps its own code (it is not the keys), still not retryable.
+    const h = harness({ 'ec2:DescribeVpcs': { status: 403, file: 'ec2-error-unauthorized.xml' } })
+    const denied = await awsProvider.observe(h.ctx, 'aws.vpc', 'vpc-1').catch((e) => e)
+    expect(denied).toMatchObject({ code: 'UnauthorizedOperation', retryable: false })
+    // Throttling stays retryable.
+    const slow = harness({
+      'ec2:DescribeVpcs': { status: 503, body: ec2('RequestLimitExceeded') }
+    })
+    const busy = await awsProvider.observe(slow.ctx, 'aws.vpc', 'vpc-1').catch((e) => e)
+    expect(busy).toMatchObject({ code: 'RequestLimitExceeded', retryable: true })
+  })
+})
+
+describe('aws plan reasons (Task 3b H)', () => {
+  it('name the type and fields by their labels', () => {
+    const h = harness({})
+    const d = desired('aws.vpc', { ...vpcWant, region: 'us-east-1', name: 'hub-shared-2' })
+    const [create] = awsProvider.plan(h.ctx, d, null)
+    expect(create.reason).toBe('Create VPC hub-shared-2')
+    const seen = observedOf({
+      type: 'aws.vpc',
+      externalId: 'vpc-1',
+      name: 'hub-shared-2',
+      fields: { ...vpcWant, region: 'us-east-1', name: 'hub-shared-2', enable_dns_hostnames: true }
+    })
+    const [update] = awsProvider.plan(h.ctx, { ...d, externalId: 'vpc-1' }, seen)
+    expect(update.reason).toBe('Change DNS hostnames on VPC hub-shared-2')
+  })
 })
 
 describe('aws observe', () => {

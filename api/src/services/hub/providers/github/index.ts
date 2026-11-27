@@ -1,4 +1,5 @@
 import { scrubValues } from '../context.js'
+import { fieldWords, typedName } from '../plan-words.js'
 import {
   type ConnectionTest,
   type DesiredResource,
@@ -30,7 +31,7 @@ import {
   splitChild,
   splitRepo
 } from './resources.js'
-import { connection, TYPES } from './specs.js'
+import { connection, TYPES, typeSpec } from './specs.js'
 
 /**
  * GitHub (+ GitHub Actions) provider. Auth: a GitHub App (JWT → installation token, cached in
@@ -118,6 +119,10 @@ export function planGithub(
   const h = handlerFor(type)
   const resourceId = desired?.resourceId ?? null
   const base = { type, resourceId }
+  const spec = typeSpec(type)
+  const label = spec?.label ?? type
+  const named = (ext: string | null | undefined) =>
+    typedName(label, ext ?? (desired?.fields[spec?.nameField ?? 'name'] as string | undefined))
 
   if (desired === null) {
     if (!observed) return []
@@ -132,7 +137,7 @@ export function planGithub(
           kind: 'delete',
           externalId: observed.externalId,
           action: 'archive',
-          reason: `Archive ${observed.externalId} (kept read-only, not deleted).`,
+          reason: `Archive ${named(observed.externalId)} (kept read-only, not deleted).`,
           changes: [{ field: 'archived', from: false, to: true }],
           preconditions: preconditionsOf(observed, [{ field: 'archived' }]),
           risk: []
@@ -144,7 +149,7 @@ export function planGithub(
         ...base,
         kind: 'delete',
         externalId: observed.externalId,
-        reason: `Remove ${observed.externalId} from GitHub.`,
+        reason: `Remove ${named(observed.externalId)} from GitHub.`,
         changes: [],
         preconditions: preconditionsOf(observed, []),
         risk: []
@@ -171,7 +176,7 @@ export function planGithub(
         ...base,
         kind: 'create',
         externalId: desired.externalId,
-        reason: `Create ${type.replace('github.', '').replace(/_/g, ' ')}.`,
+        reason: `Create ${named(null)}.`,
         changes: createChanges(type, desired),
         preconditions: {},
         risk: []
@@ -188,7 +193,7 @@ export function planGithub(
         kind: 'delete',
         externalId: observed.externalId,
         action: 'destroy',
-        reason: `Delete ${observed.externalId} permanently, including its issues and history.`,
+        reason: `Delete ${named(observed.externalId)} permanently, including its issues and history.`,
         changes: [],
         preconditions: preconditionsOf(observed, []),
         risk: []
@@ -206,8 +211,8 @@ export function planGithub(
       kind: replace ? 'replace' : 'update',
       externalId: observed.externalId,
       reason: replace
-        ? `${changes.map((c) => c.field).join(', ')} cannot be edited in place; it is replaced.`
-        : `Update ${changes.map((c) => c.field).join(', ')}.`,
+        ? `Replace ${named(observed.externalId)}: ${fieldWords(spec?.fields, changes)} cannot change in place.`
+        : `Change ${fieldWords(spec?.fields, changes)} on ${named(observed.externalId)}.`,
       changes,
       preconditions: preconditionsOf(observed, changes),
       risk: [],

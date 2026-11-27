@@ -46,7 +46,7 @@ export async function gql<T = Record<string, any>>(
   if (!res.ok) {
     const code =
       res.status === 401 || res.status === 403
-        ? 'EXPO_AUTH'
+        ? 'AUTH_FAILED'
         : res.status === 429
           ? 'EXPO_RATE_LIMITED'
           : 'EXPO_HTTP'

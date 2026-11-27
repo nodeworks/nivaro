@@ -751,10 +751,12 @@ describe('expo adapter: errors', () => {
     expect(e2).toMatchObject({ code: 'EXPO_RATE_LIMITED', retryable: true })
   })
 
-  it('a 401 is not retryable', async () => {
-    const { ctx } = setup(() => ({ errors: [{ message: 'bad token' }] }), 401)
-    const err = await expoAdapter.observe(ctx, 'expo.project', 'app-1').catch((e) => e)
-    expect(err).toMatchObject({ code: 'EXPO_AUTH', retryable: false })
+  it('a 401 / 403 is AUTH_FAILED and not retryable', async () => {
+    for (const status of [401, 403]) {
+      const { ctx } = setup(() => ({ errors: [{ message: 'bad token' }] }), status)
+      const err = await expoAdapter.observe(ctx, 'expo.project', 'app-1').catch((e) => e)
+      expect(err).toMatchObject({ code: 'AUTH_FAILED', retryable: false, status })
+    }
   })
 
   it('secrets never appear in errors', async () => {

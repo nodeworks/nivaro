@@ -231,6 +231,50 @@ describe('ResourcesPanel', () => {
     ])
   })
 
+  it('a create that never reached the provider says Create failed, with Resume and Discard', async () => {
+    const failed = res({
+      id: 9,
+      provider: 'aws',
+      type: 'aws.s3_bucket',
+      external_id: null,
+      name: 'shop-logs',
+      observed: null,
+      observed_at: null,
+      pending_create: { change_id: 61, status: 'failed', resumable: true }
+    })
+    const stuck = res({
+      id: 10,
+      provider: 'aws',
+      type: 'aws.security_group',
+      external_id: null,
+      name: 'shop-sg',
+      observed: null,
+      observed_at: null,
+      pending_create: { change_id: 62, status: 'failed', resumable: false }
+    })
+    routes([failed, stuck], [conn])
+    h.post.mockResolvedValue({ data: { data: { resourceId: 9, changeId: 61 } } })
+    mount()
+    fireEvent.click(await screen.findByRole('button', { name: /Outside resources/ }))
+    const aws = await screen.findByRole('region', { name: 'AWS' })
+    expect(within(aws).getAllByText('Create failed').length).toBe(2)
+    expect(within(aws).queryByText('Not checked yet')).toBeNull()
+    // A row that was never made has no change or delete of its own.
+    expect(within(aws).queryByRole('button', { name: /Change shop-/ })).toBeNull()
+    expect(within(aws).queryByRole('button', { name: /Delete shop-/ })).toBeNull()
+    // Resume only where a retry can help.
+    const resume = within(aws).getAllByRole('button', { name: 'Resume' })
+    expect(resume.length).toBe(1)
+    fireEvent.click(resume[0] as HTMLElement)
+    await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/resource-changes/61/resume', {}))
+    // Discard is two presses.
+    const discard = within(aws).getByRole('button', { name: /Discard shop-sg/ })
+    fireEvent.click(discard)
+    expect(h.post).not.toHaveBeenCalledWith('/hub/resources/10/discard', undefined)
+    fireEvent.click(within(aws).getByRole('button', { name: /Discard shop-sg\?/ }))
+    await waitFor(() => expect(h.post).toHaveBeenCalledWith('/hub/resources/10/discard', undefined))
+  })
+
   it('without the right to deploy here, no actions show', async () => {
     routes(resources, [conn])
     mount(false)
