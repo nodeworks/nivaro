@@ -157,6 +157,10 @@ export function serverProblem(s: HubDbServerRow): string | null {
 /** Why a target cannot take a new app, or null. Names only in the text. */
 export function targetProblem(t: HubTargetRow): string | null {
   if (t.kind !== 'gitlab') return `${t.name} is not a GitLab target.`
+  // G-A: a target that uses a GitLab connection gets its address and token from it.
+  if (t.connection_id != null && t.connection?.problem) return `${t.name}: ${t.connection.problem}`
+  if (t.connection_id != null && !t.secret)
+    return `${t.name}'s GitLab connection gave no token: check it under Connections.`
   if (!t.secret) return `${t.name} has no GitLab token: enter one on the target.`
   const c = t.config
   if (!c || typeof c !== 'object') return `${t.name} has no settings.`

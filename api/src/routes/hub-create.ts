@@ -32,8 +32,11 @@ import {
   getTargetRow,
   listTargets,
   publicTarget,
+  resolveTargetConnection,
   TargetMisconfiguredError,
+  targetConnectionFor,
   testTarget,
+  tokenFollowFrom,
   updateTarget,
   validateTargetInput
 } from '../services/hub/create/targets.js'
@@ -693,7 +696,12 @@ function targetRoutes(app: FastifyInstance) {
         })
         return { data: made }
       }
-      const checked = validateTargetInput(body(req))
+      // G-A: a GitLab target may use a `gitlab` connection's address and token instead of its own.
+      const checked = validateTargetInput(
+        body(req),
+        undefined,
+        await targetConnectionFor(body(req))
+      )
       if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
       const created = await createTarget(checked.row)
       await logActivity({
@@ -703,7 +711,7 @@ function targetRoutes(app: FastifyInstance) {
         item: String(created.id),
         req
       })
-      return { data: publicTarget(created) }
+      return { data: publicTarget(await resolveTargetConnection(created, { open: false })) }
     })
   )
 
@@ -732,10 +740,14 @@ function targetRoutes(app: FastifyInstance) {
     if (id === null || !existing) return notFound(reply)
     const b = body(req)
     return guarded(reply, async () => {
-      const checked = validateTargetInput(b, existing)
+      const checked = validateTargetInput(b, existing, await targetConnectionFor(b, existing))
       if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
-      const updated = await updateTarget(id, checked.row)
-      if (!updated) return notFound(reply)
+      const saved = await updateTarget(id, checked.row, {
+        clearConnection: existing.connection_id != null
+      })
+      if (!saved) return notFound(reply)
+      // As every caller reads it: a target that uses a connection with its address and token.
+      const updated = (await getTargetRow(id)) ?? saved
       await logActivity({
         action: 'update',
         user: userId(req),
@@ -743,16 +755,22 @@ function targetRoutes(app: FastifyInstance) {
         item: String(id),
         req,
         // Field names only — never the token.
-        changed_fields: fieldsOf(b, ['kind', 'name', 'config', 'secret'], ['secret'])
+        changed_fields: fieldsOf(
+          b,
+          ['kind', 'name', 'config', 'secret', 'connection_id'],
+          ['secret']
+        )
       })
       // Every app made on this target gets the target's CI path and project variables again
       // (fail closed per app, at most 20 s here; the rest `pending`, finished in the background).
       // The target is saved either way: a sync that cannot even start answers sync_error.
       try {
-        // A rotated token also reaches each created app's driver copy (P3-32).
-        const previousSecret =
-          existing.secret && existing.secret !== updated.secret ? existing.secret : null
-        return { data: publicTarget(updated), sync: await syncTargetApps(id, { previousSecret }) }
+        // A rotated token also reaches each created app's driver copy (P3-32); with G-A also a
+        // token that now comes from (or no longer comes from) a connection, and its address.
+        return {
+          data: publicTarget(updated),
+          sync: await syncTargetApps(id, tokenFollowFrom(existing, updated))
+        }
       } catch (err) {
         req.log.warn({ err: (err as Error | null)?.name ?? 'Error' }, 'hub target sync failed')
         return { data: publicTarget(updated), sync: null, sync_error: 'SYNC_READ_FAILED' }

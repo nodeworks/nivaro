@@ -150,6 +150,9 @@ const m545 = await import('../../../db/migrations/545_hub_creations.js')
 const m551 = await import('../../../db/migrations/551_hub_signins.js')
 // Hub enhancement 24: the creation's last step reads its template install row (571).
 const m571 = await import('../../../db/migrations/571_hub_app_templates.js')
+// G-A: provider connections (582) and targets.connection_id (583).
+const m582 = await import('../../../db/migrations/582_hub_providers.js')
+const m583 = await import('../../../db/migrations/583_hub_provider_hooks.js')
 const R = await import('../../../services/hub/create/run.js')
 const store = await import('../../../services/hub/create/store.js')
 const D = await import('../../../services/hub/db/databases.js')
@@ -417,6 +420,8 @@ beforeAll(async () => {
   await m545.up(db)
   await m551.up(db)
   await m571.up(db)
+  await m582.up(db)
+  await m583.up(db)
   if (!(await db.schema.hasTable('nivaro_users')))
     await db.schema.createTable('nivaro_users', (t) => t.uuid('id').primary())
   await db('nivaro_users').insert({ id: OWNER })
@@ -2216,5 +2221,193 @@ describe('deploy key', () => {
         image: 'i'
       })
     ).toThrow()
+  })
+})
+
+// ── G-A: GitLab targets that use a `gitlab` provider connection ─────────────────────────────────
+
+describe('a target that uses a GitLab connection (G-A)', () => {
+  const providerStore = () => import('../../../services/hub/providers/store.js')
+  const CT = () => import('../../../services/hub/create/connection-targets.js')
+
+  async function useConnection(ids: number[]) {
+    const ps = await providerStore()
+    await db('nivaro_hub_connections').del()
+    const conn = await ps.createConnection({
+      provider: 'gitlab',
+      name: 'GitLab apps',
+      config: { baseUrl: 'https://gitlab.example.com', groupPath: 'apps' },
+      secrets: { token: gl.token as string },
+      createdBy: null
+    })
+    const { api: _api, ...rest } = targetConfig
+    for (const id of ids)
+      await db('nivaro_hub_targets')
+        .where({ id })
+        .update({ secret: null, connection_id: conn.id, config: JSON.stringify(rest) })
+    return conn
+  }
+
+  it("creates the app and its driver from the connection's address and token", async () => {
+    await useConnection([targetId])
+    const T = await import('../../../services/hub/create/targets.js')
+    const row = await T.getTargetRow(targetId)
+    expect(row?.config.api).toBe('https://gitlab.example.com')
+    expect(openSecret(row?.secret ?? null)).toBe(gl.token)
+    expect(T.publicTarget(row as never)).toMatchObject({
+      secret: null,
+      connection: { problem: null }
+    })
+
+    const out = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    expect(out.environments).toHaveLength(1)
+    const made = await store.appMade((await creation(out.environments[0].id)).app_id)
+    const driver = await db('nivaro_hub_drivers').where({ id: made.driver_id }).first()
+    expect(openSecret(driver.secret)).toBe(gl.token)
+    expect(JSON.parse(driver.config).api).toBe('https://gitlab.example.com')
+    // The target itself still holds no token and no address.
+    const stored = await db('nivaro_hub_targets').where({ id: targetId }).first()
+    expect(stored.secret).toBeNull()
+    expect(JSON.parse(stored.config)).not.toHaveProperty('api')
+    // Its connection is never added to the app's allowed connections.
+    expect(await db('nivaro_hub_app_connections').count('* as n').first()).toMatchObject({ n: 0 })
+  })
+
+  it('a disabled connection stops new apps on the target', async () => {
+    const conn = await useConnection([targetId])
+    await db('nivaro_hub_connections').where({ id: conn.id }).update({ status: 'disabled' })
+    const T = await import('../../../services/hub/create/targets.js')
+    const row = await T.getTargetRow(targetId)
+    expect(row?.secret).toBeNull()
+    expect(row?.connection?.problem).toContain('is disabled')
+    const { targetProblem } = await import('../../../services/hub/create/plan.js')
+    expect(targetProblem(row as never)).toContain('is disabled')
+  })
+
+  it("a new connection token (and address) reaches every created app's driver", async () => {
+    const conn = await useConnection([targetId, manualTargetId])
+    const first = await startAndWait(
+      input({ environments: [{ key: 'production', database: { server_id: autoServer } }] })
+    )
+    const second = await startAndWait(
+      input({
+        key: 'other',
+        name: 'Other',
+        environments: [{ key: 'production', database: { server_id: autoServer } }]
+      })
+    )
+    const driverOf = async (envId: number) =>
+      (await store.appMade((await creation(envId)).app_id)).driver_id as number
+    const drivers = [
+      await driverOf(first.environments[0].id),
+      await driverOf(second.environments[0].id)
+    ]
+    expect(new Set(drivers).size).toBe(2)
+    // An unrelated driver on the same GitLab with its own token is left alone.
+    const otherId = await insertId('nivaro_hub_drivers', {
+      kind: 'gitlab',
+      name: 'other',
+      config: JSON.stringify({ api: 'https://gitlab.example.com', project: 'x/y' }),
+      secret: sealSecret('glpat-other-token-value-00000')
+    })
+
+    const old = gl.token as string
+    const rotated = 'glpat-ROTATED-connection-token-1234'
+    secretsSeen.add(rotated)
+    gl.token = rotated
+    const ps = await providerStore()
+    await ps.updateConnection(conn.id, { secrets: { token: rotated }, updatedBy: null })
+    const { followConnection, gitlabConnectionState } = await CT()
+    const after = await gitlabConnectionState((await ps.readConnection(conn.id)) as never)
+    expect(after).toEqual({ api: 'https://gitlab.example.com', token: rotated })
+    const res = await followConnection(conn.id, { api: after.api, token: old }, after)
+    const byTarget = new Map((res ?? []).map((r) => [r.target_id, r.sync]))
+    expect(byTarget.get(targetId)).toEqual([
+      { app_id: expect.any(Number), ok: true, driver_token: 'updated' },
+      { app_id: expect.any(Number), ok: true, driver_token: 'updated' }
+    ])
+    expect(byTarget.get(manualTargetId)).toEqual([])
+    for (const id of drivers)
+      expect(openSecret((await db('nivaro_hub_drivers').where({ id }).first()).secret)).toBe(
+        rotated
+      )
+    const other = await db('nivaro_hub_drivers').where({ id: otherId }).first()
+    expect(openSecret(other.secret)).toBe('glpat-other-token-value-00000')
+    // Nothing a target uses changed: nothing to follow.
+    expect(await followConnection(conn.id, after, after)).toBeNull()
+
+    // The same GitLab under a new address (token re-entered with it): drivers move with it.
+    gl.base = 'https://gitlab2.example.com'
+    try {
+      await ps.updateConnection(conn.id, {
+        config: { baseUrl: 'https://gitlab2.example.com', groupPath: 'apps' },
+        secrets: { token: rotated },
+        updatedBy: null
+      })
+      const moved = await gitlabConnectionState((await ps.readConnection(conn.id)) as never)
+      const res2 = await followConnection(conn.id, after, moved)
+      expect(res2?.find((r) => r.target_id === targetId)?.sync).toEqual([
+        { app_id: expect.any(Number), ok: true, driver_token: 'updated' },
+        { app_id: expect.any(Number), ok: true, driver_token: 'updated' }
+      ])
+      for (const id of drivers) {
+        const d = await db('nivaro_hub_drivers').where({ id }).first()
+        expect(JSON.parse(d.config).api).toBe('https://gitlab2.example.com')
+        expect(openSecret(d.secret)).toBe(rotated)
+      }
+      const still = await db('nivaro_hub_drivers').where({ id: otherId }).first()
+      expect(JSON.parse(still.config).api).toBe('https://gitlab.example.com')
+      expect(openSecret(still.secret)).toBe('glpat-other-token-value-00000')
+    } finally {
+      gl.base = 'https://gitlab.example.com'
+    }
+  })
+
+  it('a target that stops using the connection keeps nothing of it', async () => {
+    const conn = await useConnection([targetId])
+    const T = await import('../../../services/hub/create/targets.js')
+    const existing = (await T.getTargetRow(targetId)) as NonNullable<
+      Awaited<ReturnType<typeof T.getTargetRow>>
+    >
+    const conninfo = await T.targetConnectionFor({}, existing)
+    expect(conninfo?.id).toBe(conn.id)
+    // Without its own token: refused.
+    expect(
+      T.validateTargetInput({ connection_id: null, config: { api: targetConfig.api } }, existing)
+    ).toMatchObject({ ok: false, code: 'SECRET_REQUIRED' })
+    // A token sent while it uses the connection: refused.
+    expect(
+      T.validateTargetInput({ secret: 'glpat-not-wanted-here-000' }, existing, conninfo)
+    ).toMatchObject({ ok: false, code: 'BAD_SECRET' })
+    // A namespace outside the pinned group: refused.
+    expect(
+      T.validateTargetInput({ config: { namespace: 'elsewhere' } }, existing, conninfo)
+    ).toMatchObject({ ok: false, code: 'BAD_CONFIG' })
+    // Another address than the connection's: refused.
+    expect(
+      T.validateTargetInput({ config: { api: 'https://evil.example.com' } }, existing, conninfo)
+    ).toMatchObject({ ok: false, code: 'BAD_CONFIG' })
+    const own = 'glpat-own-token-0000000000'
+    secretsSeen.add(own)
+    const ok = T.validateTargetInput(
+      { connection_id: null, config: { api: targetConfig.api }, secret: own },
+      existing
+    )
+    expect(ok).toMatchObject({ ok: true, row: { connection_id: null } })
+    if (!ok.ok) throw new Error('unreachable')
+    expect(openSecret(ok.row.secret)).toBe(own)
+    await T.updateTarget(targetId, ok.row, { clearConnection: true })
+    const after = (await T.getTargetRow(targetId)) as NonNullable<typeof existing>
+    expect(after.connection_id).toBeNull()
+    expect(
+      (await db('nivaro_hub_targets').where({ id: targetId }).first()).connection_id
+    ).toBeNull()
+    // The save hands the drivers the change: the connection's token was the previous one.
+    expect(T.tokenFollowFrom(existing, after)).toEqual({
+      previousSecret: existing.secret,
+      previousApi: 'https://gitlab.example.com'
+    })
   })
 })

@@ -2,6 +2,13 @@
 // its deploy repository is forked from, the deploy host and how hostnames are made. The GitLab
 // token is sealed (secrets.ts) and only ever answered as the mask. Kind `gitlab` only in this
 // phase; a `docker` kind belongs in this same table later.
+//
+// Gap G-A (Hub providers): a GitLab target may name a `gitlab` provider connection
+// (`connection_id`, migration 583) instead of holding its own token. Such a row stores no token
+// and no GitLab address: getTargetRow fills both from the connection (its base URL, and a fresh
+// sealed copy of its token), so every caller (creation, sync, move, promote checks) works as for
+// a target with its own token. connection-targets.ts decides which targets (and so which created
+// apps' drivers) follow a connection.
 
 import { createHmac } from 'node:crypto'
 import { insertReturningId } from '../../../db/dialect/ef.js'
@@ -9,7 +16,15 @@ import { db } from '../../../db/index.js'
 import type { GitCtx } from '../../gitlab-client.js'
 import type { Validation } from '../drivers.js'
 import { GitlabWriteError } from '../gitlab-write.js'
-import { HubSecretError, maskSecret, nextSecret, openSecret } from '../secrets.js'
+import { baseOf as gitlabBaseOf } from '../providers/gitlab/client.js'
+import {
+  HUB_MASK,
+  HubSecretError,
+  maskSecret,
+  nextSecret,
+  openSecret,
+  sealSecret
+} from '../secrets.js'
 import { dnsSuffix, httpAllowed, route53ConfigProblem, zoneResourceIdOf } from './dns.js'
 import {
   currentUser,
@@ -50,13 +65,28 @@ export interface HubTargetConfig {
   traefik_version?: 2 | 3
 }
 
-/** A target as stored: config parsed, token still sealed. */
+/** The `gitlab` connection a target uses, as read with the target (never its token). */
+export interface TargetConnectionInfo {
+  id: number
+  name: string
+  /** Why the connection cannot serve the target now (gone, disabled, no token…), else null. */
+  problem: string | null
+}
+
+/**
+ * A target as stored: config parsed, token still sealed. A target that uses a connection
+ * (`connection_id`) is read with the connection's address in `config.api` and a sealed copy of
+ * its token in `secret` (getTargetRow), or `secret` null and `connection.problem` set.
+ */
 export interface HubTargetRow {
   id: number
   kind: 'gitlab'
   name: string
   config: HubTargetConfig
   secret: string | null
+  /** The `gitlab` provider connection whose address and token the target uses (G-A). */
+  connection_id?: number | null
+  connection?: TargetConnectionInfo | null
 }
 
 /** A target as the API shows it: the token is only ever the mask. */
@@ -65,13 +95,24 @@ export interface HubTarget {
   kind: 'gitlab'
   name: string
   config: HubTargetConfig
+  /** The mask when the target holds its own token; null for a target that uses a connection. */
   secret: string | null
+  connection_id: number | null
+  connection: TargetConnectionInfo | null
 }
 
-export type TargetFields = Omit<HubTargetRow, 'id'>
+export type TargetFields = Omit<HubTargetRow, 'id' | 'connection'>
+
+/** What validateTargetInput needs of the connection a target names (routes read it). */
+export interface TargetConnectionInput {
+  id: number
+  name: string
+  provider: string
+  config: Record<string, unknown>
+}
 
 export interface TargetCheck {
-  id: 'token' | 'namespace' | 'template'
+  id: 'connection' | 'token' | 'namespace' | 'template'
   ok: boolean
   text: string
 }
@@ -127,6 +168,16 @@ function validApiUrl(raw: string): boolean {
   if (u.username || u.password || u.search || u.hash) return false
   if (u.protocol === 'https:') return true
   return u.protocol === 'http:' && isLocalHost(u.hostname)
+}
+
+/** A GitLab address as targets and drivers compare it: no /api/v4, no trailing slash, lower case. */
+function apiBase(raw: unknown): string {
+  return String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '')
+    .replace(/\/api\/v4$/, '')
+    .replace(/\/+$/, '')
 }
 
 function originOf(raw: string): string {
@@ -242,12 +293,90 @@ function optText(v: unknown, max: number): string | null | undefined {
   return t || null
 }
 
+/** The GitLab address a `gitlab` connection calls (origin + path prefix), or null. */
+export function connectionApi(config: Record<string, unknown>): string | null {
+  const b = gitlabBaseOf(config)
+  return b ? `${b.origin}${b.prefix}` : null
+}
+
+/** The group a `gitlab` connection is pinned to (lower-cased full path), or ''. */
+export function connectionGroup(config: Record<string, unknown>): string {
+  return String(config.groupPath ?? '')
+    .trim()
+    .replace(/^\/+|\/+$/g, '')
+    .toLowerCase()
+}
+
+/**
+ * Why a target's namespace or template lies outside the group its connection is pinned to, or
+ * null. The connection only reaches inside its group (gitlab provider), so a target that uses it
+ * keeps both there; a template named by numeric id cannot be judged and is refused.
+ */
+export function outsideConnectionGroup(
+  config: Pick<HubTargetConfig, 'namespace' | 'template_project'>,
+  group: string
+): string | null {
+  const inside = (p: unknown, allowEqual: boolean) => {
+    if (typeof p !== 'string' || !group) return false
+    const v = p.trim().toLowerCase()
+    return (allowEqual && v === group) || v.startsWith(`${group}/`)
+  }
+  if (!inside(config.namespace, true))
+    return `The namespace ${String(config.namespace ?? '')} is outside the group ${group || '(none)'} the connection is pinned to.`
+  if (!inside(config.template_project, false))
+    return `The template project must be a path inside the group ${group || '(none)'} the connection is pinned to.`
+  return null
+}
+
+/**
+ * `connection`: the connection the request (or the stored target) names, read by the caller —
+ * required when the target uses one. A target that uses a connection never holds a token or an
+ * address of its own; one that stops using it must be given its own token in the same request.
+ */
 export function validateTargetInput(
   body: Record<string, unknown>,
-  existing?: HubTargetRow
+  existing?: HubTargetRow,
+  connection?: TargetConnectionInput | null
 ): Validation<TargetFields> {
   const kind = body.kind ?? existing?.kind
   if (kind !== 'gitlab') return fail('BAD_KIND', 'Target kind must be gitlab.')
+
+  // Which credential the target uses: `connection_id` in the body decides (null = its own
+  // token); absent keeps what the stored target does.
+  const connRaw =
+    body.connection_id !== undefined ? body.connection_id : (existing?.connection_id ?? null)
+  if (
+    connRaw !== null &&
+    (typeof connRaw !== 'number' || !Number.isSafeInteger(connRaw) || connRaw < 1)
+  )
+    return fail(
+      'BAD_TARGET_CONNECTION',
+      'connection_id must name a GitLab connection (or be null).'
+    )
+  const connectionId = connRaw as number | null
+  let connApi: string | null = null
+  let connGroup = ''
+  if (connectionId !== null) {
+    if (!connection || connection.id !== connectionId || connection.provider !== 'gitlab')
+      return fail('BAD_TARGET_CONNECTION', 'connection_id must name a GitLab connection.')
+    connApi = connectionApi(connection.config)
+    connGroup = connectionGroup(connection.config)
+    if (!connApi)
+      return fail(
+        'BAD_TARGET_CONNECTION',
+        `The connection ${connection.name} has no usable GitLab address.`
+      )
+    if (!connGroup)
+      return fail(
+        'BAD_TARGET_CONNECTION',
+        `The connection ${connection.name} is pinned to no group.`
+      )
+    if (typeof body.secret === 'string' && body.secret !== '' && body.secret !== HUB_MASK)
+      return fail(
+        'BAD_SECRET',
+        'A target that uses a connection keeps no token of its own: change the token on the connection.'
+      )
+  }
 
   const name = body.name !== undefined ? body.name : existing?.name
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 200)
@@ -265,10 +394,19 @@ export function validateTargetInput(
   }
   const prev = (existing?.config ?? {}) as Partial<Record<string, unknown>>
   const pick = (k: (typeof CONFIG_KEYS)[number]) => (k in inc ? inc[k] : prev[k])
+  if (connApi !== null) {
+    // The address is the connection's: an address sent here must be that same one.
+    const sent = inc.api
+    if (typeof sent === 'string' && sent.trim() && originOf(sent.trim()) !== originOf(connApi))
+      return fail(
+        'BAD_CONFIG',
+        'A target that uses a connection takes its GitLab address from the connection.'
+      )
+  }
 
   const required: Record<string, string> = {}
   for (const k of [
-    'api',
+    ...(connApi !== null ? [] : (['api'] as const)),
     'namespace',
     'template_project',
     'template_ref',
@@ -278,7 +416,8 @@ export function validateTargetInput(
     if (typeof v !== 'string' || !v.trim()) return fail('BAD_CONFIG', `Config ${k} is required.`)
     required[k] = v.trim()
   }
-  if (!validApiUrl(required.api)) {
+  if (connApi !== null) required.api = connApi
+  else if (!validApiUrl(required.api)) {
     return fail('BAD_CONFIG', 'Config api must be an https URL (http only for localhost).')
   }
   if (!GITLAB_PATH.test(required.namespace) || required.namespace.length > 255)
@@ -383,10 +522,31 @@ export function validateTargetInput(
   if (body.secret !== undefined && body.secret !== null && typeof body.secret !== 'string') {
     return fail('BAD_SECRET', 'The token must be text.')
   }
-  const stored = existing?.secret ?? null
+  if (connectionId !== null) {
+    const outside = outsideConnectionGroup(
+      { namespace: required.namespace, template_project: required.template_project },
+      connGroup
+    )
+    if (outside) return fail('BAD_CONFIG', outside)
+  }
+  // A target leaving its connection keeps nothing of it: its own token is typed in now.
+  const leaving = connectionId === null && existing?.connection_id != null
+  if (leaving && (typeof body.secret !== 'string' || !body.secret || body.secret === HUB_MASK))
+    return fail(
+      'SECRET_REQUIRED',
+      "Enter the target's own token when it stops using the connection"
+    )
+  const stored = leaving ? null : (existing?.secret ?? null)
   // Absent = keep on update (nextSecret reads undefined as clear).
-  const secret = body.secret === undefined && existing ? stored : nextSecret(body.secret, stored)
+  const secret =
+    connectionId !== null
+      ? null
+      : body.secret === undefined && existing
+        ? stored
+        : nextSecret(body.secret, stored)
   if (
+    connectionId === null &&
+    !leaving &&
     existing &&
     stored &&
     secret === stored &&
@@ -418,16 +578,26 @@ export function validateTargetInput(
     traefik_version: traefikVersion,
     ...(dnsMode === 'route53' || dnsMode === 'cloudflare' ? { dns_zone_resource_id: zoneId } : {})
   }
-  return { ok: true, row: { kind: 'gitlab', name: name.trim(), config, secret } }
+  return {
+    ok: true,
+    row: { kind: 'gitlab', name: name.trim(), config, secret, connection_id: connectionId }
+  }
 }
 
 export function publicTarget(row: HubTargetRow): HubTarget {
+  const connected = row.connection_id != null
   return {
     id: row.id,
     kind: row.kind,
     name: row.name,
     config: row.config,
-    secret: maskSecret(row.secret)
+    // A target that uses a connection holds no token: never a mask for the connection's copy.
+    secret: connected ? null : maskSecret(row.secret),
+    connection_id: connected ? Number(row.connection_id) : null,
+    connection:
+      connected && row.connection
+        ? { id: row.connection.id, name: row.connection.name, problem: row.connection.problem }
+        : null
   }
 }
 
@@ -469,54 +639,189 @@ function parseConfig(raw: unknown): HubTargetConfig {
   return (v && typeof v === 'object' && !Array.isArray(v) ? v : {}) as HubTargetConfig
 }
 
-function toRow(r: Record<string, unknown>): HubTargetRow {
+/** A stored row, unresolved: a target that uses a connection has no address and no token yet. */
+export function toTargetRow(r: Record<string, unknown>): HubTargetRow {
+  const conn = r.connection_id == null ? null : Number(r.connection_id)
+  const connectionId = conn !== null && Number.isSafeInteger(conn) && conn > 0 ? conn : null
   return {
     id: Number(r.id),
     kind: r.kind as 'gitlab',
     name: String(r.name),
     config: parseConfig(r.config),
-    secret: (r.secret as string | null) ?? null
+    secret: connectionId !== null ? null : ((r.secret as string | null) ?? null),
+    connection_id: connectionId
+  }
+}
+
+const toRow = toTargetRow
+const CONNECTIONS_TABLE = 'nivaro_hub_connections'
+
+/**
+ * Fills a target that uses a connection from the connection: `config.api` = its address,
+ * `secret` = a fresh sealed copy of its token (`open`: only when the target is about to call
+ * GitLab), `connection` = name and problem. A connection that is gone, not a GitLab one,
+ * disabled, has no usable address or token, or no longer covers the target's namespace leaves
+ * `secret` null and says why. A target with its own token is answered as it is.
+ */
+export async function resolveTargetConnection(
+  row: HubTargetRow,
+  opts: { open: boolean }
+): Promise<HubTargetRow> {
+  if (row.connection_id == null) return row
+  const id = row.connection_id
+  const out = (
+    problem: string | null,
+    name: string,
+    api: string,
+    secret: string | null
+  ): HubTargetRow => ({
+    ...row,
+    config: { ...row.config, api },
+    secret: problem ? null : secret,
+    connection: { id, name, problem }
+  })
+  const c = (await db(CONNECTIONS_TABLE)
+    .where({ id })
+    .first('provider', 'name', 'status', 'config')) as
+    | { provider: string; name: string; status: string; config: unknown }
+    | undefined
+  if (!c) return out('Its GitLab connection is gone: pick another one on the target.', '', '', null)
+  const name = String(c.name ?? '')
+  if (c.provider !== 'gitlab')
+    return out('It names a connection that is not a GitLab one.', name, '', null)
+  const config = parseConfig(c.config) as unknown as Record<string, unknown>
+  const api = connectionApi(config)
+  if (!api) return out(`The connection ${name} has no usable GitLab address.`, name, '', null)
+  if (c.status === 'disabled') return out(`The connection ${name} is disabled.`, name, api, null)
+  const outside = outsideConnectionGroup(row.config, connectionGroup(config))
+  if (outside) return out(outside, name, api, null)
+  if (!opts.open) return out(null, name, api, null)
+  let token: string | undefined
+  try {
+    // Dynamic: the providers store sits on a module cycle with the creation steps.
+    const { openConnectionSecrets } = await import('../providers/store.js')
+    token = (await openConnectionSecrets({ id })).token
+  } catch {
+    return out(
+      `The connection ${name}'s token cannot be read (check ENCRYPTION_KEY).`,
+      name,
+      api,
+      null
+    )
+  }
+  if (!token) return out(`The connection ${name} has no access token.`, name, api, null)
+  return out(null, name, api, sealSecret(token))
+}
+
+/**
+ * What a target save hands syncTargetApps so created apps' drivers follow the token (P3-32):
+ * the previous sealed token when the token changed, and the previous address (the drivers move
+ * with it). A target with its own token on both sides compares the stored sealed values as
+ * before; one that uses a connection on either side compares the opened tokens (its sealed
+ * copy is made afresh on every read). Nothing to follow = `previousSecret: null`.
+ */
+export function tokenFollowFrom(
+  before: HubTargetRow,
+  after: HubTargetRow
+): { previousSecret: string | null; previousApi?: string } {
+  if (!before.secret) return { previousSecret: null }
+  const viaConnection = before.connection_id != null || after.connection_id != null
+  let changed: boolean
+  if (!viaConnection) changed = before.secret !== after.secret
+  else {
+    try {
+      changed = openSecret(before.secret) !== openSecret(after.secret)
+    } catch {
+      changed = true
+    }
+  }
+  const moved = apiBase(before.config.api) !== apiBase(after.config.api)
+  if (!changed && !moved) return { previousSecret: null }
+  // A target with its own token at the same address keeps the P3-32 shape (token only).
+  return viaConnection || moved
+    ? { previousSecret: before.secret, previousApi: before.config.api }
+    : { previousSecret: before.secret }
+}
+
+/**
+ * The connection a target create / PATCH would use (the body's `connection_id`, else the stored
+ * target's), for validateTargetInput: never its secret. Null when it names none or none exists.
+ */
+export async function targetConnectionFor(
+  body: Record<string, unknown>,
+  existing?: HubTargetRow | null
+): Promise<TargetConnectionInput | null> {
+  const raw = body.connection_id !== undefined ? body.connection_id : existing?.connection_id
+  if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw < 1) return null
+  const c = (await db(CONNECTIONS_TABLE).where({ id: raw }).first('provider', 'name', 'config')) as
+    | { provider: string; name: string; config: unknown }
+    | undefined
+  if (!c) return null
+  return {
+    id: raw,
+    name: String(c.name ?? ''),
+    provider: String(c.provider),
+    config: parseConfig(c.config) as unknown as Record<string, unknown>
   }
 }
 
 const now = () => new Date()
 
-/** GitLab targets only (Task 11a: kind `github` rows are github-target.ts's). */
+/**
+ * GitLab targets only (Task 11a: kind `github` rows are github-target.ts's). A target that uses
+ * a connection carries the connection's address and name, never its token (a list never opens
+ * a secret).
+ */
 export async function listTargets(): Promise<HubTargetRow[]> {
   const rows = (await db('nivaro_hub_targets')
     .where({ kind: 'gitlab' })
     .select('*')
     .orderBy('id')) as Record<string, unknown>[]
-  return rows.map(toRow)
+  return Promise.all(rows.map((r) => resolveTargetConnection(toRow(r), { open: false })))
 }
 
+/** One GitLab target, ready to call GitLab: a connection's token is opened and sealed afresh. */
 export async function getTargetRow(id: number): Promise<HubTargetRow | null> {
   const r = (await db('nivaro_hub_targets').where({ id, kind: 'gitlab' }).first()) as
     | Record<string, unknown>
     | undefined
-  return r ? toRow(r) : null
+  return r ? resolveTargetConnection(toRow(r), { open: true }) : null
+}
+
+/** What a target row stores: a target that uses a connection keeps no address and no token. */
+function storedTarget(row: TargetFields): Record<string, unknown> {
+  const connected = row.connection_id != null
+  const { api: _api, ...rest } = row.config
+  return {
+    kind: row.kind,
+    name: row.name,
+    config: JSON.stringify(connected ? rest : row.config),
+    secret: connected ? null : row.secret,
+    // Written only when in use (a database before migration 583 has no such column).
+    ...(connected ? { connection_id: row.connection_id } : {})
+  }
 }
 
 export async function createTarget(row: TargetFields): Promise<HubTargetRow> {
   const id = await insertReturningId(db, 'nivaro_hub_targets', {
-    kind: row.kind,
-    name: row.name,
-    config: JSON.stringify(row.config),
-    secret: row.secret,
+    ...storedTarget(row),
     created_at: now(),
     updated_at: now()
   })
   return { id: Number(id), ...row }
 }
 
-export async function updateTarget(id: number, patch: TargetFields): Promise<HubTargetRow | null> {
+/** `clearConnection`: the stored target used a connection and now keeps its own token. */
+export async function updateTarget(
+  id: number,
+  patch: TargetFields,
+  opts: { clearConnection?: boolean } = {}
+): Promise<HubTargetRow | null> {
   const n = await db('nivaro_hub_targets')
     .where({ id })
     .update({
-      kind: patch.kind,
-      name: patch.name,
-      config: JSON.stringify(patch.config),
-      secret: patch.secret,
+      ...storedTarget(patch),
+      ...(opts.clearConnection && patch.connection_id == null ? { connection_id: null } : {}),
       updated_at: now()
     })
   if (!n) return null
@@ -569,6 +874,23 @@ export async function testTarget(id: number): Promise<{ ok: boolean; checks: Tar
     return { ok: false, checks: [{ id: 'token', ok: false, text: 'Target not found' }] }
   }
   const checks: TargetCheck[] = []
+  if (row.connection_id != null) {
+    const problem = row.connection?.problem ?? null
+    checks.push(
+      problem
+        ? { id: 'connection', ok: false, text: problem }
+        : {
+            id: 'connection',
+            ok: true,
+            text: `Uses the connection ${row.connection?.name || `#${row.connection_id}`}`
+          }
+    )
+    if (problem) {
+      for (const id of ['token', 'namespace', 'template'] as const)
+        checks.push({ id, ok: false, text: 'Skipped: the connection cannot be used' })
+      return { ok: false, checks }
+    }
+  }
   let ctx: GitCtx
   try {
     ctx = targetCtx(row)
@@ -578,6 +900,7 @@ export async function testTarget(id: number): Promise<{ ok: boolean; checks: Tar
     return {
       ok: false,
       checks: [
+        ...checks,
         { id: 'token', ok: false, text },
         { id: 'namespace', ok: false, text: 'Skipped: the token does not work' },
         { id: 'template', ok: false, text: 'Skipped: the token does not work' }

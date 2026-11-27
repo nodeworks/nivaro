@@ -15,7 +15,26 @@ export const hubProvidersGitlabDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). This is the full GitLab provider: projects, protections, environments, CI/CD variables, deploy tokens and keys, webhooks, pipeline schedules and runners. The Hub’s older GitLab code (targets for new apps, drivers, promotions) is untouched and keeps working with its own tokens.'
+      text: 'Everything on this page exists only on a Nivaro Hub (`HUB=on`). This is the full GitLab provider: projects, protections, environments, CI/CD variables, deploy tokens and keys, webhooks, pipeline schedules and runners. The Hub’s older GitLab code (drivers, promotions) keeps working with its own tokens; a target for new apps may use a GitLab connection instead of its own token (below).'
+    },
+    {
+      type: 'h2',
+      id: 'hub-providers-gitlab-targets',
+      text: 'Targets that use a GitLab connection'
+    },
+    {
+      type: 'p',
+      text: 'On the Targets tab a GitLab target signs in to GitLab with its own token or with a GitLab connection (`connection_id`). With a connection the target keeps no token and no address: they are read from the connection each time, and the target’s namespace and template must sit inside the connection’s pinned group. Each app created on the target has a driver with its own sealed copy of the token.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A new token on the connection (PATCH `secrets.token`) reaches every app’s driver made from a target that uses it, through the same path as a target token rotation: only a driver that still holds the previous token at the previous address is changed, then the app’s CI settings are pushed again. The answer carries `target_sync` (one entry per target, the same per-app results as a target save).',
+        'A new address needs the token typed again in the same request (`SECRET_REQUIRED_ON_HOST_CHANGE`, as for every connection); the drivers then move to the new address together with the token, never one without the other.',
+        'A `groupPath` or address that would leave a target outside (namespace or template no longer inside the group, or no usable https address) is refused with 409 `CONNECTION_IN_USE`; change the target first.',
+        'Delete is refused with 409 `CONNECTION_IN_USE` while any Hub target (GitLab or GitHub) names the connection.',
+        'Disabling the connection stops new apps on its targets; the target’s Test says why. Targets are administrators’ only, and a target’s connection is never added to an app’s allowed connections.'
+      ]
     },
     {
       type: 'p',

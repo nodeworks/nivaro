@@ -884,10 +884,8 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
     title: 'The provider refused this connection’s keys',
     hint: 'Check this connection’s keys under Connections, test it, then plan the change again.'
   },
-  CONNECTION_IN_USE: {
-    title: 'This connection still manages resources',
-    hint: 'Delete them or adopt them under another connection first.'
-  },
+  // The server's sentence says what uses it (managed resources or a Hub target).
+  CONNECTION_IN_USE: { title: 'This connection is still in use' },
   CONNECTION_SECRET_BAD: {
     title: 'The stored credentials cannot be read',
     hint: 'The Hub’s encryption key may have changed. Enter the credentials again.'
@@ -947,8 +945,13 @@ export function providerError(
   if (d.code === 'INVALID_FIELDS' && Array.isArray(problems)) {
     const words = problems.filter((p): p is string => typeof p === 'string' && !isRawErrorText(p))
     if (words.length) out.hint = words.join(' ')
-  } else if (d.code === 'PROVIDER_ERROR' && opts.retryable === false)
-    out.hint = PROVIDER_REFUSED_HINT
+  } else if (
+    d.code === 'CONNECTION_IN_USE' &&
+    typeof body?.error === 'string' &&
+    !isRawErrorText(body.error)
+  )
+    out.hint = body.error
+  else if (d.code === 'PROVIDER_ERROR' && opts.retryable === false) out.hint = PROVIDER_REFUSED_HINT
   else if (copy.hint) out.hint = copy.hint
   else delete out.hint
   return out

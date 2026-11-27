@@ -126,6 +126,78 @@ describe('HubTargets', () => {
     expect(h.patch.mock.calls[1][1].config.traefik_version).toBe(2)
   })
 
+  it('G-A: a target that uses a GitLab connection sends no address and no token', async () => {
+    const viaConn = {
+      ...target,
+      secret: null,
+      connection_id: 5,
+      connection: { id: 5, name: 'GitLab apps', problem: null },
+      config: { ...target.config, api: 'https://gitlab.example.com' }
+    }
+    h.get.mockImplementation(async (url: string) =>
+      url.includes('connections')
+        ? {
+            data: {
+              data: [
+                {
+                  id: 5,
+                  provider: 'gitlab',
+                  name: 'GitLab apps',
+                  config: { baseUrl: 'https://gitlab.example.com', groupPath: 'apps' }
+                }
+              ]
+            }
+          }
+        : { data: { data: [viaConn] } }
+    )
+    h.patch.mockResolvedValue({ data: { data: viaConn, sync: [] } })
+    mount()
+    expect(await screen.findByText('Through GitLab apps')).toBeTruthy()
+    fireEvent.click(screen.getByText('Swarm one'))
+    expect(screen.queryByLabelText('Access token')).toBeNull()
+    expect(screen.queryByLabelText('GitLab API URL')).toBeNull()
+    await waitFor(() =>
+      expect((screen.getByLabelText('Address and group') as HTMLInputElement).value).toBe(
+        'https://gitlab.example.com · apps'
+      )
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(h.patch).toHaveBeenCalled())
+    const [, body] = h.patch.mock.calls[0]
+    expect(body.connection_id).toBe(5)
+    expect(body).not.toHaveProperty('secret')
+    expect(body.config).not.toHaveProperty('api')
+    // Back to an own token: the address and token fields return, and connection_id is null.
+    fireEvent.click(screen.getByRole('button', { name: 'Own token' }))
+    expect(screen.getByLabelText('Access token')).toBeTruthy()
+    const draft = {
+      name: 'x',
+      api: '',
+      namespace: 'apps',
+      template_project: 'apps/t',
+      template_ref: 'v1',
+      pin_file: '',
+      deploy_job: '',
+      deploy_host: 'h',
+      manager_known_hosts: 'h ssh-ed25519 AAAA',
+      proxy_network: '',
+      dns_mode: 'manual' as const,
+      dns_zone_resource_id: null,
+      wildcard_domain: '',
+      edge_address: '',
+      scheme: 'https' as const,
+      port: '',
+      cert_note: '',
+      traefik_version: '3' as const
+    }
+    // A connection target needs a connection, never an address; an own-token one the reverse.
+    const viaErrs = targetDraftErrors({ ...draft, source: 'connection', connection_id: null })
+    expect(viaErrs.connection_id).toBeTruthy()
+    expect(viaErrs.api).toBeUndefined()
+    expect(targetDraftErrors({ ...draft, source: 'connection', connection_id: 5 })).toEqual({})
+    expect(targetDraftErrors(draft).api).toBeTruthy()
+  })
+
   it('a sync that could not start says so', async () => {
     h.get.mockResolvedValue({ data: { data: [target] } })
     h.patch.mockResolvedValue({

@@ -1806,7 +1806,11 @@ export const hubCreateDocs: DocSection = {
       rows: [
         [
           'Token',
-          'A GitLab token with the `api` scope, as a Maintainer of the namespace. Sealed; shown as ••••••. Changing the GitLab address or namespace needs it entered again (`SECRET_REQUIRED`).'
+          'A GitLab token with the `api` scope, as a Maintainer of the namespace. Sealed; shown as ••••••. Changing the GitLab address or namespace needs it entered again (`SECRET_REQUIRED`). Or, instead of a token of its own, a GitLab connection (below).'
+        ],
+        [
+          '`connection_id`',
+          "Optional: a `gitlab` provider connection (Connections tab) whose address and token the target uses. The target then stores neither (`api` and `secret` are left out; sending a token answers `BAD_SECRET`, another address `BAD_CONFIG`), and `namespace` and `template_project` must be paths inside the group the connection is pinned to. `null` = stop using it: the target's own `api` and token are sent in the same request (`SECRET_REQUIRED` otherwise). A connection that is not a GitLab one is `BAD_TARGET_CONNECTION`."
         ],
         [
           '`api`',
@@ -1852,6 +1856,10 @@ export const hubCreateDocs: DocSection = {
           'https (default) or http, and an optional port. Plain http is allowed only when the wildcard domain is `localhost` or ends in `.test`.'
         ]
       ]
+    },
+    {
+      type: 'note',
+      text: "A target that uses a GitLab connection (gap G-A): every read of the target fills its address and a fresh sealed copy of the token from the connection, so creating, saving and testing work as for a target with its own token. Each app made on it still gets a driver with its own sealed copy (promotions call the driver). When the connection's token or address changes, every one of those copies follows it the way a target token rotation does: a driver that still holds the previous token at the previous address gets the new token (and the new address) in one write, then the app's CI settings are pushed again; the PATCH answer lists it per target as `target_sync`. A disabled or deleted connection stops new apps on the target (the Test button says why). The connection is never added to an app's allowed connections."
     },
     {
       type: 'p',

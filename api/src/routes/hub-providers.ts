@@ -3,6 +3,13 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { markConfigRead } from '../services/config-live.js'
 import { idParam, isAppOwner, listApps, readApp } from '../services/hub/apps.js'
+import {
+  connectionChangeRefusal,
+  followConnection,
+  type GitlabConnectionState,
+  gitlabConnectionState,
+  targetsOfConnection
+} from '../services/hub/create/connection-targets.js'
 import { hubModeEnabled } from '../services/hub/mode.js'
 import { generateAccountKeyPem } from '../services/hub/providers/acme/client.js'
 import { registerProviderCostsCron } from '../services/hub/providers/costs.js'
@@ -727,6 +734,21 @@ export async function hubProviderRoutes(app: FastifyInstance) {
             { secrets: missing }
           )
       }
+      // G-A: GitLab targets that use this connection take its address and token. A settings
+      // change must keep every one of them inside the pinned group with a usable address; a new
+      // token or address then reaches each created app's driver copy (followConnection).
+      let before: GitlabConnectionState | null = null
+      if (row.provider === 'gitlab' && (secretsTouched || b.config !== undefined)) {
+        if (b.config !== undefined) {
+          const refusal = await connectionChangeRefusal(row.id, config)
+          if (refusal)
+            return fail(reply, 409, 'CONNECTION_IN_USE', refusal.message, {
+              targets: refusal.targets
+            })
+        }
+        if ((await targetsOfConnection(row.id)).some((t) => t.kind === 'gitlab'))
+          before = await gitlabConnectionState(row)
+      }
       // New credentials or settings: what the last test said no longer holds.
       if (secretsTouched || b.config !== undefined) {
         patch.status = 'untested'
@@ -743,7 +765,10 @@ export async function hubProviderRoutes(app: FastifyInstance) {
         row.id,
         changed.join(', ') || 'no change'
       )
-      return { data: connectionOut(updated) }
+      const targetSync = before
+        ? await followConnection(row.id, before, await gitlabConnectionState(updated))
+        : null
+      return { data: connectionOut(updated), ...(targetSync ? { target_sync: targetSync } : {}) }
     })
   )
 
@@ -752,6 +777,16 @@ export async function hubProviderRoutes(app: FastifyInstance) {
       const id = idParam((req.params as { id: string }).id)
       const row = id === null ? null : await readConnection(id)
       if (!row) return notFound(reply, 'connection')
+      // G-A: a Hub target that names the connection takes its credentials from it.
+      const targets = await targetsOfConnection(row.id)
+      if (targets.length)
+        return fail(
+          reply,
+          409,
+          'CONNECTION_IN_USE',
+          `The target ${targets[0].name}${targets.length > 1 ? ` and ${targets.length - 1} more` : ''} use this connection. Give them their own token or another connection first.`,
+          { targets: targets.length }
+        )
       const resources = await listResources({ connectionId: row.id })
       const running = await listChanges({
         connectionId: row.id,
