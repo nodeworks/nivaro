@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { HUB_MASK } from '../hub-api'
 import { dangerArmed, dangerGhost, Field, SecretInput } from '../hub-parts'
+import { ManagedResourcePicker } from '../providers/ResourcePickers'
 import {
   type DbEngine,
   type DbServer,
@@ -50,6 +51,8 @@ export function DbServerForm({
   const [name, setName] = useState(server?.name ?? '')
   const [engine, setEngine] = useState<DbEngine>(server?.engine ?? 'mssql')
   const [host, setHost] = useState(server?.host ?? '')
+  // Task 11: the managed Amazon RDS instance this server is (host and port come from it).
+  const [resourceId, setResourceId] = useState<number | null>(server?.resource_id ?? null)
   const [port, setPort] = useState(server?.port != null ? String(server.port) : '')
   const [mode, setMode] = useState<ProvisionMode>(server?.provision_mode ?? 'manual')
   const [ssl, setSsl] = useState<SslMode | ''>(server?.ssl_mode ?? '')
@@ -73,14 +76,14 @@ export function DbServerForm({
     stored &&
     !loginTouched &&
     (engine !== server.engine ||
-      host.trim().toLowerCase() !== server.host.toLowerCase() ||
+      host.trim().toLowerCase() !== (server.host ?? '').toLowerCase() ||
       (portNum ?? ENGINE_PORT[engine]) !== (server.port ?? ENGINE_PORT[server.engine]) ||
       (ssl || null) !== server.ssl_mode ||
       trust !== server.trust_server_cert)
 
   const errors = {
     name: name.trim() ? '' : 'Give the server a name',
-    host: host.trim() ? '' : 'The host name or IP address',
+    host: host.trim() || resourceId ? '' : 'The host name or IP address',
     port:
       portNum === null || (Number.isInteger(portNum) && portNum >= 1 && portNum <= 65535)
         ? ''
@@ -105,6 +108,8 @@ export function DbServerForm({
         engine,
         host: host.trim(),
         port: portNum,
+        // Sent only when set, or to clear a link (a Hub before migration 583 has no such column).
+        ...(resourceId != null || server?.resource_id != null ? { resource_id: resourceId } : {}),
         provision_mode: mode,
         ssl_mode: ssl || null,
         trust_server_cert: trust,
@@ -208,7 +213,31 @@ export function DbServerForm({
               triggerProps={{ id: id('engine') }}
             />
           </Field>
-          <Field id={id('host')} label='Host' error={tried ? errors.host : null}>
+          <div className='sm:col-span-2'>
+            <Field
+              id={id('rds')}
+              label='Amazon RDS instance'
+              hint={
+                resourceId
+                  ? 'Host and port come from the instance when it is available; its engine must match.'
+                  : 'Optional: link a managed RDS instance so its address is kept up to date.'
+              }
+            >
+              <ManagedResourcePicker
+                id={id('rds')}
+                type='aws.rds_instance'
+                value={resourceId}
+                onChange={setResourceId}
+                allowNone='Not an RDS instance'
+                placeholder='Not an RDS instance'
+              />
+            </Field>
+          </div>
+          <Field
+            id={id('host')}
+            label={resourceId ? 'Host (optional)' : 'Host'}
+            error={tried ? errors.host : null}
+          >
             <Input
               id={id('host')}
               value={host}

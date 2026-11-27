@@ -513,6 +513,24 @@ export function stepRows(plan: PromotionPlan | null, kind: PromotionKind = 'prom
     (a, b) => runRank(kind, a) - runRank(kind, b) || a.position - b.position
   )
   for (const s of ordered) {
+    if (s.driver === 'provider' && s.provider) {
+      // A provider component: one change of the provider engine, no merge or pin row.
+      const p = s.provider
+      rows.push({
+        key: `deploy-${s.position}`,
+        phase: 'deploy',
+        component: s.component,
+        label:
+          p.kind === 'github_actions'
+            ? p.approveEnvironment
+              ? `Approve ${p.refLabel} in GitHub Actions`
+              : `Run ${s.component}'s GitHub Actions workflow on ${p.refLabel}`
+            : p.kind === 'vercel'
+              ? `${kind === 'rollback' ? 'Roll Vercel back to' : 'Make live on Vercel'} ${p.refLabel}`
+              : `Point ${s.component}'s update channel at ${p.refLabel}`
+      })
+      continue
+    }
     if (s.driver === 'docker' || s.kind === 'stack') {
       // A stack deploys through the Hub agent: one step, no merge or pin row.
       rows.push({

@@ -311,6 +311,38 @@ describe('docker-api helpers', () => {
     })
   })
 
+  it('Route 53 mode sends the zone, the wildcard and the edge, and needs all three (Task 11)', () => {
+    const base = {
+      agent_url: 'https://a.example.com',
+      wildcard_domain: 'apps.example.com',
+      edge_target: '203.0.113.10',
+      edge_scheme: '' as const,
+      edge_port: '',
+      dns_mode: 'route53' as const
+    }
+    expect(dockerConfigBody({ ...base, dns_zone_resource_id: 7 })).toMatchObject({
+      dns_mode: 'route53',
+      dns_zone_resource_id: 7,
+      wildcard_domain: 'apps.example.com',
+      edge_target: '203.0.113.10'
+    })
+    expect(
+      dockerDraftErrors({
+        ...base,
+        dns_zone_resource_id: null,
+        wildcard_domain: '',
+        edge_target: ''
+      })
+    ).toMatchObject({
+      dns_zone_resource_id: expect.stringMatching(/hosted zone/),
+      wildcard_domain: expect.stringMatching(/domain/),
+      edge_target: expect.stringMatching(/point at/)
+    })
+    expect(
+      dockerConfigBody({ ...base, dns_mode: 'automatic', dns_zone_resource_id: 7 })
+    ).not.toHaveProperty('dns_zone_resource_id')
+  })
+
   it('says AGENT_UNREACHABLE with its hint', () => {
     const d = hubError({ response: { status: 502, data: { code: 'AGENT_UNREACHABLE' } } }, 'x')
     expect(d.title).toBe('The Hub agent on the Docker host does not answer')

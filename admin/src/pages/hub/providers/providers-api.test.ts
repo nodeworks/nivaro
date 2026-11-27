@@ -364,6 +364,9 @@ describe('Task 3b words', () => {
     expect(isResumable('failed', [step(true)])).toBe(true)
     expect(isResumable('failed', [step(false)])).toBe(false)
     expect(isResumable('applied', [])).toBe(false)
+    // Task 11c: the server's answer wins (AUTH_FAILED resumes once the keys changed).
+    expect(isResumable('failed', [step(false)], true)).toBe(true)
+    expect(isResumable('interrupted', [], false)).toBe(false)
   })
 
   it('a create that never reached the provider is its own state', () => {

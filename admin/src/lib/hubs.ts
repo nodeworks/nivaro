@@ -249,7 +249,7 @@ export const APPS_HUB: HubDef = {
     {
       path: 'targets',
       label: 'Targets',
-      hint: 'Where a new app goes: the GitLab group, template and hostnames it gets.'
+      hint: 'Where a new app goes: the GitLab group or GitHub account, template and hostnames it gets.'
     },
     {
       path: 'templates',

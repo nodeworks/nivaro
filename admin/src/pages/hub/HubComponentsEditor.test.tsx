@@ -79,10 +79,26 @@ const stored = {
   verify_url: 'https://efp.example.com/api/version'
 }
 
+const workflows = [
+  {
+    id: 12,
+    connection_id: 3,
+    provider: 'github',
+    type: 'github.workflow',
+    external_id: 'acme/efp#deploy.yml',
+    name: 'deploy.yml',
+    scope: 'app',
+    app_id: 1,
+    environment_id: null,
+    deleted_at: null
+  }
+]
+
 function setup(components: unknown[]) {
   h.get.mockImplementation(async (url: string) => {
     if (url === '/hub/placements/5/components') return { data: { data: components } }
     if (url === '/hub/drivers') return { data: { data: drivers } }
+    if (url === '/hub/resources') return { data: { data: workflows } }
     throw new Error(`unexpected GET ${url}`)
   })
   h.post.mockImplementation(async (_url: string, body: { position: number }) => ({
@@ -340,5 +356,49 @@ describe('fix round 1', () => {
     const body = h.post.mock.calls.at(-1)?.[1] as Record<string, unknown>
     expect(body.kind).toBe('stack')
     expect('source_branch' in body).toBe(false)
+  })
+})
+
+describe('provider components (Task 11)', () => {
+  afterEach(() => {
+    h.get.mockReset()
+    h.patch.mockReset()
+  })
+
+  it('a GitHub Actions component approves the waiting run on a named GitHub environment', async () => {
+    setup([
+      {
+        ...stored,
+        id: 32,
+        name: 'deploy',
+        kind: 'github_actions',
+        driver_id: 0,
+        resource_id: 12,
+        deploy_job: null
+      }
+    ])
+    const list = await screen.findByRole('list', { name: 'Deploy components' })
+    expect(within(list).getByText('GitHub Actions')).toBeTruthy()
+    expect(within(list).getByText(/runs the workflow with the version/)).toBeTruthy()
+    fireEvent.click(within(list).getByRole('button', { name: 'Edit deploy' }))
+    expect(screen.queryByLabelText('Driver')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Approve the waiting run' }))
+    fireEvent.change(screen.getByLabelText('GitHub environment'), {
+      target: { value: 'prod-gh' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save component' }))
+    await waitFor(() =>
+      expect(h.patch).toHaveBeenCalledWith(
+        '/hub/components/32',
+        expect.objectContaining({
+          kind: 'github_actions',
+          resource_id: 12,
+          deploy_job: 'approve:prod-gh',
+          source_branch: 'main'
+        })
+      )
+    )
+    const body = h.patch.mock.calls[0][1] as Record<string, unknown>
+    expect(body).not.toHaveProperty('driver_id')
   })
 })

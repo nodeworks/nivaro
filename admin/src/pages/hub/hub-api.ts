@@ -92,7 +92,10 @@ export interface HubDriverConfig {
 /** A Docker driver's config (phase 4): the Hub agent's address and how names reach the edge. */
 export interface HubDockerDriverConfig {
   agent_url: string
-  dns_mode: 'automatic' | 'manual'
+  /** route53 (Task 11): the Hub makes each name's record in a managed Route 53 zone. */
+  dns_mode: 'automatic' | 'manual' | 'route53'
+  /** route53: the managed aws.route53_zone resource names go in. */
+  dns_zone_resource_id?: number | null
   wildcard_domain: string | null
   edge_target: string | null
   /** How people reach the edge; null = https (plain http for localhost / .test names). */
@@ -459,7 +462,37 @@ export function hubToast(
 
 // ─── Phase 2: components, promote and roll back ───────────────────────────────
 
-export type ComponentKind = 'api' | 'frontend' | 'stack'
+export type ComponentKind = 'api' | 'frontend' | 'stack' | ProviderComponentKind
+/** Task 11: components that deploy through a managed provider resource (driver_id 0). */
+export type ProviderComponentKind = 'github_actions' | 'vercel' | 'eas_update'
+export const PROVIDER_COMPONENT_KINDS: ProviderComponentKind[] = [
+  'github_actions',
+  'vercel',
+  'eas_update'
+]
+export const isProviderKind = (k: unknown): k is ProviderComponentKind =>
+  (PROVIDER_COMPONENT_KINDS as unknown[]).includes(k)
+/** The resource type each provider kind names (api promote-providers.ts). */
+export const PROVIDER_COMPONENT_TYPE: Record<ProviderComponentKind, string> = {
+  github_actions: 'github.workflow',
+  vercel: 'vercel.project',
+  eas_update: 'expo.channel'
+}
+
+/**
+ * A github_actions component's mode, stored in deploy_job: null = run the workflow; `approve` /
+ * `approve:<GitHub environment>` = approve the run that waits for review there (no name = the
+ * GitHub environment named like the Hub environment).
+ */
+export function githubActionsMode(
+  deployJob: string | null | undefined
+): { mode: 'dispatch' } | { mode: 'approve'; environment: string | null } {
+  const v = (deployJob ?? '').trim()
+  if (v === 'approve') return { mode: 'approve', environment: null }
+  if (v.startsWith('approve:'))
+    return { mode: 'approve', environment: v.slice('approve:'.length).trim() || null }
+  return { mode: 'dispatch' }
+}
 export type PromotionKind = 'promote' | 'rollback'
 
 /** One ordered piece of an environment's placement, each deployed through its own driver. */
@@ -481,6 +514,8 @@ export interface HubComponent {
   verify_field: string
   /** True when nothing is stored and the placement's own driver stands in as one api component. */
   implicit?: boolean
+  /** Provider kinds: the managed resource it deploys through. */
+  resource_id?: number | null
 }
 
 export interface HubPromotable {
@@ -517,7 +552,19 @@ export interface PromotionStep {
   verifyUrl: string | null
   want: string
   /** Phase 4: the executor; absent = GitLab (merge + deploy job), docker = the Hub agent. */
-  driver?: 'gitlab' | 'docker'
+  driver?: 'gitlab' | 'docker' | 'provider'
+  /** Task 11, provider steps: what the step makes live (bound in the plan hash). */
+  provider?: {
+    kind: ProviderComponentKind
+    connectionId: number
+    resourceId: number
+    ref: string
+    refLabel: string
+    approveEnvironment?: string
+    /** The one waiting run (id + head commit) the approval is bound to. */
+    approveRunId?: string
+    approveSha?: string
+  }
   /** Phase 4, docker steps: the stack the Hub deploys (never a setting or a secret). */
   stack?: { name: string; image?: string; size?: string }
   /** api: already deployed with this version — nothing is merged or deployed. */

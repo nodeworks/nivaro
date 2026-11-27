@@ -35,7 +35,10 @@ export interface HubTargetConfig {
   deploy_host: string
   manager_known_hosts: string
   proxy_network: string
-  dns_mode: 'automatic' | 'manual'
+  /** route53 (Task 11): the Hub makes each name's record in a managed Route 53 zone. */
+  dns_mode: 'automatic' | 'manual' | 'route53'
+  /** route53: the managed aws.route53_zone names go in. */
+  dns_zone_resource_id?: number | null
   wildcard_domain: string | null
   edge_address: string | null
   scheme: 'https' | 'http'
@@ -54,8 +57,39 @@ export interface HubTarget {
   secret: string | null
 }
 
+/** Task 11: a GitHub target — repositories made through a GitHub provider connection. */
+export interface HubGithubTargetConfig {
+  /** owner/repo of the template repository. */
+  template: string
+  visibility: 'private' | 'internal'
+  /** The workflow file under .github/workflows that deploys an environment. */
+  deploy_workflow: string
+  source_branch: string
+  dns_mode: 'automatic' | 'manual' | 'route53'
+  dns_zone_resource_id?: number | null
+  wildcard_domain: string | null
+  edge_address: string | null
+  scheme: 'https' | 'http'
+  port: number | null
+  cert_note: string | null
+}
+
+export interface HubGithubTarget {
+  id: number
+  kind: 'github'
+  name: string
+  connection_id: number
+  config: HubGithubTargetConfig
+}
+
+/** What GET /targets answers: GitLab and GitHub targets. */
+export type AnyHubTarget = HubTarget | HubGithubTarget
+
+export const isGithubTarget = (t: AnyHubTarget | null | undefined): t is HubGithubTarget =>
+  t?.kind === 'github'
+
 export interface TargetCheck {
-  id: 'token' | 'namespace' | 'template'
+  id: 'token' | 'namespace' | 'template' | 'connection'
   ok: boolean
   text: string
 }
@@ -69,7 +103,7 @@ export interface TargetSyncResult {
 }
 
 export interface TargetSaveAnswer {
-  data: HubTarget
+  data: AnyHubTarget
   /** PATCH only: one entry per app made on this target; null when the sync could not start. */
   sync?: TargetSyncResult[] | null
   sync_error?: string
@@ -95,7 +129,7 @@ export function serverTlsWords(tls: CreationServerTls | null | undefined): strin
 // ─── Creation ─────────────────────────────────────────────────────────────────
 
 /** Where a created app goes: a GitLab target, a Docker driver (the Hub agent), a shared deployment. */
-export type CreationKind = 'gitlab' | 'docker' | 'shared'
+export type CreationKind = 'gitlab' | 'docker' | 'shared' | 'github'
 
 export interface DockerStackInput {
   size?: string
@@ -109,6 +143,7 @@ export type CreateTargetInput =
   | { kind: 'gitlab'; id: number }
   | { kind: 'docker'; driver_id: number; stack?: DockerStackInput }
   | { kind: 'shared'; shared_id: number; pool_max?: number }
+  | { kind: 'github'; id: number }
 
 export interface CreateAppInput {
   key: string
@@ -134,6 +169,8 @@ export interface CreateAppInput {
     database:
       | { server_id: number; database_name?: string; login_name?: string }
       | { database_id: number }
+    /** Task 11: provider parts made for this environment (≤ 6). */
+    providers?: Array<{ connection_id: number; type: string; fields?: Record<string, unknown> }>
   }>
 }
 
@@ -188,12 +225,14 @@ export type CreationStepKey =
   | 'link'
   | 'admin'
   | 'template'
+  | 'providers'
   | 'stack'
   | 'place'
 
 /** The GitLab kind's steps. A creation view lists its own kind's steps in order (`steps`). */
 export const STEP_ORDER: readonly CreationStepKey[] = [
   'database',
+  'providers',
   'repository',
   'variables',
   'config',
@@ -285,7 +324,7 @@ export const createKeys: {
 // ─── Fetchers ─────────────────────────────────────────────────────────────────
 
 export const fetchTargets = () =>
-  api.get<{ data: HubTarget[] }>('/hub/targets').then((r) => r.data.data ?? [])
+  api.get<{ data: AnyHubTarget[] }>('/hub/targets').then((r) => r.data.data ?? [])
 
 export const saveTarget = (id: number | null, body: Record<string, unknown>) =>
   (id == null
@@ -406,6 +445,7 @@ export const STEP_LABELS: Record<CreationStepKey, string> = {
   link: 'Hub link',
   admin: 'First administrator',
   template: 'Template',
+  providers: 'Provider parts',
   stack: 'Stack and settings',
   place: 'Place on the shared deployment'
 }
@@ -428,6 +468,10 @@ export const KIND_WORDS: Record<CreationKind, { label: string; hint: string }> =
   shared: {
     label: 'Shared deployment',
     hint: 'Each environment is placed on a shared deployment that runs many apps.'
+  },
+  github: {
+    label: 'GitHub',
+    hint: 'A repository made from the target’s template on GitHub; its Actions workflow deploys each environment.'
   }
 }
 

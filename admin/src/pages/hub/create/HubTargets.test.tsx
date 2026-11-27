@@ -23,7 +23,9 @@ proto.scrollIntoView ??= vi.fn()
 proto.hasPointerCapture ??= () => false
 proto.releasePointerCapture ??= vi.fn()
 
-const { HubTargets, targetDraftErrors } = await import('./HubTargets')
+const { HubTargets, githubTargetDraftErrors, hostnameErrors, targetDraftErrors } = await import(
+  './HubTargets'
+)
 const { syncSummary, TEMPLATE_REF_RE } = await import('./create-api')
 
 const target = {
@@ -195,6 +197,7 @@ describe('target rules', () => {
       manager_known_hosts: 'h ssh-ed25519 AAAA',
       proxy_network: '',
       dns_mode: 'automatic',
+      dns_zone_resource_id: null,
       wildcard_domain: '',
       edge_address: '',
       scheme: 'https',
@@ -203,6 +206,46 @@ describe('target rules', () => {
       traefik_version: '3'
     })
     expect(errs.wildcard_domain).toBeTruthy()
+  })
+
+  it('Route 53 names need a hosted zone and an edge address (Task 11)', () => {
+    const base = {
+      dns_mode: 'route53' as const,
+      dns_zone_resource_id: null,
+      wildcard_domain: 'apps.example.com',
+      edge_address: '',
+      scheme: 'https' as const,
+      port: '',
+      cert_note: ''
+    }
+    const errs = hostnameErrors(base)
+    expect(errs.dns_zone_resource_id).toBeTruthy()
+    expect(errs.edge_address).toBeTruthy()
+    expect(
+      hostnameErrors({ ...base, dns_zone_resource_id: 4, edge_address: '203.0.113.10' })
+    ).toEqual({})
+  })
+
+  it('a GitHub target needs a connection, a template repository and a workflow file (Task 11)', () => {
+    const errs = githubTargetDraftErrors({
+      name: 'Repos',
+      connection_id: null,
+      template: 'not-a-repo',
+      visibility: 'private',
+      deploy_workflow: 'deploy',
+      source_branch: 'main',
+      dns_mode: 'manual',
+      dns_zone_resource_id: null,
+      wildcard_domain: '',
+      edge_address: '',
+      scheme: 'https',
+      port: '',
+      cert_note: ''
+    })
+    expect(errs.connection_id).toBeTruthy()
+    expect(errs.template).toBeTruthy()
+    expect(errs.deploy_workflow).toBeTruthy()
+    expect(errs.name).toBeUndefined()
   })
 
   it('syncSummary is null when no app was made on the target', () => {
