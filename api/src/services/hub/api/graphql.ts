@@ -165,6 +165,13 @@ const bool = (key: string) => ({ type: GraphQLBoolean, ...pick(key) })
 const strList = (key: string) => ({ type: new GraphQLList(GraphQLString), ...pick(key) })
 const raw = { type: GraphQLJSON, description: 'The REST answer as is', resolve: (p: unknown) => p }
 const asList = (v: unknown) => (Array.isArray(v) ? v : [])
+/** `?a=1&b=x` from the arguments that were given (none = ''). Values are always encoded. */
+export function queryString(q: Record<string, string | number | boolean | null | undefined>) {
+  const parts = Object.entries(q)
+    .filter(([, v]) => v !== undefined && v !== null && v !== '')
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+  return parts.length ? `?${parts.join('&')}` : ''
+}
 
 function build() {
   const HubEnvStatus = new GraphQLObjectType({
@@ -435,6 +442,109 @@ function build() {
         args: { environmentId: { type: nn(GraphQLInt) } },
         resolve: (_r, a: { environmentId: number }, ctx) =>
           runOf('creation')(hubRest(ctx, 'GET', `/environments/${id(a.environmentId)}/creation`))
+      },
+      // Third-party providers: the REST answers as they are (secret fields come back masked).
+      providerTypes: {
+        type: GraphQLJSON,
+        description: 'Registered providers, their resource types, fields and the risk vocabulary',
+        resolve: (_r, _a, ctx) => hubRest(ctx, 'GET', '/provider-types')
+      },
+      connections: {
+        type: GraphQLJSON,
+        description: 'Provider connections the caller may see (secrets masked)',
+        args: { provider: { type: GraphQLString } },
+        resolve: (_r, a: { provider?: string }, ctx) =>
+          hubRest(ctx, 'GET', `/connections${queryString({ provider: a.provider })}`)
+      },
+      connection: {
+        type: GraphQLJSON,
+        args: { id: { type: nn(GraphQLInt) } },
+        resolve: (_r, a: { id: number }, ctx) => hubRest(ctx, 'GET', `/connections/${id(a.id)}`)
+      },
+      connectionUnmanaged: {
+        type: GraphQLJSON,
+        description: 'What a connection can see that the Hub does not manage yet (administrators)',
+        args: {
+          id: { type: nn(GraphQLInt) },
+          type: { type: nn(GraphQLString) },
+          cursor: { type: GraphQLString }
+        },
+        resolve: (_r, a: { id: number; type: string; cursor?: string }, ctx) =>
+          hubRest(
+            ctx,
+            'GET',
+            `/connections/${id(a.id)}/unmanaged${queryString({ type: a.type, cursor: a.cursor })}`
+          )
+      },
+      appConnections: {
+        type: GraphQLJSON,
+        description: 'The connections allowed for an app',
+        args: { appId: { type: nn(GraphQLInt) } },
+        resolve: (_r, a: { appId: number }, ctx) =>
+          hubRest(ctx, 'GET', `/apps/${id(a.appId)}/connections`)
+      },
+      resources: {
+        type: GraphQLJSON,
+        description: 'Managed provider resources the caller may see',
+        args: {
+          app: { type: GraphQLInt },
+          environment: { type: GraphQLInt },
+          provider: { type: GraphQLString },
+          connection: { type: GraphQLInt },
+          type: { type: GraphQLString },
+          drift: { type: GraphQLBoolean, description: 'true = only resources that drifted' },
+          scope: { type: GraphQLString, description: 'app or shared' }
+        },
+        resolve: (
+          _r,
+          a: {
+            app?: number
+            environment?: number
+            provider?: string
+            connection?: number
+            type?: string
+            drift?: boolean
+            scope?: string
+          },
+          ctx
+        ) =>
+          hubRest(ctx, 'GET', `/resources${queryString({ ...a, drift: a.drift ? 1 : undefined })}`)
+      },
+      resource: {
+        type: GraphQLJSON,
+        args: { id: { type: nn(GraphQLInt) } },
+        resolve: (_r, a: { id: number }, ctx) => hubRest(ctx, 'GET', `/resources/${id(a.id)}`)
+      },
+      resourceChanges: {
+        type: GraphQLJSON,
+        description: 'Resource changes the caller may see, newest first',
+        args: {
+          app: { type: GraphQLInt },
+          environment: { type: GraphQLInt },
+          connection: { type: GraphQLInt },
+          status: { type: GraphQLString, description: 'One status, or a comma list' },
+          limit: { type: GraphQLInt },
+          before: { type: GraphQLInt }
+        },
+        resolve: (
+          _r,
+          a: {
+            app?: number
+            environment?: number
+            connection?: number
+            status?: string
+            limit?: number
+            before?: number
+          },
+          ctx
+        ) => hubRest(ctx, 'GET', `/resource-changes${queryString(a)}`)
+      },
+      resourceChange: {
+        type: GraphQLJSON,
+        description: 'One resource change, step by step',
+        args: { id: { type: nn(GraphQLInt) } },
+        resolve: (_r, a: { id: number }, ctx) =>
+          hubRest(ctx, 'GET', `/resource-changes/${id(a.id)}`)
       }
     }
   })
@@ -475,6 +585,20 @@ function build() {
             kind: a.kind,
             version: a.version
           })
+      },
+      planResourceChanges: {
+        type: GraphQLJSON,
+        description:
+          'Plans changes to managed provider resources (nothing is written at the provider). Starting, cancelling, resuming, undoing, approving or declining a change, and connection or adopt writes, are REST only. Never pass secret values here: a plan keeps them sealed and a person sends them from the Hub.',
+        args: {
+          input: {
+            type: nn(GraphQLJSON),
+            description:
+              '{connectionId, scope, appId?, environmentId?, ops: [...]} as POST /resources/plan'
+          }
+        },
+        resolve: (_r, a: { input: unknown }, ctx) =>
+          hubRest(ctx, 'POST', '/resources/plan', a.input)
       },
       planAppCreation: {
         type: GraphQLJSON,

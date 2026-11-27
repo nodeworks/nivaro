@@ -94,6 +94,54 @@ describe('nivaro.hub', () => {
   })
 })
 
+describe('nivaro.hub provider calls', () => {
+  it('reads connections, resources and changes with their filters', async () => {
+    const { fetch, calls } = server(['hub'], {
+      'GET /api/hub/connections': { body: { data: [{ id: 7, provider: 'github' }] } },
+      'GET /api/hub/resources': { body: { data: [] } },
+      'GET /api/hub/resource-changes/11': { body: { data: { id: 11, status: 'applied' } } },
+      'GET /api/hub/connections/7/unmanaged': { body: { data: { items: [], cursor: null } } }
+    })
+    const n = createNivaro('http://hub', { fetch })
+    assert.deepEqual(await n.hub.listConnections('github'), [{ id: 7, provider: 'github' }])
+    await n.hub.listResources({ app: 3, drift: 1 })
+    assert.equal((await n.hub.readResourceChange(11)).status, 'applied')
+    await n.hub.listUnmanaged(7, { type: 'github.repository' })
+    const url = (path) => calls.find((c) => c.path === path)
+    assert.ok(url('/api/hub/connections'))
+    assert.ok(url('/api/hub/resources'))
+  })
+
+  it('plans with a POST body; starting a change sends the plan hash', async () => {
+    const { fetch, calls } = server(['hub'], {
+      'POST /api/hub/resources/plan': { body: { data: { changeId: 5, plan_hash: 'h' } } },
+      'POST /api/hub/resource-changes/5/start': { body: { data: { id: 5, status: 'applying' } } }
+    })
+    const n = createNivaro('http://hub', { fetch })
+    const plan = await n.hub.planResources({
+      connectionId: 7,
+      scope: 'app',
+      appId: 3,
+      environmentId: 9,
+      ops: [{ action: 'create', type: 'github.repository', fields: { name: 'web' } }]
+    })
+    assert.equal(plan.changeId, 5)
+    await n.hub.startResourceChange(5, { planHash: 'h', confirm: 'web' })
+    const start = calls.find((c) => c.path === '/api/hub/resource-changes/5/start')
+    assert.equal(start.method, 'POST')
+    assert.deepEqual(JSON.parse(start.body), { planHash: 'h', confirm: 'web' })
+  })
+
+  it('encodes ids and builds the action paths', () => {
+    assert.equal(hubCommands.cancelResourceChange(5)._path, '/hub/resource-changes/5/cancel')
+    assert.equal(hubCommands.undoResourceChange(5)._path, '/hub/resource-changes/5/undo')
+    assert.equal(hubCommands.approveResourceChange(5, { planHash: 'h' })._method, 'POST')
+    assert.equal(hubCommands.setAppConnections(3, [1, 2])._method, 'PUT')
+    assert.deepEqual(hubCommands.setAppConnections(3, [1, 2])._body, { connection_ids: [1, 2] })
+    assert.equal(hubCommands.adoptResource(7, { type: 't', externalId: 'x', scope: 'shared' })._path, '/hub/connections/7/adopt')
+  })
+})
+
 describe('nivaro.hub through a wrapped client', () => {
   it('a Proxy that replaces request also carries the Hub calls (read-only wrappers refuse them)', async () => {
     const { fetch, calls } = server(['hub'], { 'GET /api/hub/apps': { body: { data: [] } } })
