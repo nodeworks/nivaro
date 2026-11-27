@@ -384,6 +384,7 @@ import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
 } from './sections/hub-providers-redis.js'
+import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1259,6 +1260,7 @@ export const navSections: NavGroup[] = [
       hubProvidersDockerhubDocs,
       hubProvidersNeonDocs,
       hubProvidersEntraDocs,
+      hubProvidersSlackDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]
