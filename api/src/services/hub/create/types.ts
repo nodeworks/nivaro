@@ -20,7 +20,7 @@ import type { HubTargetRow } from './targets.js'
  * pipeline, phase 3), a Docker driver (the Hub agent deploys the stack itself, phase 4's stack
  * path) or a shared deployment (the app is placed on it, phase 6's place-shared).
  */
-export type CreationKind = 'gitlab' | 'docker' | 'shared'
+export type CreationKind = 'gitlab' | 'docker' | 'shared' | 'github'
 
 /** A Docker creation's stack settings, the same for every environment (publish port aside). */
 export interface DockerStackInput {
@@ -36,6 +36,8 @@ export interface DockerStackInput {
 
 export type CreateTargetInput =
   | { kind: 'gitlab'; id: number }
+  /** Task 11a: a GitHub target (github-target.ts); its repository is a provider resource. */
+  | { kind: 'github'; id: number }
   | { kind: 'docker'; driver_id: number; stack?: DockerStackInput }
   | { kind: 'shared'; shared_id: number; pool_max?: number }
 
@@ -63,6 +65,12 @@ export interface CreateAppInput {
     database:
       | { server_id: number; database_name?: string; login_name?: string }
       | { database_id: number }
+    /**
+     * Task 11a: parts the Hub makes for this environment through a provider connection (a Vercel
+     * project, an Auth0 application, a Route 53 record, an RDS instance) — provider-step.ts.
+     * Field values may hold a secret: the list is sealed at the start, never answered.
+     */
+    providers?: Array<{ connection_id: number; type: string; fields?: Record<string, unknown> }>
   }>
 }
 
@@ -97,6 +105,16 @@ export interface CreationFacts {
   kind?: CreationKind
   docker?: DockerCreationFacts
   shared?: SharedCreationFacts
+  /**
+   * Task 11a: the hosted zone of a route53 target / Docker driver (dns-route53.ts route53Zone);
+   * absent when the names are not made in Route 53.
+   */
+  dnsZone?: { ok: boolean; message?: string }
+  /** Task 11a: a GitHub creation's target and what stops it (github-target.ts). */
+  github?: {
+    target: import('./github-target.js').HubGithubTargetRow | null
+    problem: string | null
+  }
 }
 
 /** What the Hub agent and the Hub say about a Docker creation (gather.ts, bounded looks). */
@@ -158,6 +176,10 @@ export interface CreationPlanEnvironment {
   stack_name: string | null
   /** Docker: the stack's size and Redis mode, and its published port on a publish edge. */
   stack?: { size: string; redis: string; publish_port: number | null }
+  /** Task 11a: the provider parts the providers step makes (types and connections only). */
+  providers?: Array<{ type: string; connection_id: number }>
+  /** Task 11a: the name is a Route 53 record the providers step makes (DNS mode route53). */
+  dns_record?: boolean
   /** Shared: the database connections this environment may hold on the deployment. */
   pool_max?: number
   database: CreationPlanDatabase
@@ -190,9 +212,12 @@ export type CreationStepKey =
   | 'template'
   | 'stack'
   | 'place'
+  /** Task 11a: provider parts (provider-step.ts), right after the database. */
+  | 'providers'
 
 export const STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
   'database',
+  'providers',
   'repository',
   'variables',
   'config',
@@ -207,6 +232,7 @@ export const STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
 /** A Docker creation: the stack (placement, component, settings), then phase 4's agent deploy. */
 export const DOCKER_STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
   'database',
+  'providers',
   'stack',
   'deploy',
   'name',
@@ -217,18 +243,47 @@ export const DOCKER_STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
 ])
 
 /** A shared creation: the database, then place-shared (list, schema, first administrator). */
-export const SHARED_STEP_ORDER: readonly CreationStepKey[] = Object.freeze(['database', 'place'])
+export const SHARED_STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
+  'database',
+  'providers',
+  'place'
+])
+
+/** Task 11a: a GitHub creation (github-steps.ts): no config commit, the workflow deploys. */
+export const GITHUB_STEP_ORDER: readonly CreationStepKey[] = Object.freeze([
+  'database',
+  'providers',
+  'repository',
+  'variables',
+  'deploy',
+  'name',
+  'link',
+  'admin',
+  'template'
+])
 
 /** The steps of a creation of this kind, in order. */
 export function stepOrderFor(kind: CreationKind | undefined): readonly CreationStepKey[] {
-  return kind === 'docker' ? DOCKER_STEP_ORDER : kind === 'shared' ? SHARED_STEP_ORDER : STEP_ORDER
+  return kind === 'docker'
+    ? DOCKER_STEP_ORDER
+    : kind === 'shared'
+      ? SHARED_STEP_ORDER
+      : kind === 'github'
+        ? GITHUB_STEP_ORDER
+        : STEP_ORDER
 }
 
 /** The kind a request asks for: `target.kind`, else GitLab (the phase-3 `target_id`). */
 export function creationKindOf(input: unknown): CreationKind {
   const t = (input as { target?: { kind?: unknown } } | null)?.target
   const k = t && typeof t === 'object' ? t.kind : undefined
-  return k === 'docker' || k === 'shared' ? k : 'gitlab'
+  return k === 'docker' || k === 'shared' || k === 'github' ? k : 'gitlab'
+}
+
+/** Task 11a: the GitHub target id a request names (`target.id` of kind github), else NaN. */
+export function githubTargetIdOf(input: unknown): number {
+  const t = (input as { target?: { kind?: unknown; id?: unknown } } | null)?.target
+  return t && typeof t === 'object' && t.kind === 'github' ? Number(t.id) : Number.NaN
 }
 
 /** The GitLab target id a request names (`target.id`, else `target_id`). */

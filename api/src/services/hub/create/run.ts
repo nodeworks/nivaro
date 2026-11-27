@@ -75,9 +75,12 @@ import {
   destSteps
 } from './docker-steps.js'
 import { type GatherCreationDeps, gatherCreationFacts } from './gather.js'
+import { GITHUB_STEPS, type GithubStepContext } from './github-steps.js'
+import { getGithubTarget, type HubGithubTargetRow } from './github-target.js'
 import { requestFirstAdmin } from './link-client.js'
 import { checkName } from './name-check.js'
 import { buildCreationPlan } from './plan.js'
+import { providerPartsOf } from './provider-parts.js'
 import {
   awaitTargetSyncs,
   type BaseStepContext,
@@ -121,6 +124,7 @@ import {
   type CreationPlan,
   type CreationStepState,
   creationKindOf,
+  githubTargetIdOf,
   gitlabTargetIdOf,
   stepOrderFor
 } from './types.js'
@@ -270,7 +274,9 @@ export async function startCreation(
     if (!plan.ok)
       throw new CreationError(plan.blockers[0].code, plan.blockers[0].text, 409, plan.blockers)
     try {
-      return await writeCreation(input, plan, facts, user)
+      const written = await writeCreation(input, plan, facts, user)
+      await allowCreationConnections(written.app_id, input, facts)
+      return written
     } catch (err) {
       if (err instanceof HubDbError) throw new CreationError(err.code, err.message, 409)
       if (err instanceof HubSecretError) throw new CreationError(err.code, err.message, 400)
@@ -279,6 +285,35 @@ export async function startCreation(
   })
   for (const e of out.environments) launchLeg(e.id, user, r, ['queued'])
   return out
+}
+
+/**
+ * Task 11a: the provider connections a Hub admin created the app with (its GitHub target's, its
+ * environments' provider parts') join the app's allowed list, so its owners can later promote
+ * and change those parts under the usual owner rules. Best effort: a Hub without the provider
+ * tables keeps none.
+ */
+async function allowCreationConnections(
+  appId: number,
+  input: CreateAppInput,
+  facts: CreationFacts
+): Promise<void> {
+  const ids = new Set<number>()
+  if (facts.github?.target) ids.add(facts.github.target.connection_id)
+  for (const e of input.environments ?? []) {
+    const pp = providerPartsOf(e.providers)
+    if (pp.ok) for (const p of pp.parts) ids.add(p.connection_id)
+  }
+  if (!ids.size) return
+  try {
+    const { appAllowedConnections, setAppAllowedConnections } = await import(
+      '../providers/store.js'
+    )
+    const have = await appAllowedConnections(appId)
+    await setAppAllowedConnections(appId, [...have, ...ids])
+  } catch {
+    /* no provider tables: nothing to allow */
+  }
 }
 
 async function writeCreation(
@@ -326,7 +361,12 @@ async function writeCreation(
         adopted: false,
         extensions: JSON.stringify(extensions),
         created_by: user.id || null,
-        target_id: kind === 'gitlab' ? gitlabTargetIdOf(input) : null,
+        target_id:
+          kind === 'gitlab'
+            ? gitlabTargetIdOf(input)
+            : kind === 'github'
+              ? githubTargetIdOf(input)
+              : null,
         oidc: signin
           ? JSON.stringify({ issuer: str(signin.issuer), client_id: str(signin.client_id) })
           : null,
@@ -383,15 +423,17 @@ async function writeCreation(
         database_id: databaseId,
         ...(kind === 'docker'
           ? { target: { kind: 'docker' as const, driver_id: Number(tgt.driver_id) } }
-          : kind === 'shared'
-            ? {
-                target: {
-                  kind: 'shared' as const,
-                  shared_id: Number(tgt.shared_id),
-                  pool_max: pe.pool_max ?? 5
+          : kind === 'github'
+            ? { target: { kind: 'github' as const, target_id: githubTargetIdOf(input) } }
+            : kind === 'shared'
+              ? {
+                  target: {
+                    kind: 'shared' as const,
+                    shared_id: Number(tgt.shared_id),
+                    pool_max: pe.pool_max ?? 5
+                  }
                 }
-              }
-            : {}),
+              : {}),
         planned: {
           hub_url: hubUrl,
           digest: kind === 'shared' ? '' : digest,
@@ -400,6 +442,13 @@ async function writeCreation(
           base_url: pe.base_url as string,
           source_branch: pe.source_branch,
           nonce: randomBytes(18).toString('base64url'),
+          // Task 11a: the environment's provider parts, sealed (a field may hold a secret).
+          ...(() => {
+            const pp = providerPartsOf(input.environments[i].providers)
+            return pp.ok && pp.parts.length
+              ? { providers_sealed: sealSecret(JSON.stringify(pp.parts)) }
+              : {}
+          })(),
           // Sealed as validated (gather.ts): the stack step stores them as they are.
           ...(docker
             ? {
@@ -513,6 +562,8 @@ async function loadContext(row: CreationRow): Promise<{
   target: HubTargetRow | null
   /** A Docker or shared creation's driver or deployment (null for GitLab ones). */
   dest: CreationDest | null
+  /** Task 11a: a GitHub creation's target. */
+  github: HubGithubTargetRow | null
   dnsMode: 'automatic' | 'manual'
 }> {
   const a = (await db(APPS).where({ id: row.app_id }).first()) as
@@ -541,6 +592,7 @@ async function loadContext(row: CreationRow): Promise<{
   const t = row.made.target
   let target: HubTargetRow | null = null
   let dest: CreationDest | null = null
+  let github: HubGithubTargetRow | null = null
   let dnsMode: 'automatic' | 'manual' = 'automatic'
   if (t?.kind === 'docker') {
     const driver = await getDriver(t.driver_id)
@@ -552,6 +604,11 @@ async function loadContext(row: CreationRow): Promise<{
     const shared = await getShared(t.shared_id)
     if (!shared) throw new StepFailure('BAD_TARGET', 'The creation’s shared deployment is gone.')
     dest = { kind: 'shared', shared }
+  } else if (t?.kind === 'github') {
+    // Task 11a: a GitHub target (github-steps.ts).
+    github = await getGithubTarget(t.target_id)
+    if (!github) throw new StepFailure('BAD_TARGET', 'The creation’s GitHub target is gone.')
+    dnsMode = github.config.dns_mode === 'manual' ? 'manual' : 'automatic'
   } else {
     target = a.target_id == null ? null : await getTargetRow(Number(a.target_id))
     if (!target) throw new StepFailure('BAD_TARGET', 'The app’s target is gone.')
@@ -581,6 +638,7 @@ async function loadContext(row: CreationRow): Promise<{
     },
     target,
     dest,
+    github,
     dnsMode
   }
 }
@@ -709,7 +767,7 @@ async function walk(
 
   let current: CreationStepState | null = null
   try {
-    const { app, env, target, dest, dnsMode } = await loadContext(row)
+    const { app, env, target, dest, github, dnsMode } = await loadContext(row)
     // Every secret this leg could print, known before any step runs (a retry that resumes
     // mid-leg opens no variable step, yet its deploy lines may echo one).
     const remember = (plain: string | null | undefined) => {
@@ -756,17 +814,21 @@ async function walk(
       deps: { ...r.step, sleep: guardedSleep(r.step.sleep, signal) }
     }
     // A GitLab creation walks steps.ts STEPS with its target; Docker and shared ones docker-steps.
-    const ctx: BaseStepContext = target
-      ? ({ ...base, target, tokenUserId: tokenUserMemo(target) } as StepContext)
-      : ({
-          ...base,
-          dest: dest as CreationDest,
-          envLock: { lock: r.lock, token: lockToken },
-          cancelRequested: async () => entry.cancel || (await r.flags.cancelRequested(creationId))
-        } as DestStepContext)
-    const table = target
-      ? (STEPS as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
-      : (destSteps(r.dest) as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
+    const ctx: BaseStepContext = github
+      ? ({ ...base, github } as GithubStepContext)
+      : target
+        ? ({ ...base, target, tokenUserId: tokenUserMemo(target) } as StepContext)
+        : ({
+            ...base,
+            dest: dest as CreationDest,
+            envLock: { lock: r.lock, token: lockToken },
+            cancelRequested: async () => entry.cancel || (await r.flags.cancelRequested(creationId))
+          } as DestStepContext)
+    const table = github
+      ? (GITHUB_STEPS as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
+      : target
+        ? (STEPS as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
+        : (destSteps(r.dest) as Record<string, (c: BaseStepContext) => Promise<StepResult>>)
 
     for (const key of stepOrderFor(creationKind(row.made))) {
       const state = steps.find((s) => s.key === key) as CreationStepState
@@ -1289,7 +1351,7 @@ export interface CreationView {
   app_id: number
   app_key: string
   /** Where the app goes (gap `create`): its kind and the target's, driver's or deployment's name. */
-  target: { kind: 'gitlab' | 'docker' | 'shared'; name: string | null }
+  target: { kind: 'gitlab' | 'docker' | 'shared' | 'github'; name: string | null }
   environment_id: number
   env_key: string
   status: CreationStatus
@@ -1444,7 +1506,11 @@ export async function readCreation(envId: number): Promise<CreationView | null> 
     app_key: app?.key ?? '',
     target: {
       kind,
-      name: target?.name ?? dockerDriver?.name ?? sharedDep?.name ?? null
+      name:
+        target?.name ??
+        dockerDriver?.name ??
+        sharedDep?.name ??
+        (t?.kind === 'github' ? ((await getGithubTarget(t.target_id))?.name ?? null) : null)
     },
     environment_id: row.environment_id,
     env_key: env?.key ?? '',

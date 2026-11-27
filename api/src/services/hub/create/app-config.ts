@@ -16,7 +16,7 @@
 import { createHash } from 'node:crypto'
 import { isIP } from 'node:net'
 import type { HubDbEngine } from '../db/connection.js'
-import { DNS_LABEL, dnsSuffix, httpAllowed } from './dns.js'
+import { DNS_LABEL, dnsSuffix, httpAllowed, namesAutomatically } from './dns.js'
 import type { HubTargetConfig } from './targets.js'
 
 /**
@@ -235,14 +235,13 @@ export function hostnameFor(
     if (suffix) {
       const under = host.endsWith(`.${suffix}`)
       const direct = under && !host.slice(0, -suffix.length - 1).includes('.')
-      if (target.dns_mode === 'automatic' ? !direct : !under) {
+      if (namesAutomatically(target.dns_mode) ? !direct : !under) {
         return {
           ok: false,
           code: 'HOSTNAME_OUTSIDE_WILDCARD',
-          message:
-            target.dns_mode === 'automatic'
-              ? `The name must be one label directly under ${suffix}.`
-              : `The name must end in .${suffix}.`
+          message: namesAutomatically(target.dns_mode)
+            ? `The name must be one label directly under ${suffix}.`
+            : `The name must end in .${suffix}.`
         }
       }
     }
@@ -540,7 +539,7 @@ export function deployProjectVariables(target: HubTargetConfig): DeployProjectVa
     }
   ]
   const suffix = dnsSuffix(target.wildcard_domain)
-  if (target.dns_mode === 'automatic' && !suffix)
+  if (namesAutomatically(target.dns_mode) && !suffix)
     throw new AppConfigError('An automatic target needs its wildcard domain.')
   if (suffix)
     out.push({ key: 'HUB_HOST_SUFFIX', value: suffix, scope: '*', masked: false, protected: true })

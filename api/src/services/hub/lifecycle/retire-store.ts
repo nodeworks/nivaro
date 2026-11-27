@@ -85,6 +85,18 @@ export interface RetirePlan {
   app: { id: number; key: string; name: string }
   environments: RetireEnvPlan[]
   production: boolean
+  /**
+   * Task 11a: the provider resources the Hub manages for the app when the plan was made (the
+   * `remove` step deletes every live one it finds then). Not part of the plan hash.
+   */
+  resources?: Array<{
+    id: number
+    type: string
+    provider: string
+    name: string | null
+    environment_id: number | null
+    connection_id: number
+  }>
 }
 
 export interface Retirement {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isProviderKind, providerStepFor } from './promote-providers.js'
 import type {
   HubComponent,
   HubDeployKind,
@@ -41,7 +42,7 @@ const realDigest = (d: string | 'present' | null): d is string => !!d && d !== '
  * against the older API while the portal redeploys, and a GitLab refusal of the portal's rerun
  * stops the rollback before the API moved.
  */
-export function runOrder<T extends { position: number; kind: 'api' | 'frontend' | 'stack' }>(
+export function runOrder<T extends { position: number; kind: string }>(
   steps: T[],
   kind: HubDeployKind
 ): T[] {
@@ -169,7 +170,10 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
     }
   }
 
-  const missingDrivers = components.filter((c) => !input.drivers[c.driver_id])
+  // Task 11a: a provider component deploys through its resource, never a driver.
+  const missingDrivers = components.filter(
+    (c) => !isProviderKind(c.kind) && !input.drivers[c.driver_id]
+  )
   if (missingDrivers.length)
     block(
       'NO_DRIVER',
@@ -188,8 +192,19 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   }
 
   const steps: PromotionStep[] = components.map((c) =>
-    c.kind === 'stack' ? stackStepFor(c, input) : stepFor(c, input)
+    isProviderKind(c.kind)
+      ? providerStepFor(c, input.providers?.[c.position], version)
+      : c.kind === 'stack'
+        ? stackStepFor(c, input)
+        : stepFor(c, input)
   )
+  // Task 11a: a provider step names what it makes live, or the plan stops.
+  for (const c of components)
+    if (isProviderKind(c.kind)) {
+      const f = input.providers?.[c.position]
+      if (!f) block('PROVIDER_NOT_READY', `${c.name}: the Hub did not read what it would make live`)
+      else if (f.problem) block('PROVIDER_NOT_READY', f.problem)
+    }
   for (const s of steps) {
     // A move's boot-maintenance line is not the build: never a changed image (FW-4).
     const onTarget = pinContent(input.pinOnTarget?.[s.position])
@@ -272,7 +287,7 @@ export function buildPromotionPlan(input: PlanInput): PromotionPlan {
   for (const c of components)
     for (const w of input.stacks?.[c.position]?.warnings ?? [])
       if (!warnings.some((x) => x.code === w.code)) warnings.push(w)
-  const lines = stackAwareLines(input, components, steps, blockers.length > 0)
+  const lines = providerAwareLines(input, components, steps, blockers.length > 0)
   for (const w of warnings) lines.push(`warning ${w.code}: ${w.text}`)
 
   return {
@@ -327,7 +342,11 @@ export function planHash(input: PlanInput, steps: PromotionStep[]): string {
         s.stack
           ? Object.entries(s.stack.extensions).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
           : null,
-        s.stack?.agentOrigin ?? null
+        s.stack?.agentOrigin ?? null,
+        // Task 11a, provider steps only (other steps' hashes are unchanged): what is made live.
+        ...(s.provider
+          ? [[s.provider.kind, s.provider.connectionId, s.provider.resourceId, s.provider.ref]]
+          : [])
       ])
   }
   return createHash('sha256').update(JSON.stringify(body)).digest('hex')
@@ -663,6 +682,46 @@ function stackBlockers(
 }
 
 /** The phase-2 lines with each stack step's lines in place of a merge/job/verify for it. */
+/** Task 11a: the provider steps' own lines after the driver steps' (never their push/deploy lines). */
+function providerAwareLines(
+  input: PlanInput,
+  components: HubComponent[],
+  steps: PromotionStep[],
+  refused: boolean
+): string[] {
+  const prov = steps.filter((s) => s.driver === 'provider')
+  if (!prov.length) return stackAwareLines(input, components, steps, refused)
+  const rest = steps.filter((s) => s.driver !== 'provider')
+  const lines = rest.length
+    ? stackAwareLines(
+        input,
+        components.filter((c) => rest.some((s) => s.position === c.position)),
+        rest,
+        refused
+      )
+    : [
+        `${input.target.key} is currently ${input.targetState ? (STATE_LABEL[input.targetState] ?? input.targetState) : 'not checked yet'}${input.targetVersion ? ` (runs ${input.targetVersion})` : ''}`,
+        input.kind === 'promote'
+          ? `promote ${input.version} from ${input.previous?.key ?? '(none)'} to ${input.target.key}`
+          : `roll ${input.target.key} back from ${input.targetVersion ?? '(unknown)'} to ${input.version}`
+      ]
+  for (const s of runOrder(prov, input.kind)) {
+    const p = s.provider
+    const name = cap(s.component)
+    if (!p?.ref) continue
+    lines.push(
+      p.kind === 'github_actions'
+        ? `${name}: run its GitHub Actions workflow on ${p.refLabel} with version ${input.version}`
+        : p.kind === 'vercel'
+          ? `${name}: ${input.kind === 'rollback' ? 'roll Vercel production back to' : 'make live on Vercel'} ${p.refLabel}`
+          : `${name}: point its EAS update channel at ${p.refLabel}`
+    )
+    if (!refused && s.verifyUrl)
+      lines.push(`${name}: check that ${urlForLog(s.verifyUrl)} reports ${s.want} twice in a row`)
+  }
+  return lines
+}
+
 function stackAwareLines(
   input: PlanInput,
   components: HubComponent[],

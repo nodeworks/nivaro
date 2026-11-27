@@ -72,7 +72,7 @@ export async function approveChange(
   const out = await beginRun(row, actor, {
     expect: 'pending_approval',
     checklistRunId: plan.checklistRunId ?? null,
-    claimChecklist: true,
+    claimChecklist: !plan.origin,
     approvedBy: actor.id,
     audit: 'hub-resource-change-approve'
   })

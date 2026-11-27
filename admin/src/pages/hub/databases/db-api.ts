@@ -399,6 +399,10 @@ export const DB_CODE_COPY: Record<string, { title: string; hint?: string }> = {
     'The Hub may not drop this database',
     'It drops only a database it made itself on an automatic server. Detach it instead.'
   ),
+  BAD_RESOURCE: copy(
+    'That RDS instance cannot be this server',
+    'Pick an RDS instance the Hub manages that has an address already, of the same engine as the server.'
+  ),
   // What a check found, when a refusal carries it
   DATABASE_UNREACHABLE: copy(CHECK_COPY.unreachable.title, CHECK_COPY.unreachable.hint),
   DATABASE_TOO_OLD: copy(CHECK_COPY.too_old.title, CHECK_COPY.too_old.hint),

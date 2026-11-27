@@ -54,6 +54,8 @@ export type RunTrigger =
   | 'move'
   | 'upgrade'
   | 'manual'
+  /** A provider resource change that touched something the environment serves (Task 11a). */
+  | 'resource'
 /** `unverified`: checks failed only because they could not be judged — never rolled back. */
 export type RunStatus = 'queued' | 'running' | 'passed' | 'failed' | 'unverified'
 
@@ -100,7 +102,8 @@ export const TRIGGER_WORDS: Record<RunTrigger, string> = {
   extension: 'After an extension deploy',
   move: 'After a move',
   upgrade: 'After a shared upgrade',
-  manual: 'Run by hand'
+  manual: 'Run by hand',
+  resource: 'After a resource change'
 }
 
 /** Signed-in reads + saved queries one suite may hold (the app runs no more in one go). */

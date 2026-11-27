@@ -55,6 +55,8 @@ export interface CreationMade {
   target?:
     | { kind: 'docker'; driver_id: number }
     | { kind: 'shared'; shared_id: number; pool_max: number }
+    /** Task 11a: a GitHub target (github-target.ts). */
+    | { kind: 'github'; target_id: number }
   /** Settled at the start (startCreation), so a retry uses what was planned. */
   planned?: {
     hub_url: string
@@ -65,6 +67,11 @@ export interface CreationMade {
     source_branch: string
     /** Unguessable (base64url of 18 random bytes): the fork's mark. Never answered. */
     nonce: string
+    /**
+     * Task 11a: the environment's provider parts as the request gave them, sealed (a field may hold
+     * a secret: an RDS master password). Opened only by the providers step. Never answered.
+     */
+    providers_sealed?: string | null
     /**
      * Docker: the stack settings the stack step stores. `secrets` is the sealed map exactly as
      * nivaro_hub_stack_settings keeps it (one sealed JSON of per-key sealed values). Never answered.
@@ -86,6 +93,8 @@ export interface CreationMade {
   operator_ack?: { at: string; by: string | null } | null
   /** CI variable key → outcome (created / updated / kept). */
   variables?: Record<string, string>
+  /** Task 11a: connection id → the resource change the providers step planned for it. */
+  provider_changes?: Record<string, number>
 }
 
 /** The keys of `made` shared by every environment of an app (written to all its rows). */
@@ -144,7 +153,7 @@ function iso(v: unknown): string | null {
 /** The kind of a creation, from what it stored at its start (no `target` = GitLab). */
 export function creationKind(made: CreationMade | null | undefined): CreationKind {
   const k = made?.target?.kind
-  return k === 'docker' || k === 'shared' ? k : 'gitlab'
+  return k === 'docker' || k === 'shared' || k === 'github' ? k : 'gitlab'
 }
 
 /** Every step pending, in the kind's order. */

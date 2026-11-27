@@ -4,6 +4,14 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { idParam, isAppOwner } from '../services/hub/apps.js'
 import { gatherCreationFacts } from '../services/hub/create/gather.js'
+import {
+  createGithubTarget,
+  getGithubTarget,
+  githubTargetProblem,
+  listGithubTargets,
+  updateGithubTarget,
+  validateGithubTargetInput
+} from '../services/hub/create/github-target.js'
 import { buildCreationPlan } from '../services/hub/create/plan.js'
 import {
   awaitTargetSyncs,
@@ -206,7 +214,9 @@ const SERVER_FIELDS = [
   'trust_server_cert',
   'collation',
   'user_host',
-  'notes'
+  'notes',
+  // Task 11a: the managed RDS instance this server is
+  'resource_id'
 ] as const
 
 function dbServerRoutes(app: FastifyInstance) {
@@ -664,11 +674,25 @@ function envDatabaseRoutes(app: FastifyInstance) {
 
 function targetRoutes(app: FastifyInstance) {
   app.get('/targets', { preHandler: requireAdmin }, async () => {
-    return { data: (await listTargets()).map(publicTarget) }
+    // Task 11a: GitHub targets (no token of their own) beside the GitLab ones.
+    return { data: [...(await listTargets()).map(publicTarget), ...(await listGithubTargets())] }
   })
 
   app.post('/targets', { preHandler: requireAdmin }, async (req, reply) =>
     guarded(reply, async () => {
+      if (body(req).kind === 'github') {
+        const gh = await validateGithubTargetInput(body(req))
+        if (!gh.ok) return fail(reply, 400, gh.code, gh.message)
+        const made = await createGithubTarget(gh.row)
+        await logActivity({
+          action: 'create',
+          user: userId(req),
+          collection: TARGETS,
+          item: String(made.id),
+          req
+        })
+        return { data: made }
+      }
       const checked = validateTargetInput(body(req))
       if (!checked.ok) return fail(reply, 400, checked.code, checked.message)
       const created = await createTarget(checked.row)
@@ -685,6 +709,25 @@ function targetRoutes(app: FastifyInstance) {
 
   app.patch('/targets/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idOf(req)
+    // Task 11a: a GitHub target (no token, no app sync: its apps' parts are provider resources).
+    const github = id === null ? null : await getGithubTarget(id)
+    if (id !== null && github)
+      return guarded(reply, async () => {
+        // A target keeps its kind: `kind` in the body is not read here.
+        const gh = await validateGithubTargetInput(body(req), github)
+        if (!gh.ok) return fail(reply, 400, gh.code, gh.message)
+        const updated = await updateGithubTarget(id, gh.row)
+        if (!updated) return notFound(reply)
+        await logActivity({
+          action: 'update',
+          user: userId(req),
+          collection: TARGETS,
+          item: String(id),
+          req,
+          changed_fields: fieldsOf(body(req), ['name', 'connection_id', 'config'])
+        })
+        return { data: updated }
+      })
     const existing = id === null ? null : await getTargetRow(id)
     if (id === null || !existing) return notFound(reply)
     const b = body(req)
@@ -737,6 +780,17 @@ function targetRoutes(app: FastifyInstance) {
 
   app.post('/targets/:id/test', { preHandler: requireAdmin }, async (req, reply) => {
     const id = idOf(req)
+    const github = id === null ? null : await getGithubTarget(id)
+    if (github) {
+      // Task 11a: the connection itself is tested on Connections; here its fit for creating apps.
+      const why = await githubTargetProblem(github)
+      return {
+        data: {
+          ok: !why,
+          checks: [{ id: 'connection', ok: !why, text: why ?? 'The GitHub connection is usable.' }]
+        }
+      }
+    }
     if (id === null || !(await getTargetRow(id))) return notFound(reply)
     return guarded(reply, async () => ({ data: await testTarget(id) }))
   })

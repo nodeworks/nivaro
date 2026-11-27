@@ -244,6 +244,7 @@ describe('buildCreationPlan — a clean two-environment plan', () => {
   it('names the step order', () => {
     expect(STEP_ORDER).toEqual([
       'database',
+      'providers',
       'repository',
       'variables',
       'config',

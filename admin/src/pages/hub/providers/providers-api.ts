@@ -729,6 +729,10 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
     title: 'Something with that name already exists at the provider',
     hint: 'The Hub did not make it. Adopt it from the connection’s Not managed list instead.'
   },
+  ORIGIN_INVALID: {
+    title: 'The run this change belongs to has ended',
+    hint: 'It was made by a promotion, a creation or a retirement that is no longer running. Start that again, or plan the change yourself.'
+  },
   NOT_IMPLEMENTED: {
     title: 'This Hub cannot do that yet',
     hint: 'The Hub on this server is missing this part. Update the Hub, then try again.'

@@ -1,6 +1,6 @@
 import { isIP } from 'node:net'
 import { plainHttpAllowed } from '../../render-peer.js'
-import { httpAllowed } from '../create/dns.js'
+import { httpAllowed, route53ConfigProblem, zoneResourceIdOf } from '../create/dns.js'
 import type { DockerDriverRow, Validation } from '../drivers.js'
 import { nextSecret } from '../secrets.js'
 
@@ -11,8 +11,13 @@ import { nextSecret } from '../secrets.js'
 export interface DockerDriverConfig {
   /** Origin of the Hub agent (https; plain http only where plainHttpAllowed() allows). */
   agent_url: string
-  /** automatic = a wildcard DNS name already points at the edge; manual = someone adds each name. */
-  dns_mode: 'automatic' | 'manual'
+  /**
+   * automatic = a wildcard DNS name already points at the edge; manual = someone adds each name;
+   * route53 (Task 11a) = the Hub makes each name's Route 53 record in a hosted zone it manages.
+   */
+  dns_mode: 'automatic' | 'manual' | 'route53'
+  /** route53: the managed `aws.route53_zone` resource (nivaro_hub_resources.id) names go in. */
+  dns_zone_resource_id?: number | null
   /** automatic: every hostname ends with `.<wildcard_domain>`. */
   wildcard_domain: string | null
   /** manual: what a new name must point at (a DNS name or an address). */
@@ -36,7 +41,8 @@ const CONFIG_KEYS = [
   'wildcard_domain',
   'edge_target',
   'edge_scheme',
-  'edge_port'
+  'edge_port',
+  'dns_zone_resource_id'
 ] as const
 
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
@@ -99,8 +105,8 @@ export function checkDockerConfig(
   }
 
   const mode = pick('dns_mode')
-  if (mode !== 'automatic' && mode !== 'manual') {
-    return bad('Config dns_mode must be automatic or manual.')
+  if (mode !== 'automatic' && mode !== 'manual' && mode !== 'route53') {
+    return bad('Config dns_mode must be automatic, manual or route53.')
   }
 
   let wildcard = optionalText(pick('wildcard_domain'))
@@ -138,6 +144,16 @@ export function checkDockerConfig(
   if (mode === 'automatic' && !wildcard) {
     return bad('Automatic DNS needs wildcard_domain (the domain every stack name ends with).')
   }
+  const zoneId = zoneResourceIdOf(pick('dns_zone_resource_id'))
+  if (zoneId === undefined)
+    return bad('Config dns_zone_resource_id must name a managed Route 53 hosted zone.')
+  const r53 = route53ConfigProblem({
+    dns_mode: mode,
+    dns_zone_resource_id: zoneId,
+    wildcard_domain: wildcard,
+    edge
+  })
+  if (r53) return bad(r53)
   if (mode === 'manual' && !edge) {
     return bad('Manual DNS needs edge_target (what each new name must point at).')
   }
@@ -149,7 +165,8 @@ export function checkDockerConfig(
       wildcard_domain: wildcard,
       edge_target: edge,
       edge_scheme: edgeScheme,
-      edge_port: edgePort
+      edge_port: edgePort,
+      ...(mode === 'route53' ? { dns_zone_resource_id: zoneId } : {})
     }
   }
 }

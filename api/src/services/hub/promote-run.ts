@@ -160,6 +160,8 @@ export type PromoteEvent =
       pipelineId: number | null
       /** phase 4, docker steps: what the stack runs (sha = its spec hash). */
       stack?: StackDeployed
+      /** Task 11a, provider steps: the resource change that made `sha` (the ref) live. */
+      changeId?: number
     }
 
 type GitlabOps = Pick<
@@ -212,6 +214,16 @@ export interface ExecuteDeps {
    * CI_CONFIG_REFUSED to stop the run (nothing written for that step).
    */
   verifyCiConfig?: (s: PromotionStep, c: GitCtx) => Promise<void>
+  /**
+   * Task 11a: runs a provider step's one resource change (default: providerStepRun — the change
+   * engine, carried by this promotion) and answers its change id once it applied; throws when it
+   * did not.
+   */
+  provider?: (
+    s: PromotionStep,
+    ctx: RunContext,
+    o: { signal: AbortSignal; log: (line: string, level?: 'info' | 'warn' | 'error') => void }
+  ) => Promise<{ changeId: number }>
 }
 
 export interface RunOutcome {
@@ -906,15 +918,37 @@ export async function executePlan(
     if (await stopped()) return cancelled(before)
     return null
   }
-  const recordDeploy = async (s: PromotionStep, d: Deployed) => {
+  const recordDeploy = async (s: PromotionStep, d: Deployed, changeId?: number) => {
     deployedAt.set(s.position, d)
     await emit({
       kind: 'deployed',
       position: s.position,
       sha: d.sha,
       pipelineId: d.pipelineId,
-      ...(d.stack ? { stack: d.stack } : {})
+      ...(d.stack ? { stack: d.stack } : {}),
+      ...(changeId != null ? { changeId } : {})
     })
+  }
+
+  /**
+   * Task 11a: a provider step — one change of the change engine, carried by this promotion. Cancel
+   * is asked at the boundary; once the change starts the step waits for it to end.
+   */
+  const providerStep = async (s: PromotionStep): Promise<RunOutcome | null> => {
+    const before = await halt(`deploy ${s.component}`)
+    if (before) return before
+    await begin(`deploy ${s.component}`)
+    const ref = s.provider?.ref
+    if (!s.provider || !ref)
+      throw new PromotionError(
+        'PROVIDER_NOT_READY',
+        `${s.component}: the plan names nothing to make live`
+      )
+    const run = deps.provider ?? providerStepRun
+    const { changeId } = await run(s, ctx, { signal: ac.signal, log })
+    await log(`${s.component}: resource change #${changeId} applied (${s.provider.refLabel})`)
+    await recordDeploy(s, { sha: ref, pipelineId: null }, changeId)
+    return null
   }
 
   /**
@@ -941,6 +975,11 @@ export async function executePlan(
     for (const s of ordered) {
       if (s.driver === 'docker') {
         const stop = await dockerStep(s) // phase 4
+        if (stop) return stop
+        continue
+      }
+      if (s.driver === 'provider') {
+        const stop = await providerStep(s) // Task 11a
         if (stop) return stop
         continue
       }
@@ -1000,6 +1039,70 @@ export async function executePlan(
       ...(code ? { code } : {})
     }
   }
+}
+
+/**
+ * Task 11a: a provider step's change through the change engine, carried by the promotion (origin
+ * `promotion`: the engine re-checks that this deploy row is running on this environment). It acts
+ * for the person who started the promotion, judged again by the engine (an owner needs the
+ * connection on the app's allowed list, production the owners-deploy-production switch). A change
+ * that needs its own typed confirmation or an approval is not started (the step fails and says so).
+ */
+export async function providerStepRun(
+  s: PromotionStep,
+  ctx: RunContext,
+  o: { signal: AbortSignal; log: (line: string, level?: 'info' | 'warn' | 'error') => void }
+): Promise<{ changeId: number }> {
+  const row = (await db(DEPLOYS)
+    .where({ id: ctx.deployId })
+    .first('app_id', 'environment_id', 'started_by')) as
+    | { app_id: number; environment_id: number; started_by: string | null }
+    | undefined
+  if (!row) throw new PromotionError('NOT_FOUND', 'The promotion row is gone')
+  const { hubActorForUser, runCarriedChange } = await import('./providers/hooks/carried.js')
+  const { providerChangeRequest, providerWrittenResource } = await import('./promote-providers.js')
+  const written = (await db('nivaro_hub_resources')
+    .where({ id: providerWrittenResource(s) })
+    .whereNull('deleted_at')
+    .first('environment_id', 'app_id')) as
+    | { environment_id: number | null; app_id: number | null }
+    | undefined
+  if (
+    !written ||
+    Number(written.app_id) !== Number(row.app_id) ||
+    (written.environment_id != null &&
+      Number(written.environment_id) !== Number(row.environment_id))
+  )
+    throw new PromotionError(
+      'PROVIDER_NOT_READY',
+      `${s.component}: the resource it deploys through is no longer this environment's — plan again`
+    )
+  const actor = await hubActorForUser(row.started_by)
+  if (!actor)
+    throw new PromotionError(
+      'PROVIDER_NOT_READY',
+      `${s.component}: the person who started this promotion can no longer act — start it again yourself`
+    )
+  const out = await runCarriedChange({
+    req: providerChangeRequest(s, {
+      appId: Number(row.app_id),
+      envId: written.environment_id == null ? null : Number(row.environment_id),
+      kind: ctx.kind,
+      version: ctx.version
+    }),
+    actor,
+    origin: { kind: 'promotion', deployId: ctx.deployId },
+    signal: o.signal
+  })
+  if (out.status === 'applied') return { changeId: out.changeId }
+  const why =
+    out.status === 'pending_approval'
+      ? 'it waits for a Hub administrator to approve it'
+      : `${out.message}`
+  throw new PromotionError(
+    'PROVIDER_CHANGE_FAILED',
+    `${s.component}: resource change${out.changeId ? ` #${out.changeId}` : ''} did not apply — ${why}`
+  )
 }
 
 /**
@@ -1467,12 +1570,15 @@ async function runPromotion(o: {
     position: number,
     sha: string,
     pipelineId: number | null,
-    stack?: StackDeployed
+    stack?: StackDeployed,
+    changeId?: number
   ) => {
     const st = recorded.steps.find((x) => x.position === position)
     if (!st) return
     st.deployedSha = sha
     st.deployedPipelineId = pipelineId
+    // Task 11a: the resource change that made a provider step's ref live.
+    if (changeId != null) st.deployedChangeId = changeId
     // phase 4: what the stack runs — rollback and restart redeploy exactly this.
     if (stack && st.stack) {
       st.deployedSpecHash = stack.specHash
@@ -1504,7 +1610,7 @@ async function runPromotion(o: {
         onEvent: async (e) => {
           if (e.kind === 'step') await setStep(e.step)
           else if (e.kind === 'deployed')
-            await recordDeploy(e.position, e.sha, e.pipelineId, e.stack)
+            await recordDeploy(e.position, e.sha, e.pipelineId, e.stack, e.changeId)
           else run.log(e.line, e.level)
         },
         deps: {

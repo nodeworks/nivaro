@@ -8,12 +8,15 @@ import {
 } from '../../changes/checklist.js'
 import { moveOpenRefusal } from '../../move-open.js'
 import { envPolicy } from '../../owner-access.js'
+import { archivedRefusal } from '../../releases/archived.js'
 import { freezeRefusal } from '../../releases/freeze.js'
 import { appAllowedConnections, type HubConnectionRow, type HubResourceRow } from '../store.js'
 import type { ResourceScope, ResourceTypeSpec } from '../types.js'
 import {
   type ChangeGate,
+  type ChangeOrigin,
   type HubActor,
+  type PlanAction,
   RESOURCE_CHANGE_CODES,
   type ResourceChangeCode,
   ResourceChangeError
@@ -156,6 +159,8 @@ export interface ChangeGateInput {
   appId: number | null
   environmentId: number | null
   production: boolean | null
+  /** Task 11a: the Hub run carrying the change (already judged by judgeOrigin). */
+  origin?: ChangeOrigin | null
 }
 
 export interface ChangeGateAnswer {
@@ -196,16 +201,38 @@ export async function judgeChangeGates(o: ChangeGateInput): Promise<ChangeGateAn
     }
   }
 
-  const frozen = await freezeRefusal({
-    appIds: o.appId != null ? [o.appId] : [],
-    action: 'resource_change',
-    ...(o.environmentId != null ? { envId: o.environmentId } : {})
-  })
+  const origin = o.origin ?? null
+  const appIds = o.appId != null ? [o.appId] : []
+  const envOpt = o.environmentId != null ? { envId: o.environmentId } : {}
+  let frozen: Awaited<ReturnType<typeof freezeRefusal>>
+  if (origin?.kind === 'promotion') {
+    // The promotion judged its freezes and windows (a rollback is exempt from freezes); only a
+    // retired app is refused here, as the promotion's own start refuses it.
+    frozen = await archivedRefusal({ appIds, envId: o.environmentId ?? null })
+  } else if (origin?.kind === 'retirement') {
+    // As the retirement's own steps: action `retire` (no ENV_ARCHIVED), its own freeze left out.
+    const own = retireSource(origin.retirementId)
+    frozen = await freezeRefusal({
+      appIds,
+      action: 'retire',
+      ...envOpt,
+      ignoreSource: (source) => source === own
+    })
+  } else frozen = await freezeRefusal({ appIds, action: 'resource_change', ...envOpt })
   if (frozen) fail(frozen.code, frozen.message, { freeze: frozen.freeze })
-  else gates.push({ code: 'FROZEN', passed: true, message: 'No freeze or closed deploy window.' })
+  else
+    gates.push({
+      code: 'FROZEN',
+      passed: true,
+      message:
+        origin?.kind === 'promotion'
+          ? 'Part of a promotion: its freezes and deploy windows were judged when it started.'
+          : 'No freeze or closed deploy window.'
+    })
 
   let checklist = false
-  if (o.environmentId != null && o.production) {
+  // A carried change runs under its run's own checklist (promotion, creation, retirement).
+  if (o.environmentId != null && o.production && !origin) {
     try {
       const { entries } = await checklistFor(
         { kind: 'environment', envId: o.environmentId },
@@ -251,4 +278,146 @@ export async function claimResourceChecklist(
       throw refuse(known(e.code) ?? 'CHECKLIST_REQUIRED', e.message, e.extra ?? undefined)
     throw e
   }
+}
+
+// ── Task 11a: carried changes ──
+
+/** The freeze source a retirement writes (lifecycle/retire-steps.ts retireFreezeSource). */
+const retireSource = (id: number) => `retire:${id}`
+
+const ORIGIN_ACTIONS: Record<ChangeOrigin['kind'], readonly PlanAction[]> = {
+  promotion: ['adopt', 'update'],
+  creation: ['create', 'adopt', 'update'],
+  retirement: ['delete']
+}
+
+/**
+ * Throws ORIGIN_INVALID unless `origin` is a run that may carry this change NOW: the right kind of
+ * operations, the same app (and environment), and the run itself still going. Judged at every
+ * plan, start (re-plan) and resume, so an exception never outlives its run.
+ */
+export async function judgeOrigin(
+  origin: ChangeOrigin,
+  c: {
+    scope: ResourceScope
+    appId: number | null
+    environmentId: number | null
+    actions: PlanAction[]
+  }
+): Promise<void> {
+  const bad = (message: string) => refuse('ORIGIN_INVALID', message)
+  const allowed = ORIGIN_ACTIONS[origin?.kind as ChangeOrigin['kind']]
+  if (!allowed) throw bad('Unknown carrier of this change.')
+  if (c.scope !== 'app' || c.appId == null)
+    throw bad("A change carried by a Hub run belongs to one app's resources.")
+  const wrong = c.actions.find((a) => !allowed.includes(a))
+  if (!c.actions.length || wrong)
+    throw bad(
+      origin.kind === 'retirement'
+        ? 'A retirement only deletes resources.'
+        : `A ${origin.kind} cannot ${wrong ?? 'do that to'} resources.`
+    )
+  if (origin.kind === 'promotion') {
+    // The environment's own resources, or the app's (an app-level workflow / project the
+    // environment's component deploys through).
+    const d = (await db('nivaro_hub_deploys')
+      .where({ id: Number(origin.deployId) })
+      .first('id', 'status', 'kind', 'environment_id', 'app_id')) as
+      | Record<string, unknown>
+      | undefined
+    if (
+      !d ||
+      String(d.status) !== 'running' ||
+      !['promote', 'rollback'].includes(String(d.kind)) ||
+      Number(d.app_id) !== Number(c.appId) ||
+      (c.environmentId != null && Number(d.environment_id) !== Number(c.environmentId))
+    )
+      throw bad('The promotion this change belongs to is not running on this environment.')
+    return
+  }
+  if (origin.kind === 'creation') {
+    const r = (await db('nivaro_hub_creations')
+      .where({ id: Number(origin.creationId) })
+      .first('id', 'status', 'environment_id', 'app_id')) as Record<string, unknown> | undefined
+    if (
+      !r ||
+      String(r.status) !== 'running' ||
+      (c.environmentId != null && Number(r.environment_id) !== Number(c.environmentId)) ||
+      Number(r.app_id) !== Number(c.appId)
+    )
+      throw bad('The creation this change belongs to is not running for this environment.')
+    return
+  }
+  const r = (await db('nivaro_hub_retirements')
+    .where({ id: Number(origin.retirementId) })
+    .first('id', 'status', 'step', 'app_id', 'steps')) as Record<string, unknown> | undefined
+  let steps: Array<{ key?: unknown; state?: unknown }> = []
+  try {
+    const raw = typeof r?.steps === 'string' ? JSON.parse(r.steps) : r?.steps
+    if (Array.isArray(raw)) steps = raw
+  } catch {
+    steps = []
+  }
+  const remove = steps.find((s) => s?.key === 'remove')
+  if (
+    !r ||
+    String(r.status) !== 'running' ||
+    String(r.step ?? '') !== 'remove' ||
+    remove?.state !== 'running' ||
+    Number(r.app_id) !== Number(c.appId)
+  )
+    throw bad("The retirement this change belongs to is not removing this app's resources now.")
+}
+
+/**
+ * Task 11a: Hub records outside the resource table that still use resources a change deletes.
+ * A database server linked to an `aws.rds_instance` (nivaro_hub_db_servers.resource_id) holding a
+ * database of ANOTHER app (or of no environment) stops the delete (SHARED_IN_USE, never
+ * overridable); the change's own app's databases go with it (a delete is destructive and
+ * typed-confirmed; RDS takes a final snapshot). Fails closed: a read that fails blocks.
+ */
+export async function hubRecordBlockers(
+  deleted: HubResourceRow[],
+  appId: number | null
+): Promise<Array<{ code: string; message: string }>> {
+  const rds = deleted.filter((r) => r.type === 'aws.rds_instance')
+  if (!rds.length) return []
+  const out: Array<{ code: string; message: string }> = []
+  try {
+    if (!(await db.schema.hasColumn('nivaro_hub_db_servers', 'resource_id'))) return []
+    const servers = (await db('nivaro_hub_db_servers')
+      .whereIn(
+        'resource_id',
+        rds.map((r) => r.id)
+      )
+      .select('id', 'name')) as Array<{ id: number; name: string }>
+    for (const s of servers) {
+      const dbIds = (
+        (await db('nivaro_hub_databases').where({ server_id: s.id }).select('id')) as Array<{
+          id: number
+        }>
+      ).map((x) => Number(x.id))
+      if (!dbIds.length) continue
+      const refs = dbIds.map((id) => `hub-db:${id}`)
+      const envs = (await db('nivaro_hub_environments')
+        .whereIn('db_ref', refs)
+        .select('app_id', 'db_ref')) as Array<{ app_id: number; db_ref: string }>
+      const owned = new Set(envs.map((e) => String(e.db_ref)))
+      const foreign =
+        refs.some((r) => !owned.has(r)) ||
+        envs.some((e) => appId == null || Number(e.app_id) !== appId)
+      if (foreign)
+        out.push({
+          code: 'SHARED_IN_USE',
+          message: `Database server ${s.name} is this RDS instance, and it still holds databases of other apps (or of no environment). Move or drop them first.`
+        })
+    }
+  } catch {
+    out.push({
+      code: 'SHARED_IN_USE',
+      message:
+        'The Hub could not read whether a database server still uses this RDS instance; try again.'
+    })
+  }
+  return out
 }

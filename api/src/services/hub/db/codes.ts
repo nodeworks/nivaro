@@ -69,7 +69,9 @@ export const HUB_DB_CODES = [
   'DB_ERROR',
   'HUB_ERROR',
   // A SQLite app's database (0.3.215): a file its shared deployment keeps
-  'SQLITE_FILE'
+  'SQLITE_FILE',
+  // Task 11a (Hub providers): a server linked to a managed RDS instance
+  'BAD_RESOURCE'
 ] as const
 
 export type HubDbCode = (typeof HUB_DB_CODES)[number]

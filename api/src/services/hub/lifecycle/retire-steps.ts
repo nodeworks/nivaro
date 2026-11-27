@@ -28,6 +28,7 @@ import { deliverHubNotice, type HubNotice, hubEventRecipients } from '../notify-
 import { FREEZES } from '../releases/freeze.js'
 import { openSecret } from '../secrets.js'
 import { RetireError } from './retire-plan.js'
+import type { deleteAppResources } from './retire-resources.js'
 import type { RetireEnvPlan, Retirement, RetirePlan, RetireStepKey } from './retire-store.js'
 
 export const FREEZE_FOR_MS = 366 * 86_400_000
@@ -67,7 +68,14 @@ export interface RetireDeps {
   pollMs?: number
   /** Run legs in the background (routes); tests await them. */
   background?: boolean
+  /** Task 11a: deletes the app's provider resources (default: retire-resources.ts). */
+  deleteResources?: DeleteResources
 }
+
+type DeleteResources = typeof deleteAppResources
+
+const defaultDeleteResources: DeleteResources = async (o) =>
+  (await import('./retire-resources.js')).deleteAppResources(o)
 
 export interface StepCtx {
   ret: Retirement
@@ -199,7 +207,8 @@ async function defaultRecipients(appId: number, envIds: number[]) {
 
 export function resolvedDeps(
   d: RetireDeps
-): Required<Omit<RetireDeps, 'background'>> & Pick<RetireDeps, 'background'> {
+): Required<Omit<RetireDeps, 'background' | 'deleteResources'>> &
+  Pick<RetireDeps, 'background' | 'deleteResources'> {
   return {
     maintenance: d.maintenance ?? linkMaintenance,
     startDbBackup:
@@ -232,7 +241,8 @@ export function resolvedDeps(
     now: d.now ?? (() => new Date()),
     sleep: d.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     pollMs: d.pollMs ?? EXPORT_POLL_MS,
-    background: d.background
+    background: d.background,
+    deleteResources: d.deleteResources
   }
 }
 
@@ -604,8 +614,19 @@ const removeStep: StepBody = async (ctx) => {
     detail.envs = envs
     await ctx.save(detail)
   }
+  // Task 11a: then every provider resource the Hub manages for the app, through the change engine.
+  const deleted = await (d.deleteResources ?? defaultDeleteResources)({
+    retirementId: ctx.ret.id,
+    plan: ctx.plan,
+    by: ctx.by,
+    detail: (detail.resources ?? {}) as Parameters<DeleteResources>[0]['detail'],
+    save: async (r) => {
+      detail.resources = r
+      await ctx.save(detail)
+    }
+  })
   const stacks = Object.values(envs).filter((v) => v.how === 'stack').length
-  return `${ctx.plan.environments.length} environments stopped (${stacks} Docker stacks removed; volumes and databases kept).`
+  return `${ctx.plan.environments.length} environments stopped (${stacks} Docker stacks removed; volumes and databases kept)${deleted ? `; ${deleted} provider resource${deleted === 1 ? '' : 's'} deleted` : ''}.`
 }
 
 // ─── archive ─────────────────────────────────────────────────────────────────────────────────

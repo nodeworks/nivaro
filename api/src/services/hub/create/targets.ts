@@ -10,7 +10,7 @@ import type { GitCtx } from '../../gitlab-client.js'
 import type { Validation } from '../drivers.js'
 import { GitlabWriteError } from '../gitlab-write.js'
 import { HubSecretError, maskSecret, nextSecret, openSecret } from '../secrets.js'
-import { dnsSuffix, httpAllowed } from './dns.js'
+import { dnsSuffix, httpAllowed, route53ConfigProblem, zoneResourceIdOf } from './dns.js'
 import {
   currentUser,
   groupAccessLevel,
@@ -33,7 +33,10 @@ export interface HubTargetConfig {
   /** known_hosts lines of the swarm manager: the deploy job refuses any other host key. */
   manager_known_hosts: string
   proxy_network: string
-  dns_mode: 'automatic' | 'manual'
+  /** route53 (Task 11a): the Hub makes each name's record in the hosted zone below. */
+  dns_mode: 'automatic' | 'manual' | 'route53'
+  /** route53: the managed `aws.route53_zone` resource (nivaro_hub_resources.id). */
+  dns_zone_resource_id?: number | null
   wildcard_domain: string | null
   edge_address: string | null
   scheme: 'https' | 'http'
@@ -89,7 +92,8 @@ const CONFIG_KEYS = [
   'scheme',
   'port',
   'cert_note',
-  'traefik_version'
+  'traefik_version',
+  'dns_zone_resource_id'
 ] as const
 
 const DEFAULTS = {
@@ -320,8 +324,8 @@ export function validateTargetInput(
     return fail('BAD_CONFIG', 'Config proxy_network must be a Docker network name.')
 
   const dnsMode = pick('dns_mode')
-  if (dnsMode !== 'automatic' && dnsMode !== 'manual')
-    return fail('BAD_CONFIG', 'Config dns_mode must be automatic or manual.')
+  if (dnsMode !== 'automatic' && dnsMode !== 'manual' && dnsMode !== 'route53')
+    return fail('BAD_CONFIG', 'Config dns_mode must be automatic, manual or route53.')
   const scheme = withDefault('scheme')
   if (scheme !== 'https' && scheme !== 'http')
     return fail('BAD_CONFIG', 'Config scheme must be https or http.')
@@ -352,6 +356,19 @@ export function validateTargetInput(
   }
   if (dnsMode === 'automatic' && !wildcard)
     return fail('BAD_WILDCARD', 'Automatic names need a wildcard domain like apps.example.com.')
+  const zoneId = zoneResourceIdOf(pick('dns_zone_resource_id'))
+  if (zoneId === undefined)
+    return fail(
+      'BAD_CONFIG',
+      'Config dns_zone_resource_id must name a managed Route 53 hosted zone.'
+    )
+  const r53 = route53ConfigProblem({
+    dns_mode: dnsMode,
+    dns_zone_resource_id: zoneId,
+    wildcard_domain: wildcard,
+    edge
+  })
+  if (r53) return fail('BAD_CONFIG', r53)
   if (scheme === 'http' && !httpAllowed(wildcard))
     return fail(
       'BAD_SCHEME',
@@ -393,7 +410,8 @@ export function validateTargetInput(
     scheme,
     port,
     cert_note: certNote,
-    traefik_version: traefikVersion
+    traefik_version: traefikVersion,
+    ...(dnsMode === 'route53' ? { dns_zone_resource_id: zoneId } : {})
   }
   return { ok: true, row: { kind: 'gitlab', name: name.trim(), config, secret } }
 }
@@ -458,16 +476,17 @@ function toRow(r: Record<string, unknown>): HubTargetRow {
 
 const now = () => new Date()
 
+/** GitLab targets only (Task 11a: kind `github` rows are github-target.ts's). */
 export async function listTargets(): Promise<HubTargetRow[]> {
-  const rows = (await db('nivaro_hub_targets').select('*').orderBy('id')) as Record<
-    string,
-    unknown
-  >[]
+  const rows = (await db('nivaro_hub_targets')
+    .where({ kind: 'gitlab' })
+    .select('*')
+    .orderBy('id')) as Record<string, unknown>[]
   return rows.map(toRow)
 }
 
 export async function getTargetRow(id: number): Promise<HubTargetRow | null> {
-  const r = (await db('nivaro_hub_targets').where({ id }).first()) as
+  const r = (await db('nivaro_hub_targets').where({ id, kind: 'gitlab' }).first()) as
     | Record<string, unknown>
     | undefined
   return r ? toRow(r) : null

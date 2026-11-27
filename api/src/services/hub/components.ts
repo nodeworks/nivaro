@@ -2,6 +2,11 @@ import { insertReturningId } from '../../db/dialect/ef.js'
 import { db } from '../../db/index.js'
 import { isUniqueViolation } from '../../lib/unique-violation.js'
 import { getPlacement } from './drivers.js'
+import {
+  isProviderKind,
+  type ProviderComponentKind,
+  providerComponentProblem
+} from './promote-providers.js'
 import type { HubComponent } from './promote-types.js'
 
 /**
@@ -37,7 +42,8 @@ function toComponent(r: Record<string, unknown>): HubComponent {
     before_job: s(r.before_job),
     deploy_job: s(r.deploy_job),
     verify_url: s(r.verify_url),
-    verify_field: String(r.verify_field ?? 'version')
+    verify_field: String(r.verify_field ?? 'version'),
+    ...(r.resource_id != null ? { resource_id: Number(r.resource_id) } : {})
   }
 }
 
@@ -167,12 +173,18 @@ export async function validateComponentInput(
     )
 
   const kind = pick('kind')
-  if (kind !== 'api' && kind !== 'frontend' && kind !== 'stack')
-    return fail('BAD_KIND', 'Component kind must be api, frontend or stack.')
+  if (kind !== 'api' && kind !== 'frontend' && kind !== 'stack' && !isProviderKind(kind))
+    return fail(
+      'BAD_KIND',
+      'Component kind must be api, frontend, stack, github_actions, vercel or eas_update.'
+    )
 
   const name = pick('name')
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 64)
     return fail('BAD_NAME', 'A component needs a name (up to 64 characters).')
+
+  // Task 11a: a provider component deploys through its resource, never a driver (driver_id 0).
+  if (isProviderKind(kind)) return providerComponentInput(placementId, b, existing, kind, name)
 
   const driverId = pick('driver_id')
   if (typeof driverId !== 'number' || !Number.isInteger(driverId))
@@ -253,6 +265,60 @@ export async function validateComponentInput(
       deploy_job: deployJob,
       verify_url: verify.verifyUrl,
       verify_field: verify.field
+    }
+  }
+}
+
+/** The next free position on a placement (1 when it has none). */
+async function nextPosition(placementId: number): Promise<number> {
+  const last = (await db(TABLE)
+    .where({ placement_id: placementId })
+    .max({ p: 'position' })
+    .first()) as { p: number | null } | undefined
+  return last?.p == null ? 1 : Number(last.p) + 1
+}
+
+/** Task 11a: a github_actions / vercel / eas_update component (promote-providers.ts). */
+async function providerComponentInput(
+  placementId: number,
+  b: Record<string, unknown>,
+  existing: HubComponent | undefined,
+  kind: ProviderComponentKind,
+  name: string
+): Promise<Result<ComponentFields>> {
+  const pick = (k: keyof ComponentFields): unknown => (b[k] !== undefined ? b[k] : existing?.[k])
+  const resourceId = pick('resource_id')
+  const problem = await providerComponentProblem(placementId, kind, resourceId)
+  if (problem) return fail('BAD_RESOURCE', problem)
+  let position = pick('position')
+  if (position === undefined) position = await nextPosition(placementId)
+  if (typeof position !== 'number' || !Number.isInteger(position) || position < 1 || position > 100)
+    return fail('BAD_POSITION', 'position must be a whole number from 1 to 100.')
+  const taken = db(TABLE).where({ placement_id: placementId, position })
+  if (existing?.id != null) taken.whereNot({ id: existing.id })
+  if (await taken.first('id'))
+    return fail('POSITION_TAKEN', `Position ${position} is already used on this placement.`, 409)
+  const source = textOrNull(orDefault(pick('source_branch'), 'main'), 200)
+  if (!source) return fail('BAD_BRANCH', 'source_branch must be a branch name.')
+  const target = textOrNull(pick('target_branch') ?? null, 200)
+  if (target === undefined)
+    return fail('BAD_BRANCH', 'target_branch must be a branch name or null.')
+  const verify = checkVerify(pick('verify_url'), pick('verify_field'))
+  if (!verify.ok) return verify
+  return {
+    ok: true,
+    row: {
+      position,
+      name: name.trim(),
+      kind,
+      driver_id: 0,
+      source_branch: source,
+      target_branch: target,
+      before_job: null,
+      deploy_job: null,
+      verify_url: verify.verifyUrl,
+      verify_field: verify.field,
+      resource_id: resourceId as number
     }
   }
 }
@@ -346,9 +412,12 @@ export async function createComponent(
   row: ComponentFields
 ): Promise<Result<HubComponent>> {
   try {
+    // resource_id only when set: a schema before migration 583 has no such column.
+    const { resource_id, ...rest } = row
     const id = await insertReturningId(db, TABLE, {
       placement_id: placementId,
-      ...row,
+      ...rest,
+      ...(resource_id != null ? { resource_id } : {}),
       created_at: new Date(),
       updated_at: new Date()
     })
@@ -364,9 +433,16 @@ export async function updateComponent(
   row: ComponentFields
 ): Promise<Result<HubComponent>> {
   try {
+    const { resource_id, ...rest } = row
     await db(TABLE)
       .where({ id: existing.id })
-      .update({ ...row, updated_at: new Date() })
+      .update({
+        ...rest,
+        ...(resource_id != null || existing.resource_id != null
+          ? { resource_id: resource_id ?? null }
+          : {}),
+        updated_at: new Date()
+      })
     return { ok: true, row: { ...existing, ...row } }
   } catch (e) {
     if (isUniqueViolation(e)) return racedPosition(row.position)

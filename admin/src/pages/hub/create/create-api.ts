@@ -527,6 +527,30 @@ export const CREATE_COPY: Record<string, Copy> = {
     hint: 'Lower-case letters, digits and single dashes, starting with a letter.'
   },
   KEY_TAKEN: { title: 'Another app already uses this key', hint: 'Pick a different key.' },
+  // Task 11a (Hub providers): provider parts, Route 53 names and GitHub targets
+  BAD_PROVIDER_PART: { title: 'A provider part is not complete', detail: true },
+  DNS_ZONE_MISSING: {
+    title: 'The Route 53 hosted zone cannot be used',
+    hint: 'Adopt the zone on Shared infrastructure and name it on the driver or target; names must be under it.'
+  },
+  PROVIDER_ACTOR: {
+    title: 'The person who started this can no longer act',
+    hint: 'Retry it yourself.'
+  },
+  PROVIDER_CHANGE_FAILED: {
+    title: 'A resource change did not apply',
+    hint: 'Open it on Connections to see why, then retry.',
+    detail: true
+  },
+  REPOSITORY_MISSING: {
+    title: 'The app has no GitHub repository yet',
+    hint: 'Retry: the repository step makes it.'
+  },
+  WORKFLOW_MISSING: {
+    title: 'The repository has no deploy workflow yet',
+    hint: 'Check the template has the workflow the target names, then retry.',
+    detail: true
+  },
   BAD_NAME: { title: 'The name is not valid', detail: true },
   BAD_OWNER: { title: 'An owner is not a person here', hint: 'Pick the owners again.' },
   BAD_EMAIL: { title: 'The first administrator is not complete', detail: true },

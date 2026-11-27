@@ -35,6 +35,10 @@ const SOURCES = [
   'services/hub/create/template-client.ts',
   'services/hub/templates/choice.ts',
   'services/hub/create/app-config.ts',
+  // Task 11a (Hub providers)
+  'services/hub/create/provider-step.ts',
+  'services/hub/create/github-steps.ts',
+  'services/hub/create/github-target.ts',
   'services/hub/secrets.ts',
   'services/hub/gitlab-write.ts',
   'services/hub/db/databases.ts',
