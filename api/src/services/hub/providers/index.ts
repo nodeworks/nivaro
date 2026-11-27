@@ -7,6 +7,7 @@ import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
 import { gitlabAdapter } from './gitlab/index.js'
+import { livekitAdapter } from './livekit/index.js'
 import { neonAdapter } from './neon/index.js'
 import { openaiAdapter } from './openai/index.js'
 import { pagerdutyAdapter } from './pagerduty/index.js'
@@ -14,9 +15,9 @@ import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import { sendgridAdapter } from './sendgrid/index.js'
 import { sentryAdapter } from './sentry/index.js'
-import { twilioAdapter } from './twilio/index.js'
 import { slackAdapter } from './slack/index.js'
 import { teamsAdapter } from './teams/index.js'
+import { twilioAdapter } from './twilio/index.js'
 import type { ProviderAdapter } from './types.js'
 import { upstashAdapter } from './upstash/index.js'
 import { vercelAdapter } from './vercel/index.js'
@@ -38,6 +39,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   entraAdapter,
   expoAdapter,
   githubAdapter,
+  livekitAdapter,
   sendgridAdapter,
   sentryAdapter,
   twilioAdapter,

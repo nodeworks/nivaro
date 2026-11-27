@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "sipTrunkId": "ST_fakeout00001",
+      "name": "carrier-out",
+      "address": "sip.example.com",
+      "numbers": [
+        "+15105550101"
+      ]
+    }
+  ]
+}

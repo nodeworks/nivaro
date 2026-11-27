@@ -1,0 +1,22 @@
+{
+  "rooms": [
+    {
+      "sid": "RM_fakeroom0001",
+      "name": "nvr-0000000000000000000000000000aaaa",
+      "empty_timeout": 300,
+      "max_participants": 0,
+      "creation_time": "1764000000",
+      "num_participants": 3,
+      "num_publishers": 2,
+      "active_recording": false
+    },
+    {
+      "sid": "RM_fakeroom0002",
+      "name": "nvr-0000000000000000000000000000bbbb",
+      "creation_time": "1764000600",
+      "num_participants": 1,
+      "num_publishers": 1,
+      "active_recording": true
+    }
+  ]
+}
