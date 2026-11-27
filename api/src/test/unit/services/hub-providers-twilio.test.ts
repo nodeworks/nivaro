@@ -903,6 +903,40 @@ describe('twilio adapter: apply', () => {
     expect(del.data?.$adminOnly).toBe(true)
   })
 
+  it('an existing key is judged by the account it really lives in (security review)', () => {
+    const { ctx } = harness([])
+    const mainKey: Observed = {
+      type: T_KEY,
+      externalId: SK,
+      name: 'k',
+      fields: { name: 'k', subaccount: null },
+      tags: {}
+    }
+    // A request naming a subaccount does not make a main-account key owner-safe.
+    const [renamed] = twilioAdapter.plan(
+      ctx,
+      desired(T_KEY, { name: 'k2', subaccount: { resourceId: 3 } }, SK, { subaccount: OTHER_AC }),
+      mainKey
+    )
+    expect(renamed.data?.$adminOnly).toBe(true)
+    expect((renamed.data as any)?.$blocker?.code).toBe('SUBACCOUNT_MISMATCH')
+    // A key inside the named subaccount stays an owner change.
+    const subKey: Observed = {
+      ...mainKey,
+      externalId: `${OTHER_AC}/${SK}`,
+      fields: { name: 'k', subaccount: OTHER_AC }
+    }
+    const [ok] = twilioAdapter.plan(
+      ctx,
+      desired(T_KEY, { name: 'k2', subaccount: { resourceId: 3 } }, `${OTHER_AC}/${SK}`, {
+        subaccount: OTHER_AC
+      }),
+      subKey
+    )
+    expect(ok.data?.$adminOnly).toBeUndefined()
+    expect((ok.data as any)?.$blocker).toBeUndefined()
+  })
+
   it('the key the Hub signs in with is never rotated or deleted by the Hub', async () => {
     const { ctx, calls } = harness([], { keySid: SK })
     await expect(

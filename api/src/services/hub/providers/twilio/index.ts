@@ -1197,7 +1197,16 @@ function planAny(
   if (!cfg) throw new ProviderError('UNKNOWN_TYPE', `Twilio has no ${String(type)}.`)
   if (desired) validateFields(cfg.type, desired.fields, ctx.config)
   if (type === T_KEY) {
-    const sub = desired ? !!desired.fields.subaccount : !!observed?.fields.subaccount
+    // Which account the key lives in is judged on the provider's own answer once the key exists;
+    // the desired ref decides only for a create (security review: never trust the request alone).
+    const observedAccount = observed ? parseKeyId(observed.externalId).account : null
+    const wantAccount = desired
+      ? typeof desired.refs.subaccount === 'string' && desired.refs.subaccount
+        ? desired.refs.subaccount
+        : null
+      : null
+    const sub = observed ? !!observedAccount : !!desired?.fields.subaccount
+    const moved = !!(observed && desired && wantAccount !== observedAccount)
     const ops =
       desired && observed && desired.fields[ROTATE_OUTPUTS_FIELD] === true
         ? [
@@ -1215,6 +1224,19 @@ function planAny(
             }
           ]
         : planOf(cfg, desired, observed)
+    if (moved)
+      return ops.map((o) => ({
+        ...withAdminOnly(o, NO_SUB_NOTE),
+        data: {
+          ...(o.data ?? {}),
+          $adminOnly: true,
+          $blocker: {
+            code: 'SUBACCOUNT_MISMATCH',
+            message:
+              'This key lives in another account than the one named here. A key cannot move between accounts: make a new key in the subaccount and delete this one.'
+          }
+        }
+      }))
     return sub ? ops : ops.map((o) => withAdminOnly(o, NO_SUB_NOTE))
   }
   const ops = planOf(cfg, desired, observed)
