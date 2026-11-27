@@ -1,5 +1,6 @@
 import { auth0Provider } from './auth0/index.js'
 import { expoAdapter } from './expo/index.js'
+import { githubAdapter } from './github/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import type { ProviderAdapter } from './types.js'
 import { vercelAdapter } from './vercel/index.js'
@@ -15,6 +16,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   // github, aws, vercel, auth0, expo adapters are appended here.
   auth0Provider,
   expoAdapter,
+  githubAdapter,
   vercelAdapter
 ]
 

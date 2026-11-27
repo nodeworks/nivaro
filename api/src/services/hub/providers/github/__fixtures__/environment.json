@@ -1,0 +1,11 @@
+{
+  "id": 161088068,
+  "name": "production",
+  "html_url": "https://github.com/acme/web/deployments/activity_log?environments_filter=production",
+  "updated_at": "2026-11-20T10:00:00Z",
+  "protection_rules": [
+    { "id": 3736, "type": "wait_timer", "wait_timer": 30 },
+    { "id": 3755, "type": "required_reviewers", "prevent_self_review": true, "reviewers": [] }
+  ],
+  "deployment_branch_policy": { "protected_branches": true, "custom_branch_policies": false }
+}

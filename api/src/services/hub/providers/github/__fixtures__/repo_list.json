@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1,
+    "name": "web",
+    "full_name": "acme/web",
+    "private": true,
+    "visibility": "private",
+    "html_url": "https://github.com/acme/web",
+    "description": "Marketing site",
+    "default_branch": "main",
+    "has_issues": true,
+    "has_wiki": false,
+    "archived": false,
+    "topics": []
+  },
+  {
+    "id": 2,
+    "name": "old",
+    "full_name": "acme/old",
+    "private": true,
+    "visibility": "private",
+    "html_url": "https://github.com/acme/old",
+    "description": null,
+    "default_branch": "main",
+    "has_issues": false,
+    "has_wiki": false,
+    "archived": true,
+    "topics": []
+  }
+]
