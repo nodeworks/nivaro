@@ -386,6 +386,7 @@ import { hubProvidersAwsPart3Docs } from './sections/hub-providers-aws-part3.js'
 import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
+import { hubProvidersJiraDocs } from './sections/hub-providers-jira.js'
 import { hubProvidersLivekitDocs } from './sections/hub-providers-livekit.js'
 import { hubProvidersNeonDocs } from './sections/hub-providers-neon.js'
 import { hubProvidersOpenaiDocs } from './sections/hub-providers-openai.js'
@@ -1288,6 +1289,7 @@ export const navSections: NavGroup[] = [
       hubProvidersPortainerDocs,
       hubProvidersSendgridDocs,
       hubProvidersTeamsDocs,
+      hubProvidersJiraDocs,
       hubProvidersAnthropicDocs,
       hubProvidersHooksDocs,
       hubProvidersApiDocs

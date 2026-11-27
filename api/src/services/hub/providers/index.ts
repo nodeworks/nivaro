@@ -7,6 +7,7 @@ import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
 import { gitlabAdapter } from './gitlab/index.js'
+import { jiraAdapter } from './jira/index.js'
 import { livekitAdapter } from './livekit/index.js'
 import { neonAdapter } from './neon/index.js'
 import { openaiAdapter } from './openai/index.js'
@@ -42,6 +43,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   entraAdapter,
   expoAdapter,
   githubAdapter,
+  jiraAdapter,
   livekitAdapter,
   sendgridAdapter,
   sentryAdapter,
