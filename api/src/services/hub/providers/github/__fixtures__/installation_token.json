@@ -7,6 +7,12 @@
     "variables": "read",
     "actions": "write",
     "repository_hooks": "write",
-    "contents": "read"
+    "contents": "write",
+    "members": "write",
+    "organization_secrets": "write",
+    "organization_variables": "write",
+    "dependabot_secrets": "write",
+    "organization_self_hosted_runners": "write",
+    "pages": "write"
   }
 }

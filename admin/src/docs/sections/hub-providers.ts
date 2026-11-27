@@ -229,6 +229,56 @@ export const hubProvidersGithubDocs: DocSection = {
           '`github.webhook`',
           '`owner/repo#<id>`',
           'A webhook that is not https is `public_exposure`. A PATCH replaces the config, so the secret is sent whenever it is available.'
+        ],
+        [
+          '`github.team` (shared)',
+          '`org#team-slug`',
+          'An organisation team: name, description, visibility, parent team. A rename gives the team a new slug, so a new id. Delete is `destructive`. Organisation accounts only.'
+        ],
+        [
+          '`github.team_repo_access`',
+          '`owner/repo#team-slug`',
+          'One team’s permission (read, triage, write, maintain, admin) on one repository. Admin is `public_exposure`; delete is `destructive`.'
+        ],
+        [
+          '`github.ruleset`',
+          '`owner/repo#<id>` or `org#<id>`',
+          'A branch or tag ruleset on a repository, or on the organisation when no repository is set. Models reviews, status checks, linear history, signed commits, blocking deletes and force pushes. Rules and bypass actors the Hub does not model are kept as they are on update. Switching a ruleset off or to log-only is `public_exposure`. Task 5’s branch protection stays for older plans.'
+        ],
+        [
+          '`github.environment_secret` / `github.environment_variable`',
+          '`owner/repo@env#NAME`',
+          'The environment is a reference to a `github.environment`. Same write rules as the repository ones (sealed box, value write-only for secrets).'
+        ],
+        [
+          '`github.environment_protection`',
+          '`owner/repo#env`',
+          'Required reviewers (`user:login` or `team:slug`, at most 6), wait timer, prevent self-review, deployment branch policy and its patterns, on an existing environment. Fewer reviewers, a shorter wait or any branch allowed is `public_exposure`. Delete clears the protection and keeps the environment. A plain `github.environment` update keeps the reviewers it finds.'
+        ],
+        [
+          '`github.org_secret` / `github.org_variable` (shared)',
+          '`org#NAME`',
+          'Organisation Actions secret or variable available to private, all or selected repositories (names; the Hub looks up the ids). Available to all repositories is `public_exposure`. Changing a secret’s visibility needs its value again; changing only the repository list of a selected secret does not.'
+        ],
+        [
+          '`github.dependabot_secret`',
+          '`owner/repo#NAME`',
+          'Repository Dependabot secret, written as a sealed box like an Actions secret.'
+        ],
+        [
+          '`github.runner_group` (shared)',
+          '`org#<id>`',
+          'A runner group with its visibility, repositories and the public-repositories switch (`public_exposure`). The default group is never deleted. Output `registration_token` (secret, once only): the one-shot field `register_runner` (or `rotate_outputs`) makes a new organisation runner registration token on the next apply; the Hub seals it and it is shown nowhere.'
+        ],
+        [
+          '`github.pages`',
+          '`owner/repo#pages`',
+          'GitHub Pages: built from a workflow or from a branch and folder, a custom domain, HTTPS enforcement. Turning it on is `public_exposure` (the site is public).'
+        ],
+        [
+          '`github.repo_file`',
+          '`owner/repo@branch#path`',
+          'One text file (up to 1 MB) committed through the contents API as “Nivaro Hub”, for example `CODEOWNERS` or a workflow. Drift is the content changing in the repository; an update sends the blob id read just before, so a file changed since is not overwritten. A path under `.github/workflows/` or a `CODEOWNERS` file is `public_exposure` (a Hub administrator applies it). Files are adopted by id, not listed. Never put a secret in one.'
         ]
       ]
     },
@@ -236,7 +286,10 @@ export const hubProvidersGithubDocs: DocSection = {
       type: 'ul',
       items: [
         'Risk flags: `public_exposure`, `destructive`, `data_loss` as listed above. GitHub types carry no `cost` flag.',
-        'Names containing `#` or `@` are not supported in ids.',
+        'Every id names the account first and is checked against the connection’s pinned owner on every read and write (another account reads as missing, a write is refused `GITHUB_OUT_OF_ACCOUNT`); parents are checked too.',
+        'Organisation types (teams, organisation secrets and variables, runner groups, organisation rulesets) need an organisation account; on a user account they answer “organisation accounts only”.',
+        'Permissions the connection test checks for the new types: a GitHub App needs members, organization secrets, organization variables, organization self-hosted runners, Dependabot secrets, Pages and Contents (write); a classic token needs `admin:org` for the organisation types.',
+        'Names containing `#` or `@` are not supported in ids (and a branch with either cannot be used by a managed file).',
         'Used by Create app (the GitHub target kind: repository from a template, an environment and the CI secrets, the deploy workflow), by promotions (component kind `github_actions`: a dispatch with the input `version`) and by retirements. See Outside services in Hub flows.',
         'Needs a live check: nothing ran against real GitHub yet. Response shapes are from the documentation; the environment-secrets path and the installation-permission map for an app token are the first things to confirm on a throwaway organisation.'
       ]

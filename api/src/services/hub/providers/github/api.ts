@@ -302,6 +302,8 @@ export const checkVarName = (v: unknown): string =>
   matching(/^[A-Za-z_][A-Za-z0-9_]{0,254}$/, 'secret or variable name', v)
 export const checkWorkflowFile = (v: unknown): string =>
   matching(/^[A-Za-z0-9._-]+\.ya?ml$/, 'workflow file name', v)
+export const checkSlug = (v: unknown): string =>
+  matching(/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/, 'team name', v)
 export const checkNumericId = (v: unknown): string => matching(/^\d{1,20}$/, 'numeric id', v)
 
 /** A branch name in a path (git ref rules): slashes stay, every other character is encoded. */
@@ -327,4 +329,34 @@ export function branchPath(branch: string): string {
   for (const p of parts)
     if (p === '' || p.startsWith('.') || p.endsWith('.lock')) throw badId('branch name', branch)
   return parts.map(seg).join('/')
+}
+
+/** The account an external id belongs to: everything before the first `/`, `#` or `@`. */
+export function accountOf(ext: string): string {
+  return String(ext ?? '').split(/[/#@]/)[0]
+}
+
+/**
+ * A file path in the contents API: slash-separated, each segment validated like any path
+ * segment (no empty, `.`, `..`, backslash, control character), no leading or trailing slash.
+ */
+export function filePath(path: string): string {
+  if (typeof path !== 'string' || path === '' || path.length > 500) throw badId('file path', path)
+  if (path.startsWith('/') || path.endsWith('/')) throw badId('file path', path)
+  return path.split('/').map(seg).join('/')
+}
+
+/** true when the id names the account this connection is pinned to (case-insensitive). */
+export function inAccount(ctx: ProviderContext, ext: string): boolean {
+  // A malformed account part is a bad id, not "someone else's".
+  return checkOwner(accountOf(ext)).toLowerCase() === ownerOf(ctx).toLowerCase()
+}
+
+/** Refuses an id of another account: a connection reads and writes only its own account. */
+export function assertInAccount(ctx: ProviderContext, ext: string): void {
+  if (!inAccount(ctx, ext))
+    throw new ProviderError(
+      'GITHUB_OUT_OF_ACCOUNT',
+      `That resource belongs to another GitHub account than ${ownerOf(ctx) || 'this connection'}.`
+    )
 }
