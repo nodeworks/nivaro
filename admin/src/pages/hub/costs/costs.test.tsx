@@ -453,6 +453,57 @@ describe('Costs → Now', () => {
     expect(screen.getByText(/over budget/)).toBeTruthy()
   })
 
+  it('?app=<id> shows that app only, opened, says so, and takes the filter off again', async () => {
+    const beta = { app_id: 2, nowCents: 6385, monthToDateCents: 5538, forecastCents: 6350 }
+    const two = { ...live, byApp: [...live.byApp, beta] }
+    const answers: Record<string, unknown> = {
+      '/hub/costs/live': two,
+      '/hub/costs/live?app=2': { ...two, byApp: [beta] },
+      '/hub/apps': [
+        { id: 1, key: 'orders', name: 'Orders portal' },
+        { id: 2, key: 'beta', name: 'Beta' }
+      ],
+      '/hub/apps/2': { id: 2, key: 'beta', name: 'Beta', environments: [] },
+      '/hub/apps/2/cost-budget': { ...budget, app_id: 2 },
+      '/hub/resources': []
+    }
+    h.get.mockImplementation((url: string) =>
+      Promise.resolve(url in answers ? { data: { data: answers[url] } } : routes(url))
+    )
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/hub/costs?app=2']}>
+          <HubCostsNow isAdmin />
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent('Showing Beta only.')
+    // The one row is the app's, opened on its environments.
+    expect(screen.getByRole('button', { name: 'Beta' })).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.queryByRole('button', { name: 'Orders portal' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /Show every app/ }))
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull())
+    expect(screen.getByRole('button', { name: 'Orders portal' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument()
+  })
+
+  it('says so when ?app= names an app this person cannot see, and shows every app', async () => {
+    h.get.mockImplementation((url: string) => Promise.resolve(routes(url)))
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={['/hub/costs?app=77']}>
+          <HubCostsNow isAdmin />
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'That app is not one you can see here.'
+    )
+    expect(screen.getByRole('button', { name: 'Orders portal' })).toBeInTheDocument()
+  })
+
   it('shows Billed through its date with the gap', async () => {
     h.get.mockImplementation((url: string) =>
       Promise.resolve(
