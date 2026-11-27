@@ -76,6 +76,33 @@ const types = {
           refs: [],
           name_field: 'name',
           has_cost_class: false
+        },
+        {
+          key: 'aws.vpc',
+          label: 'VPC',
+          scope: 'shared',
+          fields: [
+            { key: 'name', label: 'Name', kind: 'string' },
+            { key: 'enable_dns_support', label: 'DNS resolution', kind: 'boolean' },
+            {
+              key: 'tenancy',
+              label: 'Tenancy',
+              kind: 'enum',
+              options: [{ value: 'default', label: 'Shared hardware' }]
+            }
+          ],
+          capabilities: {
+            create: true,
+            update: true,
+            delete: true,
+            adopt: true,
+            snapshot: false,
+            tag: true
+          },
+          reversible: true,
+          refs: [],
+          name_field: 'name',
+          has_cost_class: false
         }
       ]
     }
@@ -259,5 +286,112 @@ describe('ChangeView', () => {
     // The change's chip and the step's own state both say it.
     expect(screen.getAllByText('Failed').length).toBe(2)
     expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy()
+  })
+
+  it('names fields by their labels and says On / Off and choice labels, not raw values', async () => {
+    const plan: Plan = {
+      ...basePlan,
+      changeId: 18,
+      needsConfirm: null,
+      ops: [
+        {
+          kind: 'create',
+          type: 'aws.vpc',
+          resourceId: null,
+          externalId: null,
+          reason: 'Create VPC hub-shared-2',
+          changes: [
+            { field: 'enable_dns_support', from: false, to: true },
+            { field: 'tenancy', to: 'default' },
+            { field: 'name', to: 'hub-shared-2' }
+          ],
+          preconditions: {},
+          risk: []
+        }
+      ]
+    }
+    mount(plan, true)
+    expect(await screen.findByText('DNS resolution')).toBeTruthy()
+    expect(screen.queryByText('enable_dns_support')).toBeNull()
+    expect(screen.getByText('Off')).toBeTruthy()
+    expect(screen.getByText('On')).toBeTruthy()
+    expect(screen.getByText('Shared hardware')).toBeTruthy()
+    expect(screen.queryByText('true')).toBeNull()
+    expect(screen.getByText('hub-shared-2').className).toContain('font-mono')
+  })
+
+  it('a failure on the keys says so once, asks to check the keys, and offers no Resume', async () => {
+    const plan: Plan = { ...basePlan, changeId: 19, status: 'failed', needsConfirm: null }
+    const message = 'AWS refused the connection’s keys (AuthFailure): AWS was not able to validate'
+    mount(
+      plan,
+      true,
+      row(
+        {
+          status: 'failed',
+          error_code: 'AUTH_FAILED',
+          error: message,
+          steps: [
+            {
+              index: 0,
+              status: 'failed',
+              resourceId: 3,
+              before: null,
+              result: null,
+              snapshot: null,
+              error: { code: 'AUTH_FAILED', message, retryable: false, status: 401 },
+              startedAt: null,
+              finishedAt: null
+            }
+          ]
+        },
+        plan
+      )
+    )
+    expect(await screen.findByText('The provider refused this connection’s keys')).toBeTruthy()
+    expect(screen.getByText(/Check this connection’s keys/)).toBeTruthy()
+    expect(screen.queryByText(/Try again in a minute/)).toBeNull()
+    // The step does not repeat the notice's message.
+    expect(
+      screen.queryAllByText(new RegExp(`This step failed|${message.slice(0, 20)}`)).length
+    ).toBe(0)
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Drop this change' })).toBeTruthy()
+    expect(screen.getByText(/A retry will not fix this/)).toBeTruthy()
+  })
+
+  it('a provider refusal that is not retryable drops the "try again" advice', async () => {
+    const plan: Plan = { ...basePlan, changeId: 20, status: 'failed', needsConfirm: null }
+    mount(
+      plan,
+      true,
+      row(
+        {
+          status: 'failed',
+          error_code: 'PROVIDER_ERROR',
+          error: 'InvalidParameterValue: bad CIDR',
+          steps: [
+            {
+              index: 0,
+              status: 'failed',
+              resourceId: 3,
+              before: null,
+              result: null,
+              snapshot: null,
+              error: {
+                code: 'PROVIDER_ERROR',
+                message: 'InvalidParameterValue: bad CIDR',
+                retryable: false
+              },
+              startedAt: null,
+              finishedAt: null
+            }
+          ]
+        },
+        plan
+      )
+    )
+    expect(await screen.findByText(/trying again will not change that/)).toBeTruthy()
+    expect(screen.queryByText(/Try again in a minute/)).toBeNull()
   })
 })

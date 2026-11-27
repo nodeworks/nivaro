@@ -12,7 +12,10 @@ vi.mock('@/lib/api', () => ({
 const {
   connectionBody,
   connectionValues,
+  displayValue,
   fieldErrors,
+  fieldLabel,
+  isResumable,
   fieldsPayload,
   groupByProvider,
   healthTone,
@@ -311,5 +314,83 @@ describe('every refusal has plain words', () => {
     )
     expect(d.title).toBe('Other resources still use this')
     expect(d.title).not.toContain('SHARED_IN_USE')
+  })
+})
+
+describe('Task 3b words', () => {
+  const specs = [
+    { key: 'enable_dns_support', label: 'DNS resolution', kind: 'boolean' },
+    {
+      key: 'rules',
+      label: 'Rules',
+      kind: 'list',
+      items: {
+        key: 'item',
+        label: 'Rule',
+        kind: 'object',
+        fields: [{ key: 'port', label: 'Port', kind: 'number' }]
+      }
+    },
+    { key: 'tier', label: 'Tier', kind: 'enum', options: [{ value: 'gp3', label: 'General SSD' }] }
+  ] as Specs
+
+  it('names a change by its field labels, item paths included', () => {
+    expect(fieldLabel(specs, 'enable_dns_support')).toBe('DNS resolution')
+    expect(fieldLabel(specs, 'rules.0.port')).toBe('Rules 1 · Port')
+    expect(fieldLabel(specs, 'some_key')).toBe('some key')
+    expect(fieldLabel(undefined, 'cidr')).toBe('cidr')
+  })
+
+  it('says On / Off and choice labels', () => {
+    expect(displayValue(specs[0] as Specs[0], true)).toBe('On')
+    expect(displayValue(null, false)).toBe('Off')
+    expect(displayValue(specs[2] as Specs[0], 'gp3')).toBe('General SSD')
+    expect(displayValue(null, '10.0.0.0/16')).toBe('10.0.0.0/16')
+  })
+
+  it('resume only where the engine resumes', () => {
+    const step = (retryable: boolean) => ({
+      index: 0,
+      status: 'failed' as const,
+      resourceId: null,
+      before: null,
+      result: null,
+      snapshot: null,
+      error: { code: 'X', message: 'x', retryable },
+      startedAt: null,
+      finishedAt: null
+    })
+    expect(isResumable('interrupted', [])).toBe(true)
+    expect(isResumable('failed', [step(true)])).toBe(true)
+    expect(isResumable('failed', [step(false)])).toBe(false)
+    expect(isResumable('applied', [])).toBe(false)
+  })
+
+  it('a create that never reached the provider is its own state', () => {
+    expect(
+      resourceState(
+        resource({
+          external_id: null,
+          pending_create: { change_id: 1, status: 'failed', resumable: false }
+        })
+      )
+    ).toBe('create_failed')
+    expect(
+      resourceState(
+        resource({
+          external_id: null,
+          pending_create: { change_id: 1, status: 'applying', resumable: false }
+        })
+      )
+    ).toBe('creating')
+  })
+
+  it('AUTH_FAILED says to check the keys, never to wait', () => {
+    const d = providerError(
+      { response: { status: 502, data: { code: 'AUTH_FAILED', error: 'x' } } },
+      'f'
+    )
+    expect(d.hint).toMatch(/Check this connection’s keys/)
+    expect(d.hint).not.toMatch(/minute/)
   })
 })

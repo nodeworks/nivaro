@@ -231,7 +231,62 @@ describe('HubConnections', () => {
     expect(screen.getByRole('button', { name: 'Adopt…' })).toBeTruthy()
   })
 
-  it('shows the approval queue only when a change waits', async () => {
+  it('lists open changes (approval first) and opens one in the ?change= panel', async () => {
+    const pendingRow = {
+      id: 31,
+      connection_id: 7,
+      app_id: 4,
+      environment_id: 5,
+      scope: 'app',
+      status: 'pending_approval',
+      plan: {
+        request: {
+          ops: [{ action: 'create', type: 'github.repository', fields: { name: 'site' } }]
+        },
+        ops: [
+          {
+            kind: 'create',
+            type: 'github.repository',
+            resourceId: null,
+            externalId: null,
+            reason: 'Create GitHub repository site.',
+            changes: [],
+            preconditions: {},
+            risk: ['cost']
+          }
+        ],
+        gates: [],
+        blockers: []
+      },
+      plan_hash: 'h1',
+      steps: [],
+      created_at: '2026-11-26T10:00:00Z'
+    }
+    routeGets({ '/hub/resource-changes': [pendingRow], '/hub/resource-changes/31': pendingRow })
+    mount()
+    expect(await screen.findByText('Open changes')).toBeTruthy()
+    expect(await screen.findByText(/1 waiting for your approval/)).toBeTruthy()
+    const row = await screen.findByRole('button', { name: /Create Repository site/ })
+    expect(row.textContent).toContain('GitHub · acme')
+    const asked = h.get.mock.calls.find((c) => c[0] === '/hub/resource-changes')
+    expect((asked?.[1] as { params: Record<string, unknown> }).params.status).toBe(
+      'planned,pending_approval,applying,failed,interrupted'
+    )
+    fireEvent.click(row)
+    expect(await screen.findByText('Change 31')).toBeTruthy()
+    await waitFor(() =>
+      expect(h.get.mock.calls.some((c) => c[0] === '/hub/resource-changes/31')).toBe(true)
+    )
+  })
+
+  it('shows no open changes card when nothing is open', async () => {
+    routeGets()
+    mount()
+    expect(await screen.findByText('GitHub · acme')).toBeTruthy()
+    expect(screen.queryByText('Open changes')).toBeNull()
+  })
+
+  it('names a change by its type label', async () => {
     routeGets({
       '/hub/resource-changes': [
         {
@@ -262,8 +317,9 @@ describe('HubConnections', () => {
       ]
     })
     mount()
-    expect(await screen.findByText('Waiting for your approval')).toBeTruthy()
-    expect(await screen.findByText('Create repository')).toBeTruthy()
+    expect(await screen.findByText('Waiting for approval')).toBeTruthy()
+    // The type's own label, never lower-cased ("Create Repository", not "Create repository").
+    expect(await screen.findByText('Create Repository')).toBeTruthy()
   })
 })
 

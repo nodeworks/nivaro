@@ -21,6 +21,12 @@ const proto = Element.prototype as unknown as Record<string, unknown>
 proto.scrollIntoView ??= vi.fn()
 proto.hasPointerCapture ??= () => false
 proto.releasePointerCapture ??= vi.fn()
+// The region picker's list (cmdk) measures itself.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver
 
 const { ResourceForm } = await import('./ResourceForm')
 
@@ -238,5 +244,93 @@ describe('ResourceForm', () => {
     fireEvent.click(pick)
     const list = await screen.findByRole('listbox')
     expect(within(list).getByText('main network')).toBeTruthy()
+  })
+})
+
+describe('a field that picks from the connection (Task 3b C)', () => {
+  const vpcType = {
+    ...type,
+    key: 'aws.vpc',
+    label: 'VPC',
+    scope: 'shared' as const,
+    refs: [],
+    fields: [
+      {
+        key: 'region',
+        label: 'Region',
+        kind: 'string' as const,
+        required: true,
+        createOnly: true,
+        optionsFrom: 'regions'
+      },
+      { key: 'name', label: 'Name', kind: 'string' as const, required: true }
+    ]
+  }
+  const vpcPlan = { ...plan, changeId: 42, ops: [] }
+
+  function mountVpc() {
+    h.get.mockImplementation((url: string) => {
+      if (url === '/hub/connections')
+        return Promise.resolve({
+          data: {
+            data: [
+              {
+                id: 2,
+                provider: 'aws',
+                provider_label: 'AWS',
+                name: 'AWS prod',
+                description: null,
+                status: 'ok',
+                field_options: { regions: ['us-east-1', 'eu-west-1'] }
+              }
+            ]
+          }
+        })
+      if (url === '/hub/provider-types')
+        return Promise.resolve({ data: { data: { risk_flags: [], providers: [] } } })
+      if (url === '/hub/resource-changes/42')
+        return Promise.resolve({
+          data: { data: { id: 42, status: 'planned', plan: vpcPlan, steps: [] } }
+        })
+      return Promise.reject(new Error(url))
+    })
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    return render(
+      <QueryClientProvider client={qc}>
+        <ResourceForm
+          type={vpcType}
+          resource={null}
+          connectionId={2}
+          scope='shared'
+          idPrefix='v'
+          isAdmin
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>
+    )
+  }
+
+  it('titles the form with the type label and picks the region from the allowed list', async () => {
+    h.post.mockResolvedValue({ data: { data: vpcPlan } })
+    const { container } = mountVpc()
+    expect(screen.getByRole('heading', { name: 'New VPC' })).toBeTruthy()
+    const region = screen.getByRole('combobox', { name: 'Region' })
+    // Starts on the connection's first allowed region.
+    await waitFor(() => expect(region.textContent).toContain('us-east-1'))
+    expect(container.querySelector('select')).toBeNull()
+    fireEvent.click(region)
+    const options = await screen.findAllByRole('option')
+    expect(options.map((o) => o.textContent)).toEqual(['us-east-1', 'eu-west-1'])
+    fireEvent.click(screen.getByRole('option', { name: 'eu-west-1' }))
+    await waitFor(() => expect(region.textContent).toContain('eu-west-1'))
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'hub-shared-2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Plan change' }))
+    await waitFor(() => expect(h.post).toHaveBeenCalled())
+    expect(h.post.mock.calls[0]?.[1]).toMatchObject({
+      scope: 'shared',
+      ops: [
+        { action: 'create', type: 'aws.vpc', fields: { region: 'eu-west-1', name: 'hub-shared-2' } }
+      ]
+    })
   })
 })

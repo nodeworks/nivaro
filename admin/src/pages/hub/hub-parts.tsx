@@ -1,8 +1,17 @@
-import { AlertTriangle, Check, ClipboardCopy, Copy, KeyRound } from 'lucide-react'
+import { AlertTriangle, Check, ChevronsUpDown, ClipboardCopy, Copy, KeyRound } from 'lucide-react'
 import { type ComponentType, type ReactNode, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { type ChipState, HUB_MASK, STATUS_COPY, STATUS_DOT, STATUS_TONE } from './hub-api'
 
@@ -206,6 +215,97 @@ export function Field({
         <p className='m-0 text-[11px] text-slate-500 dark:text-muted-foreground'>{hint}</p>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * Pick one of a known set of values (a connection's allowed regions): a searchable list, the
+ * shared Combobox pattern (never a native select). Picking the current value again keeps it — a
+ * required field cannot be emptied by accident. The trigger carries `id` for its label.
+ */
+export function ChoiceCombobox({
+  id,
+  value,
+  onChange,
+  options,
+  placeholder = 'Pick one',
+  empty = 'Nothing matches',
+  disabled,
+  mono
+}: {
+  id: string
+  value: string
+  onChange: (v: string) => void
+  options: Array<{ value: string; label: string }>
+  placeholder?: string
+  empty?: string
+  disabled?: boolean
+  /** Values are codes (us-east-1): shown in the mono face. */
+  mono?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const picked = options.find((o) => o.value === value)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          id={id}
+          type='button'
+          variant='outline'
+          role='combobox'
+          aria-expanded={open}
+          disabled={disabled}
+          className='h-8 w-full justify-between bg-white px-3 text-left text-[13px] font-normal dark:bg-background'
+        >
+          <span
+            className={cn(
+              'truncate',
+              mono && picked && 'font-mono',
+              !picked && 'text-slate-500 dark:text-muted-foreground'
+            )}
+          >
+            {picked ? picked.label : value || placeholder}
+          </span>
+          <ChevronsUpDown className='ml-2 h-3.5 w-3.5 shrink-0 opacity-50' aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className='w-[var(--radix-popover-trigger-width)] min-w-[200px] p-0'
+        align='start'
+      >
+        <Command>
+          {options.length > 6 && <CommandInput placeholder='Search…' className='h-8 text-[13px]' />}
+          <CommandList>
+            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
+              {empty}
+            </CommandEmpty>
+            <CommandGroup>
+              {options.map((o) => (
+                <CommandItem
+                  key={o.value}
+                  value={o.value}
+                  keywords={[o.label]}
+                  onSelect={() => {
+                    onChange(o.value)
+                    setOpen(false)
+                  }}
+                  className={cn('text-[13px]', mono && 'font-mono')}
+                >
+                  <Check
+                    className={cn(
+                      'mr-2 h-3.5 w-3.5',
+                      o.value === value ? 'opacity-100' : 'opacity-0'
+                    )}
+                    aria-hidden
+                  />
+                  {o.label}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }
 

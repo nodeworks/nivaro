@@ -10,7 +10,7 @@ import {
   ShieldAlert,
   X
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { HubRunTimeline, type RunStep } from '@/components/hub-brand/HubRunTimeline'
 import { Button } from '@/components/ui/button'
@@ -29,12 +29,18 @@ import {
   changeAction,
   changeFromPlan,
   changeFromRow,
+  displayValue,
+  type FieldSpec,
   fetchChange,
   fetchChanges,
   fetchProviderTypes,
+  fieldLabel,
+  fieldSpecAt,
   type HubResourceChange,
   isLiveChange,
+  isResumable,
   OP_KIND_COPY,
+  OPEN_CHANGE_STATUSES,
   type PlannedOp,
   PROVIDER_CODE_COPY,
   providerError,
@@ -42,7 +48,6 @@ import {
   providerToast,
   RISK_COPY,
   type RiskFlag,
-  shortValue,
   typeIndex
 } from './providers-api'
 
@@ -57,11 +62,14 @@ export function ChangeView({
   isAdmin,
   onClose,
   onReplace,
-  onFinished
+  onFinished,
+  framed = true
 }: {
   initial: ChangeModel
   isAdmin: boolean
   onClose: () => void
+  /** false = inside a card that already names the change and closes it (the ?change= panel). */
+  framed?: boolean
   /** Undo answers a NEW change: the view switches to it. */
   onReplace?: (next: ChangeModel) => void
   /** Called once when the change reaches applied / cancelled / declined. */
@@ -120,6 +128,11 @@ export function ChangeView({
     return t?.reversible !== false
   })
   const steps = model.steps
+  const resumable = isResumable(status, steps)
+  const failedStep = [...steps].reverse().find((s) => s.status === 'failed') ?? null
+  // One failure message: the notice below says it (with what to do); a step repeats it only when
+  // it says something else.
+  const noticeShown = (status === 'failed' || status === 'interrupted') && !!model.error
   const runSteps: RunStep[] = model.ops.map((op, i) => ({
     key: String(i),
     label: `${OP_KIND_COPY[op.kind]} ${idx.typeLabel(op.type)}`,
@@ -132,12 +145,18 @@ export function ChangeView({
   return (
     <section
       aria-label={`Change ${id}`}
-      className='space-y-3 rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-border dark:bg-muted/30'
+      className={cn(
+        'space-y-3',
+        framed &&
+          'rounded-lg border border-slate-200 bg-slate-50/60 p-3 dark:border-border dark:bg-muted/30'
+      )}
     >
       <header className='flex flex-wrap items-center gap-2'>
-        <h5 className='m-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
-          {status === 'planned' ? 'The plan' : `Change #${id}`}
-        </h5>
+        {framed && (
+          <h5 className='m-0 text-[12px] font-semibold text-slate-800 dark:text-foreground'>
+            {status === 'planned' ? 'The plan' : `Change #${id}`}
+          </h5>
+        )}
         {/* Said to screen readers as it moves (planned → running → done). */}
         <span role='status' aria-live='polite' className='inline-flex'>
           <ToneChip tone={CHANGE_STATUS_TONE[status] ?? 'neutral'}>
@@ -152,15 +171,17 @@ export function ChangeView({
             {formatRelative(model.createdAt)}
           </span>
         )}
-        <button
-          type='button'
-          aria-label='Close the change'
-          data-tip='Close'
-          className={cn(ghostButton, 'ml-auto w-8 px-0')}
-          onClick={onClose}
-        >
-          <X className='h-3.5 w-3.5' aria-hidden />
-        </button>
+        {framed && (
+          <button
+            type='button'
+            aria-label='Close the change'
+            data-tip='Close'
+            className={cn(ghostButton, 'ml-auto w-8 px-0')}
+            onClick={onClose}
+          >
+            <X className='h-3.5 w-3.5' aria-hidden />
+          </button>
+        )}
       </header>
 
       {steps.length > 0 && (
@@ -182,6 +203,8 @@ export function ChangeView({
               op={op}
               step={steps[i] ?? null}
               typeLabel={idx.typeLabel(op.type)}
+              fields={idx.type(op.type)?.fields}
+              changeError={noticeShown ? model.error : null}
             />
           ))}
         </ol>
@@ -207,7 +230,10 @@ export function ChangeView({
         <ErrorNotice
           description={providerError(
             { response: { data: { code: model.errorCode ?? undefined, error: model.error } } },
-            status === 'interrupted' ? 'The change stopped part way' : 'The change failed'
+            status === 'interrupted' ? 'The change stopped part way' : 'The change failed',
+            status === 'failed' && failedStep?.error
+              ? { retryable: failedStep.error.retryable }
+              : {}
           )}
         />
       )}
@@ -388,17 +414,31 @@ export function ChangeView({
 
       {(status === 'interrupted' || status === 'failed') && (
         <div className='flex flex-wrap items-center gap-2'>
+          {resumable && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8'
+              disabled={act.isPending}
+              onClick={() => act.mutate({ verb: 'resume' })}
+            >
+              Resume
+            </Button>
+          )}
           <Button
             size='sm'
-            variant='outline'
+            variant='ghost'
             className='h-8'
             disabled={act.isPending}
-            onClick={() => act.mutate({ verb: 'resume' })}
+            data-tip='Close it without running the rest. What already ran stays as it is.'
+            onClick={() => act.mutate({ verb: 'cancel' })}
           >
-            Resume
+            Drop this change
           </Button>
           <span className='text-[12px] text-slate-500 dark:text-muted-foreground'>
-            Runs only the steps that did not finish.
+            {resumable
+              ? 'Resume runs only the steps that did not finish.'
+              : 'A retry will not fix this. Fix the cause, then plan the change again.'}
           </span>
         </div>
       )}
@@ -464,12 +504,20 @@ const KIND_TONE: Record<PlannedOp['kind'], string> = {
 function OpItem({
   op,
   step,
-  typeLabel
+  typeLabel,
+  fields,
+  changeError
 }: {
   op: PlannedOp
   step: ChangeStep | null
   typeLabel: string
+  /** The type's fields: changes are named by their labels, values in their own words. */
+  fields?: FieldSpec[]
+  /** The change's own error when the notice already shows it (the step does not repeat it). */
+  changeError: string | null
 }) {
+  const stepError =
+    step?.error && (!changeError || step.error.message !== changeError) ? step.error : null
   return (
     <li className='rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'>
       <div className='flex flex-wrap items-center gap-x-2 gap-y-1'>
@@ -494,7 +542,7 @@ function OpItem({
       <p className='m-0 mt-1 text-[12px] text-slate-700 dark:text-slate-300'>{op.reason}</p>
       {op.risk.length > 0 && <RiskChips risk={op.risk} />}
       {op.changes.length > 0 && (
-        <table className='mt-2 w-full table-fixed text-[11.5px]'>
+        <table className='mt-2 w-full max-w-[760px] table-fixed text-[11.5px]'>
           <thead>
             <tr className='text-left text-[10.5px] font-medium text-slate-500 dark:text-muted-foreground'>
               <th className='w-[30%] py-0.5 pr-2 font-medium'>Field</th>
@@ -505,8 +553,11 @@ function OpItem({
           <tbody>
             {op.changes.map((c) => (
               <tr key={c.field} className='border-t border-slate-100 align-top dark:border-border'>
-                <td className='break-words py-1 pr-2 font-mono text-slate-700 dark:text-slate-300'>
-                  {c.field}
+                <td
+                  className='break-words py-1 pr-2 text-slate-700 dark:text-slate-300'
+                  data-tip={c.field}
+                >
+                  {fieldLabel(fields, c.field)}
                 </td>
                 {c.secret ? (
                   <td colSpan={2} className='py-1 text-slate-600 dark:text-slate-300'>
@@ -514,11 +565,11 @@ function OpItem({
                   </td>
                 ) : (
                   <>
-                    <td className='hub-fact break-words py-1 pr-2 font-mono text-slate-500 dark:text-muted-foreground'>
-                      {shortValue(c.from)}
+                    <td className='break-words py-1 pr-2 text-slate-500 dark:text-muted-foreground'>
+                      <ChangeValue spec={fieldSpecAt(fields, c.field)} value={c.from} />
                     </td>
-                    <td className='hub-fact break-words py-1 font-mono text-slate-900 dark:text-foreground'>
-                      {shortValue(c.to)}
+                    <td className='break-words py-1 text-slate-900 dark:text-foreground'>
+                      <ChangeValue spec={fieldSpecAt(fields, c.field)} value={c.to} />
                     </td>
                   </>
                 )}
@@ -532,14 +583,27 @@ function OpItem({
           Kept before the change: {step.snapshot.label ?? step.snapshot.id}
         </p>
       )}
-      {step?.error && (
+      {stepError && (
         <p className='m-0 mt-1 break-words text-[11.5px] text-red-700 dark:text-red-300'>
-          {PROVIDER_CODE_COPY[step.error.code]?.title ?? 'This step failed'}: {step.error.message}
-          {step.error.retryable ? ' Resume tries it again.' : ''}
+          {PROVIDER_CODE_COPY[stepError.code]?.title ?? 'This step failed'}: {stepError.message}
+          {stepError.retryable ? ' Resume tries it again.' : ''}
         </p>
       )}
     </li>
   )
+}
+
+/**
+ * One value in the change table: On / Off and choice labels in plain text; ids, names and
+ * numbers (what someone may copy or compare) in the mono face.
+ */
+function ChangeValue({ spec, value }: { spec: FieldSpec | null; value: unknown }) {
+  const text = displayValue(spec, value)
+  const words =
+    typeof value === 'boolean' ||
+    (spec?.kind === 'enum' && typeof value === 'string') ||
+    text === '—'
+  return <span className={cn(!words && 'hub-fact font-mono')}>{text}</span>
 }
 
 const ACTION_WORDS: Record<string, string> = {
@@ -642,7 +706,10 @@ export function changeSummary(c: HubResourceChange, typeLabel: (t: string) => st
   const ops = c.plan?.ops ?? []
   if (!ops.length) return 'No operations'
   const first = ops[0] as PlannedOp
-  const head = `${first.action ? actionWord(first.action) : OP_KIND_COPY[first.kind]} ${typeLabel(first.type).toLowerCase()}`
+  const req = c.plan?.request?.ops?.[c.plan?.sources?.[0] ?? 0]
+  const named = req?.fields?.name
+  const name = typeof named === 'string' && named ? named : (first.externalId ?? null)
+  const head = `${first.action ? actionWord(first.action) : OP_KIND_COPY[first.kind]} ${typeLabel(first.type)}${name ? ` ${name}` : ''}`
   return ops.length > 1 ? `${head} and ${ops.length - 1} more` : head
 }
 
@@ -654,13 +721,19 @@ export function ChangesList({
   filter,
   isAdmin,
   empty,
-  label
+  label,
+  openInLink = false,
+  connectionName
 }: {
   filter: ChangeFilter
   isAdmin: boolean
   /** Shown when there are none; null = render nothing then (and while loading). */
   empty: string | null
   label: string
+  /** Open a change in the page's `?change=` panel (LinkedChange) instead of under the list. */
+  openInLink?: boolean
+  /** Names each row's connection (lists that span connections). */
+  connectionName?: (id: number) => string | null
 }) {
   const changes = useQuery({
     queryKey: providerKeys.changes(filter),
@@ -670,6 +743,8 @@ export function ChangesList({
   const types = useQuery({ queryKey: providerKeys.types(), queryFn: fetchProviderTypes })
   const idx = typeIndex(types.data)
   const [open, setOpen] = useState<ChangeModel | null>(null)
+  const [params, setParams] = useSearchParams()
+  const linked = params.get('change')
 
   if (changes.isPending) return empty == null ? null : <Skeleton className='h-10 w-full' />
   if (changes.isError)
@@ -690,13 +765,25 @@ export function ChangesList({
         className='m-0 list-none divide-y divide-slate-100 p-0 dark:divide-border'
       >
         {changes.data.map((c) => {
-          const active = open?.changeId === c.id
+          const active = openInLink ? linked === String(c.id) : open?.changeId === c.id
+          const where = connectionName?.(c.connection_id)
           return (
             <li key={c.id}>
               <button
                 type='button'
-                aria-expanded={active}
-                onClick={() => setOpen(active ? null : changeFromRow(c))}
+                aria-expanded={openInLink ? undefined : active}
+                aria-current={openInLink && active ? 'true' : undefined}
+                onClick={() => {
+                  if (!openInLink) return setOpen(active ? null : changeFromRow(c))
+                  setParams(
+                    (prev) => {
+                      const next = new URLSearchParams(prev)
+                      next.set('change', String(c.id))
+                      return next
+                    },
+                    { replace: true }
+                  )
+                }}
                 className={cn(
                   'flex w-full flex-wrap items-center gap-x-2 gap-y-0.5 rounded px-1.5 py-1.5 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50',
                   active && 'bg-accent'
@@ -707,6 +794,9 @@ export function ChangesList({
                 </ToneChip>
                 <span className='min-w-0 flex-1 truncate text-[12px] text-slate-800 dark:text-foreground'>
                   {changeSummary(c, idx.typeLabel)}
+                  {where && (
+                    <span className='text-slate-500 dark:text-muted-foreground'> · {where}</span>
+                  )}
                 </span>
                 {c.created_at && (
                   <span className='shrink-0 text-[11px] text-slate-500 dark:text-muted-foreground'>
@@ -718,7 +808,7 @@ export function ChangesList({
           )
         })}
       </ul>
-      {open && (
+      {open && !openInLink && (
         <ChangeView
           key={open.changeId}
           initial={open}
@@ -732,6 +822,54 @@ export function ChangesList({
 }
 
 /**
+ * Every change someone still has to act on — planned, waiting for approval, running, failed,
+ * interrupted — so a plan left open on another page is never lost. Each opens in the page's
+ * `?change=` panel. Renders nothing while there are none.
+ */
+export function OpenChanges({
+  filter,
+  description,
+  connectionName
+}: {
+  filter: Omit<ChangeFilter, 'status'>
+  description: string
+  connectionName?: (id: number) => string | null
+}) {
+  const f: ChangeFilter = { ...filter, status: OPEN_CHANGE_STATUSES, limit: 25 }
+  const changes = useQuery({
+    queryKey: providerKeys.changes(f),
+    queryFn: () => fetchChanges(f),
+    refetchInterval: (q) => (q.state.data?.some((c) => isLiveChange(c.status)) ? 5000 : false)
+  })
+  const n = changes.data?.length ?? 0
+  if (!changes.isError && n === 0) return null
+  return (
+    <SectionCard
+      title='Open changes'
+      description={description}
+      actions={
+        n > 0 ? (
+          <span className='text-[12px] tabular-nums text-slate-500 dark:text-muted-foreground'>
+            {n === 25 ? '25+' : n}
+          </span>
+        ) : undefined
+      }
+    >
+      <div className='px-4 py-2'>
+        <ChangesList
+          filter={f}
+          isAdmin
+          label='Open changes'
+          empty={null}
+          openInLink
+          connectionName={connectionName}
+        />
+      </div>
+    </SectionCard>
+  )
+}
+
+/**
  * The change named by `?change=<id>` (the link in a change notice): shown above the tab's own
  * content as one panel with the usual change view, closed by dropping the parameter. An id that
  * is not a whole number, or a change the person may not read, says so instead of going blank.
@@ -740,6 +878,13 @@ export function LinkedChange({ isAdmin }: { isAdmin: boolean }) {
   const [params, setParams] = useSearchParams()
   const raw = params.get('change')
   const id = raw && /^\d+$/.test(raw) ? Number(raw) : null
+  const box = useRef<HTMLDivElement>(null)
+  // Opened from a list further down the page: bring the panel into view.
+  useEffect(() => {
+    if (raw == null) return
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    box.current?.scrollIntoView?.({ block: 'start', behavior: still ? 'auto' : 'smooth' })
+  }, [raw])
   const row = useQuery({
     queryKey: providerKeys.change(id ?? 0),
     queryFn: () => fetchChange(id as number),
@@ -757,36 +902,45 @@ export function LinkedChange({ isAdmin }: { isAdmin: boolean }) {
       { replace: true }
     )
   return (
-    <SectionCard
-      title={id != null ? `Change ${id}` : 'Change'}
-      actions={
-        <button type='button' className={ghostButton} onClick={close}>
-          <X className='h-3.5 w-3.5' aria-hidden /> Close
-        </button>
-      }
-    >
-      <div className='px-4 py-3'>
-        {id == null ? (
-          <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
-            “{raw}” is not a change number.
-          </p>
-        ) : row.isPending ? (
-          <Skeleton className='h-16 w-full' />
-        ) : row.isError ? (
-          <ErrorNotice
-            description={providerError(row.error, 'Could not open that change')}
-            onRetry={() => void row.refetch()}
-          />
-        ) : (
-          <ChangeView
-            key={row.data.id}
-            initial={changeFromRow(row.data)}
-            isAdmin={isAdmin}
-            onClose={close}
-            onReplace={(next) => setParams({ change: String(next.changeId) }, { replace: true })}
-          />
-        )}
-      </div>
-    </SectionCard>
+    <div ref={box} className='scroll-mt-4'>
+      <SectionCard
+        title={
+          id != null
+            ? row.data?.status === 'planned'
+              ? `The plan · change ${id}`
+              : `Change ${id}`
+            : 'Change'
+        }
+        actions={
+          <button type='button' className={ghostButton} onClick={close}>
+            <X className='h-3.5 w-3.5' aria-hidden /> Close
+          </button>
+        }
+      >
+        <div className='px-4 py-3'>
+          {id == null ? (
+            <p className='m-0 text-[12px] text-slate-500 dark:text-muted-foreground'>
+              “{raw}” is not a change number.
+            </p>
+          ) : row.isPending ? (
+            <Skeleton className='h-16 w-full' />
+          ) : row.isError ? (
+            <ErrorNotice
+              description={providerError(row.error, 'Could not open that change')}
+              onRetry={() => void row.refetch()}
+            />
+          ) : (
+            <ChangeView
+              key={row.data.id}
+              initial={changeFromRow(row.data)}
+              isAdmin={isAdmin}
+              onClose={close}
+              framed={false}
+              onReplace={(next) => setParams({ change: String(next.changeId) }, { replace: true })}
+            />
+          )}
+        </div>
+      </SectionCard>
+    </div>
   )
 }
