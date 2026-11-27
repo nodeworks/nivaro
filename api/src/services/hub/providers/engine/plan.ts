@@ -801,7 +801,7 @@ export async function computePlan(
       types: opTypes,
       rows: opRows.filter((r): r is HubResourceRow => !!r),
       carriedBy: opts.origin?.kind ?? null,
-      createCount: opRows.filter((r) => !r).length
+      requestOps: req.ops
     },
     actor
   )

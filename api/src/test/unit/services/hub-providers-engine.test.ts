@@ -964,25 +964,30 @@ describe('gates', () => {
       environmentId: devEnv,
       types: []
     }
+    const upd = [{ action: 'update', resourceId: row.id }]
+    const del = [{ action: 'delete', resourceId: row.id }]
     // A change on an existing resource, carried by a promotion: allowed per resource.
     await expect(
-      judgeAccess({ ...base, rows: [row], carriedBy: 'promotion', createCount: 0 }, OWNER)
+      judgeAccess({ ...base, rows: [row], carriedBy: 'promotion', requestOps: upd }, OWNER)
     ).resolves.toMatchObject({ app: { id: appId } })
     await expect(
-      judgeAccess({ ...base, rows: [row], carriedBy: 'retirement', createCount: 0 }, OWNER)
+      judgeAccess({ ...base, rows: [row], carriedBy: 'retirement', requestOps: del }, OWNER)
     ).resolves.toMatchObject({ app: { id: appId } })
     // Not carried, a create inside the carried change, or a creation: the allowed list decides.
     await expect(judgeAccess({ ...base, rows: [row] }, OWNER)).rejects.toMatchObject({
       code: 'CONNECTION_NOT_ALLOWED'
     })
+    for (const requestOps of [
+      [...upd, { action: 'create' }],
+      [{ action: 'adopt' }],
+      [{ action: 'update', resourceId: row.id + 999 }],
+      []
+    ])
+      await expect(
+        judgeAccess({ ...base, rows: [row], carriedBy: 'promotion', requestOps }, OWNER)
+      ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
     await expect(
-      judgeAccess({ ...base, rows: [row], carriedBy: 'promotion', createCount: 1 }, OWNER)
-    ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
-    await expect(
-      judgeAccess({ ...base, rows: [], carriedBy: 'promotion', createCount: 0 }, OWNER)
-    ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
-    await expect(
-      judgeAccess({ ...base, rows: [row], carriedBy: 'creation', createCount: 0 }, OWNER)
+      judgeAccess({ ...base, rows: [row], carriedBy: 'creation', requestOps: upd }, OWNER)
     ).rejects.toMatchObject({ code: 'CONNECTION_NOT_ALLOWED' })
     // The allowed list itself never grows.
     expect(await store.appAllowedConnections(appId)).toEqual([connId])

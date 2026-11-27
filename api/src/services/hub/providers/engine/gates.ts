@@ -50,13 +50,14 @@ export interface AccessInput {
   types: ResourceTypeSpec[]
   rows: HubResourceRow[]
   /**
-   * The run that carries this change (judged by `judgeOrigin` before any provider call), and how
-   * many of its ops create a resource. A promotion or retirement may act for an owner on THIS
-   * app's existing managed resources through a connection the app's allowed list does not name —
-   * the grant is per resource, never the whole connection. Creates still need the allowed list.
+   * The run that carries this change (judged by `judgeOrigin` before any provider call), and the
+   * request's own ops (the same list at plan and at start/resume). A promotion or retirement may
+   * act for an owner on THIS app's existing managed resources through a connection the app's
+   * allowed list does not name — the grant is per resource, never the whole connection. Any op
+   * that does not name an existing resource (create, adopt) still needs the allowed list.
    */
   carriedBy?: 'promotion' | 'creation' | 'retirement' | null
-  createCount?: number
+  requestOps?: ReadonlyArray<{ action: string; resourceId?: number | null }>
 }
 
 export interface AccessAnswer {
@@ -65,6 +66,9 @@ export interface AccessAnswer {
   /** Production per THE rule (null for a change with no environment). */
   production: boolean | null
 }
+
+/** Actions that only touch a resource the Hub already manages. */
+const ON_EXISTING: ReadonlySet<string> = new Set(['update', 'delete', 'reapply', 'accept'])
 
 const refuse = (code: ResourceChangeCode, message: string, details?: Record<string, unknown>) =>
   new ResourceChangeError(code, message, details)
@@ -125,10 +129,18 @@ export async function judgeAccess(input: AccessInput, actor: HubActor): Promise<
         'ADMIN_ONLY',
         "Only Hub administrators and this app's owners can change its resources."
       )
+    const ops = input.requestOps ?? []
+    const rowIds = new Set(rows.map((r) => r.id))
     const carriedOnOwnResources =
       (input.carriedBy === 'promotion' || input.carriedBy === 'retirement') &&
-      (input.createCount ?? 0) === 0 &&
-      rows.length > 0
+      ops.length > 0 &&
+      ops.every(
+        (o) =>
+          ON_EXISTING.has(o.action) &&
+          typeof o.resourceId === 'number' &&
+          o.resourceId > 0 &&
+          rowIds.has(o.resourceId)
+      )
     const allowed = carriedOnOwnResources ? [] : await appAllowedConnections(Number(app.id))
     if (!carriedOnOwnResources && !allowed.includes(connection.id))
       throw refuse(
