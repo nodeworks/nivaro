@@ -491,7 +491,8 @@ const isGenerated = (k: string) => (GENERATED_SECRET_KEYS as readonly string[]).
  * Refusal codes: BAD_SIZE, BAD_REDIS, BAD_KEY, BAD_VALUE, SETTING_INVALID (a line break in a
  * one-line key, or a key outside the allow-list: neither a key Nivaro reads nor under the agent's
  * HUB_AGENT_ENV_PREFIXES, ruling P4-23), SECRET_IN_SETTINGS, RESERVED_SETTING,
- * SECRET_REQUIRED, BAD_DB_CLIENT, SQLITE_ONE_PROCESS, BAD_PUBLISH_PORT, BAD_EXTENSION_PIN.
+ * SECRET_REQUIRED, BAD_DB_CLIENT, SQLITE_ONE_PROCESS, BAD_PUBLISH_PORT, BAD_EXTENSION_PIN,
+ * EDGE_TLS_BINDING_ONLY (a typed EDGE_TLS_CERT / EDGE_TLS_KEY: only its ACME binding writes it).
  */
 export async function validateStackSettings(
   body: unknown,
@@ -504,6 +505,13 @@ export async function validateStackSettings(
     driver: DockerDriverConfig
     env: HubEnvironmentRow
     envPrefixes?: () => Promise<AgentEnvPrefixRead | null>
+    /**
+     * Gap G-D: set ONLY by the binding push of an ACME certificate of this same app and
+     * environment (providers/engine/bindings.ts, edgeTlsBindingProblem). Without it a new
+     * EDGE_TLS_CERT / EDGE_TLS_KEY value is refused (EDGE_TLS_BINDING_ONLY): a person never types
+     * the certificate Traefik serves for a stack's names.
+     */
+    edgeTlsWriter?: boolean
   }
 ): Promise<Validation<StackSettingsInput>> {
   const b = isPlainObject(body) ? body : {}
@@ -614,6 +622,15 @@ export async function validateStackSettings(
         }
         const bad = secretKeyProblem(k, redis, allow)
         if (bad) return bad
+        // Gap G-D: a new stack certificate value comes from its ACME binding only. Clearing one
+        // (null / '', above) stays open: it only puts the routers back on the cert resolver.
+        if (isEdgeTlsKey(k) && !ctx.edgeTlsWriter) {
+          return fail(
+            'EDGE_TLS_BINDING_ONLY',
+            `${k} is the stack certificate: it is written only by binding an ACME certificate of this environment (its Outputs card), never typed.`,
+            named('secret', k)
+          )
+        }
         if (typeof v !== 'string') {
           return fail('BAD_VALUE', `Secret ${k} must be text.`, named('secret', k))
         }

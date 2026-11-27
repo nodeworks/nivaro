@@ -949,14 +949,18 @@ describe('prepareStackSpec (restart, ruling P4-16)', () => {
     await useDriver(manual)
     await db('nivaro_hub_environments')
       .where({ id: 2 })
-      .update({ base_url: 'https://acme-staging.apps.corp' })
+      .update({
+        base_url: 'https://acme-staging.apps.corp',
+        hostnames: JSON.stringify(['www.acme-staging.apps.corp'])
+      })
     const env = environmentFromRow(
       await db('nivaro_hub_environments').where({ id: 2 }).first()
     ) as Env
     const v = await S.validateStackSettings(
       { secrets: { EDGE_TLS_CERT: cert, EDGE_TLS_KEY: key } },
       await S.readStackSettings(2),
-      { driver: manual, env }
+      // The ACME binding's push is the only writer of these two (EDGE_TLS_BINDING_ONLY).
+      { driver: manual, env, edgeTlsWriter: true }
     )
     if (!v.ok) throw new Error(`${v.code}: ${v.message}`)
     await S.saveStackSettings(2, v.row.fields, v.row.extension_pins)

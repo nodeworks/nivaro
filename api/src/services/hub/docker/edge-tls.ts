@@ -29,11 +29,47 @@ export const EDGE_TLS_AGENT_MIN_VERSION = '0.2.5'
 
 export const isEdgeTlsKey = (k: string): boolean => EDGE_TLS_SECRET_KEYS.includes(k)
 
+/**
+ * The only writer of the two keys: a Hub-managed ACME certificate of the SAME app and
+ * environment, its `fullchain` into EDGE_TLS_CERT and its `private_key` into EDGE_TLS_KEY, as stack
+ * secrets. A person never types them (stack-settings.ts EDGE_TLS_BINDING_ONLY), and no other
+ * resource type may bind them: whoever writes them decides which names Traefik answers for.
+ */
+export const EDGE_TLS_RESOURCE_TYPE = 'acme.certificate'
+export const EDGE_TLS_OUTPUT_FOR: Readonly<Record<string, string>> = Object.freeze({
+  [EDGE_TLS_CERT_KEY]: 'fullchain',
+  [EDGE_TLS_KEY_KEY]: 'private_key'
+})
+
+/** Why this binding may not write an EDGE_TLS_* key (null = it may, or it is another key). */
+export function edgeTlsBindingProblem(
+  row: {
+    type: string
+    scope: string
+    app_id: number | null
+    environment_id: number | null
+    deleted_at?: string | null
+  },
+  b: { output_key: string; environment_id: number; target: string; target_key: string },
+  envAppId: number | null
+): string | null {
+  if (!isEdgeTlsKey(b.target_key)) return null
+  const why = `${b.target_key} is the stack certificate: only the ${EDGE_TLS_OUTPUT_FOR[b.target_key]} output of an ACME certificate (acme.certificate) of this same app and environment may write it, as a stack secret.`
+  if (row.deleted_at) return why
+  if (row.type !== EDGE_TLS_RESOURCE_TYPE || row.scope !== 'app') return why
+  if (b.target !== 'stack_secret') return why
+  if (EDGE_TLS_OUTPUT_FOR[b.target_key] !== b.output_key) return why
+  if (row.app_id == null || envAppId == null || row.app_id !== envAppId) return why
+  if (row.environment_id != null && row.environment_id !== b.environment_id) return why
+  return null
+}
+
 export type EdgeTlsProblemCode =
   | 'EDGE_TLS_INCOMPLETE'
   | 'EDGE_TLS_INVALID'
   | 'EDGE_TLS_KEY_MISMATCH'
   | 'EDGE_TLS_NAME_NOT_COVERED'
+  | 'EDGE_TLS_NAME_OUTSIDE_STACK'
   | 'EDGE_TLS_NEEDS_TRAEFIK'
   | 'EDGE_TLS_NOT_CONFIGURED'
   | 'AGENT_TOO_OLD'
@@ -41,6 +77,35 @@ export type EdgeTlsProblemCode =
 export interface EdgeTlsProblem {
   code: EdgeTlsProblemCode
   message: string
+}
+
+/** A DNS name as Traefik's store compares it: case-insensitive, a trailing dot the same name. */
+export const normName = (n: string): string => n.toLowerCase().replace(/\.$/, '')
+
+const SAN_DNS_RE = /^[A-Za-z0-9*_-]+(?:\.[A-Za-z0-9*_-]+)*\.?$/
+
+/**
+ * The names a leaf answers for: its DNS SANs, else its CN. null = a SAN that is not a plain DNS
+ * name (IP address, URI, email, a value Node quoted). Twin of the agent's edge-tls.ts leafNames.
+ */
+export function leafNames(leaf: X509Certificate): string[] | null {
+  const san = leaf.subjectAltName
+  if (san !== undefined && san !== '') {
+    const out: string[] = []
+    for (const part of san.split(', ')) {
+      if (!part.startsWith('DNS:')) return null
+      const name = part.slice(4)
+      if (!SAN_DNS_RE.test(name)) return null
+      out.push(normName(name))
+    }
+    return out
+  }
+  const cns = (leaf.subject ?? '')
+    .split('\n')
+    .filter((l) => l.startsWith('CN='))
+    .map((l) => l.slice(3))
+  if (cns.some((n) => !SAN_DNS_RE.test(n))) return null
+  return cns.map(normName)
 }
 
 /** What the agent says about itself (GET /v1/health), as far as edge TLS goes. */
@@ -104,11 +169,24 @@ export function edgeTlsCertProblem(
       code: 'EDGE_TLS_KEY_MISMATCH',
       message: 'EDGE_TLS_KEY is not the private key of the certificate in EDGE_TLS_CERT.'
     }
-  const missing = hostnames.filter((h) => leaf.checkHost(h) === undefined)
+  const missing = hostnames.filter((h) => leaf.checkHost(normName(h)) === undefined)
   if (missing.length)
     return {
       code: 'EDGE_TLS_NAME_NOT_COVERED',
       message: `The stack certificate does not cover ${missing.join(', ')}: reissue it with ${missing.length > 1 ? 'those names' : 'that name'}, or remove ${missing.length > 1 ? 'them' : 'it'} from the environment.`
+    }
+  // Security review 2026-11-27, twin of the agent's rule: Traefik's file-provider store is one
+  // store for every router and picks by SNI, so every name the leaf answers for must be one of
+  // this environment's own names — no other host, no wildcard over others, no IP or other SANs.
+  const own = new Set(hostnames.map(normName))
+  const names = leafNames(leaf)
+  if (names === null || names.length === 0 || names.some((n) => !own.has(n)))
+    return {
+      code: 'EDGE_TLS_NAME_OUTSIDE_STACK',
+      message:
+        names === null
+          ? 'The stack certificate carries an address or another kind of name besides DNS names: Traefik would serve it for more than this environment. Reissue it for the environment’s names only.'
+          : `The stack certificate also names ${names.filter((n) => !own.has(n)).join(', ') || 'nothing of this environment'}: Traefik serves one certificate store for every stack, so it would answer for names that are not this environment’s. Reissue it for exactly the environment’s names.`
     }
   return null
 }

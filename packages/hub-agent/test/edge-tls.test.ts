@@ -80,18 +80,66 @@ describe('checkEdgeTls', () => {
     expect(r.ok && pemBlocks(r.tls.cert)?.length).toBe(2)
   })
 
-  it('a wildcard certificate covers one label, never two', () => {
-    expect(checkEdgeTls(WILD, ['acme-staging.apps.corp']).ok).toBe(true)
-    expect(checkEdgeTls(WILD, ['acme-staging.apps.corp', 'a.b.apps.corp'])).toEqual({
+  it('a name the certificate does not cover: TLS_NAME_NOT_COVERED on that hostname', () => {
+    expect(checkEdgeTls(A, [...NAMES, 'other.apps.corp'])).toEqual({
       ok: false,
-      fields: [{ field: 'hostnames[1]', code: 'TLS_NAME_NOT_COVERED' }]
+      fields: [{ field: 'hostnames[2]', code: 'TLS_NAME_NOT_COVERED' }]
     })
   })
 
-  it('a name the certificate does not cover: TLS_NAME_NOT_COVERED on that hostname', () => {
-    expect(checkEdgeTls(A, ['acme-staging.apps.corp', 'other.apps.corp'])).toEqual({
-      ok: false,
-      fields: [{ field: 'hostnames[1]', code: 'TLS_NAME_NOT_COVERED' }]
+  // Security review 2026-11-27: Traefik's file-provider store is one store for every router and
+  // picks by SNI, so a leaf naming another stack's host would take over TLS for that stack.
+  describe('every name the leaf answers for is one of the stack’s own (TLS_NAME_OUTSIDE_STACK)', () => {
+    const OUT = { field: 'edge_tls.cert', code: 'TLS_NAME_OUTSIDE_STACK' }
+    const FOREIGN = { cert: read('foreign.crt'), key: read('foreign.key') }
+    const WILD_OWN = { cert: read('wild-own.crt'), key: read('wild-own.key') }
+    const CN_FOREIGN = { cert: read('cn-foreign.crt'), key: read('cn-foreign.key') }
+    const CN_OWN = { cert: read('cn-own.crt'), key: read('cn-own.key') }
+    const IP = { cert: read('ip.crt'), key: read('ip.key') }
+
+    it('a SAN for a foreign host is refused', () => {
+      expect(checkEdgeTls(FOREIGN, NAMES)).toEqual({ ok: false, fields: [OUT] })
+    })
+
+    it('a wildcard SAN covering a foreign host is refused (also beside the own names)', () => {
+      expect(checkEdgeTls(WILD_OWN, NAMES)).toEqual({ ok: false, fields: [OUT] })
+      expect(checkEdgeTls(WILD, ['acme-staging.apps.corp'])).toEqual({ ok: false, fields: [OUT] })
+    })
+
+    it('a CN-only leaf naming a foreign host is refused; one naming the stack passes', () => {
+      expect(checkEdgeTls(CN_FOREIGN, ['acme-staging.apps.corp'])).toMatchObject({
+        ok: false,
+        fields: expect.arrayContaining([OUT])
+      })
+      expect(checkEdgeTls(CN_OWN, ['acme-staging.apps.corp']).ok).toBe(true)
+    })
+
+    it('an IP SAN is refused', () => {
+      expect(checkEdgeTls(IP, NAMES)).toEqual({ ok: false, fields: [OUT] })
+    })
+
+    it('a leaf naming more than the stack routes is refused (a name another stack may own)', () => {
+      expect(checkEdgeTls(A, ['acme-staging.apps.corp'])).toEqual({ ok: false, fields: [OUT] })
+    })
+
+    it('an exact-match leaf passes; case and a trailing dot are the same name', () => {
+      expect(checkEdgeTls(A, NAMES).ok).toBe(true)
+      expect(checkEdgeTls(A, ['ACME-Staging.apps.corp.', 'www.acme-staging.APPS.corp']).ok).toBe(
+        true
+      )
+    })
+
+    it('with host suffixes, every name must sit under one of them', () => {
+      expect(checkEdgeTls(A, NAMES, { hostSuffixes: ['.apps.corp'] }).ok).toBe(true)
+      expect(checkEdgeTls(A, NAMES, { hostSuffixes: ['.other.corp'] })).toEqual({
+        ok: false,
+        fields: [OUT]
+      })
+    })
+
+    it('through the validator: a foreign SAN is refused before anything is written', () => {
+      const r = validateStackSpec({ ...appSpec(), edge_tls: FOREIGN }, specCfg())
+      expect(r).toEqual({ ok: false, fields: [OUT] })
     })
   })
 
@@ -221,7 +269,10 @@ describe('validateStackSpec: edge_tls', () => {
     )
     expect(r).toEqual({
       ok: false,
-      fields: [{ field: 'hostnames[0]', code: 'TLS_NAME_NOT_COVERED' }]
+      fields: [
+        { field: 'hostnames[0]', code: 'TLS_NAME_NOT_COVERED' },
+        { field: 'edge_tls.cert', code: 'TLS_NAME_OUTSIDE_STACK' }
+      ]
     })
     const m = validateStackSpec({ ...appSpec(), edge_tls: { cert: A.cert, key: B.key } }, specCfg())
     expect(m).toEqual({ ok: false, fields: [{ field: 'edge_tls.key', code: 'TLS_KEY_MISMATCH' }] })

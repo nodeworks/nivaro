@@ -159,6 +159,37 @@ describe('renderStackSpec: the stack certificate', () => {
     expect(refusal(input({ cert: 'not a certificate', key: A.key }))).toBe('EDGE_TLS_INVALID')
   })
 
+  // Security review 2026-11-27 (twin of the agent): Traefik's file-provider store is shared by
+  // every stack and picks by SNI, so a leaf naming another environment's host must never be sent.
+  it('a leaf naming a foreign host, a wildcard over one, a foreign CN or an IP: EDGE_TLS_NAME_OUTSIDE_STACK', () => {
+    const pair = (n: string) => ({ cert: pem(`${n}.crt`), key: pem(`${n}.key`) })
+    expect(refusal(input(pair('foreign')))).toBe('EDGE_TLS_NAME_OUTSIDE_STACK')
+    expect(refusal(input(pair('wild-own')))).toBe('EDGE_TLS_NAME_OUTSIDE_STACK')
+    expect(refusal(input(pair('ip')))).toBe('EDGE_TLS_NAME_OUTSIDE_STACK')
+    const only = (tls: { cert: string; key: string }) => {
+      const i = input(tls)
+      i.env.hostnames = []
+      return i
+    }
+    expect(refusal(only(pair('cn-foreign')))).toMatch(/^EDGE_TLS_NAME_/)
+    expect(refusal(only(pair('cn-own')))).toBe('NO_ERROR')
+    // More names than the environment routes (www here) is outside too.
+    expect(refusal(only(A))).toBe('EDGE_TLS_NAME_OUTSIDE_STACK')
+    let msg = ''
+    try {
+      renderStackSpec(input(pair('foreign')))
+    } catch (e) {
+      msg = (e as Error).message
+    }
+    expect(msg).toContain('other.apps.corp')
+    expect(msg).not.toContain('BEGIN')
+  })
+
+  it('an exact-match leaf passes; the agent accepts what the Hub sends', () => {
+    const spec = renderStackSpec(input(A))
+    expect(agentSpec.validateStackSpec(structuredClone(spec), agentCfg()).ok).toBe(true)
+  })
+
   it('a plan’s dry render over masks judges the agent, not the content', () => {
     const masked = input({ cert: HUB_MASK, key: HUB_MASK }, { maskedSecrets: true })
     expect(refusal(masked)).toBe('NO_ERROR')
@@ -246,7 +277,42 @@ describe('stack settings: EDGE_TLS_CERT / EDGE_TLS_KEY', () => {
     env = await newEnv()
   })
 
-  it('are taken as secrets (multi-line PEM), sealed, and never ask the agent for prefixes', async () => {
+  it('a person typing them is refused EDGE_TLS_BINDING_ONLY (each key, any value)', async () => {
+    for (const secrets of [
+      { EDGE_TLS_CERT: A.cert },
+      { EDGE_TLS_KEY: A.key },
+      { EDGE_TLS_CERT: A.cert, EDGE_TLS_KEY: A.key }
+    ]) {
+      const v = await S.validateStackSettings({ secrets }, null, { driver, env })
+      expect(v).toMatchObject({ ok: false, code: 'EDGE_TLS_BINDING_ONLY' })
+      expect(JSON.stringify(v)).not.toContain(keyBody(A.key))
+    }
+  })
+
+  it('a person may clear them (back to the resolver) and keep them as masks', async () => {
+    const w = await S.validateStackSettings(
+      { secrets: { EDGE_TLS_CERT: A.cert, EDGE_TLS_KEY: A.key } },
+      null,
+      { driver, env, edgeTlsWriter: true }
+    )
+    if (!w.ok) throw new Error(w.code)
+    await S.saveStackSettings(env.id, w.row.fields, w.row.extension_pins)
+    const existing = await S.readStackSettings(env.id)
+    const keep = await S.validateStackSettings(
+      { secrets: { EDGE_TLS_CERT: HUB_MASK, EDGE_TLS_KEY: HUB_MASK } },
+      existing,
+      { driver, env }
+    )
+    expect(keep.ok).toBe(true)
+    const clear = await S.validateStackSettings(
+      { secrets: { EDGE_TLS_CERT: null, EDGE_TLS_KEY: '' } },
+      existing,
+      { driver, env }
+    )
+    expect(clear.ok).toBe(true)
+  })
+
+  it('the binding writer: taken as secrets (multi-line PEM), sealed, no prefix read', async () => {
     let asked = 0
     const v = await S.validateStackSettings(
       { secrets: { EDGE_TLS_CERT: A.cert, EDGE_TLS_KEY: A.key } },
@@ -254,6 +320,7 @@ describe('stack settings: EDGE_TLS_CERT / EDGE_TLS_KEY', () => {
       {
         driver,
         env,
+        edgeTlsWriter: true,
         envPrefixes: async () => {
           asked++
           return { prefixes: [], known: true }

@@ -360,7 +360,14 @@ What the agent does with it:
   resolver), `TLS_BAD` (not 1-10 `CERTIFICATE` blocks, not exactly one
   unencrypted `PRIVATE KEY` / `RSA PRIVATE KEY` / `EC PRIVATE KEY`, any text
   around the blocks, or not parseable), `TLS_KEY_MISMATCH`, and
-  `TLS_NAME_NOT_COVERED` on each `hostnames[i]` the leaf does not cover. A file
+  `TLS_NAME_NOT_COVERED` on each `hostnames[i]` the leaf does not cover, and
+  `TLS_NAME_OUTSIDE_STACK` when the leaf answers for any name that is not one
+  of the stack's own hostnames: every DNS SAN (or the CN when there is no SAN)
+  must be a stack hostname (case-insensitive, a trailing dot ignored) and sit
+  under `HUB_AGENT_HOST_SUFFIXES`; a wildcard SAN, an IP SAN or any other SAN
+  kind is refused. Traefik's file-provider store is one store for every
+  router and picks by SNI, so a leaf that also named another stack's host
+  would take over that stack's TLS. A file
   that cannot be written is `500 EDGE_TLS_WRITE_FAILED`, before any Docker
   write.
 

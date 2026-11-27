@@ -41,6 +41,7 @@ export type EdgeTlsCode =
   | 'TLS_BAD'
   | 'TLS_KEY_MISMATCH'
   | 'TLS_NAME_NOT_COVERED'
+  | 'TLS_NAME_OUTSIDE_STACK'
 
 export type EdgeTlsCheck =
   | { ok: true; tls: EdgeTls }
@@ -82,13 +83,62 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> => {
   return proto === Object.prototype || proto === null
 }
 
+/** A DNS name compared as Traefik's store does: case-insensitive, a trailing dot the same name. */
+export const normName = (n: string): string => n.toLowerCase().replace(/\.$/, '')
+
+const SAN_DNS_RE = /^[A-Za-z0-9*_-]+(?:\.[A-Za-z0-9*_-]+)*\.?$/
+
+/**
+ * The names a leaf answers for: its DNS SANs, or its CN when it has no SAN at all (what a TLS
+ * client falls back to). null = a SAN entry that is not a plain DNS name (an IP address, a URI, an
+ * email, a quoted value Node escaped): such a leaf is never served from the shared store.
+ */
+export function leafNames(leaf: X509Certificate): string[] | null {
+  const san = leaf.subjectAltName
+  if (san !== undefined && san !== '') {
+    const out: string[] = []
+    for (const part of san.split(', ')) {
+      if (!part.startsWith('DNS:')) return null
+      const name = part.slice(4)
+      if (!SAN_DNS_RE.test(name)) return null
+      out.push(normName(name))
+    }
+    return out
+  }
+  const cns = (leaf.subject ?? '')
+    .split('\n')
+    .filter((l) => l.startsWith('CN='))
+    .map((l) => l.slice(3))
+  if (cns.some((n) => !SAN_DNS_RE.test(n))) return null
+  return cns.map(normName)
+}
+
+function underSuffix(h: string, suffixes: readonly string[]): boolean {
+  return suffixes.some((s) => {
+    const suffix = s.startsWith('.') ? s.toLowerCase() : `.${s.toLowerCase()}`
+    return suffix.length > 1 && h.length > suffix.length && h.endsWith(suffix)
+  })
+}
+
 /**
  * A spec's `edge_tls`, checked and normalised (only the PEM blocks, LF line ends): the chain is
  * 1–10 CERTIFICATE blocks, the key exactly one unencrypted private key (an `EC PARAMETERS` block
  * beside it is dropped), the key belongs to the leaf certificate, and the leaf covers every name
- * the stack routes (a wildcard covers one label). Answers field paths and codes only.
+ * the stack routes (a wildcard covers one label).
+ *
+ * And the reverse (security review 2026-11-27): Traefik's file-provider certificate store is
+ * ONE store for every router and picks by SNI, so a leaf that also names another stack's host (or
+ * a wildcard over it) would take over TLS for that stack. Every name the leaf answers for (DNS
+ * SANs, else the CN) must be one of THIS stack's hostnames, compared case-insensitively with a
+ * trailing dot ignored; a wildcard only when that exact wildcard is a stack hostname (the
+ * validator never lets one be, so in practice never); no IP or other SAN kinds; and, with host
+ * suffixes, every name under one of them. Else TLS_NAME_OUTSIDE_STACK. Codes only, never a name.
  */
-export function checkEdgeTls(v: unknown, hostnames: readonly string[]): EdgeTlsCheck {
+export function checkEdgeTls(
+  v: unknown,
+  hostnames: readonly string[],
+  opts: { hostSuffixes?: readonly string[] } = {}
+): EdgeTlsCheck {
   const fields: Array<{ field: string; code: EdgeTlsCode }> = []
   if (!isPlainObject(v)) return { ok: false, fields: [{ field: 'edge_tls', code: 'REQUIRED' }] }
   for (const k of Object.keys(v))
@@ -149,9 +199,20 @@ export function checkEdgeTls(v: unknown, hostnames: readonly string[]): EdgeTlsC
   if (!leaf.checkPrivateKey(keyObject))
     return { ok: false, fields: [{ field: 'edge_tls.key', code: 'TLS_KEY_MISMATCH' }] }
   hostnames.forEach((h, i) => {
-    if (leaf.checkHost(h) === undefined)
+    if (leaf.checkHost(normName(h)) === undefined)
       fields.push({ field: `hostnames[${i}]`, code: 'TLS_NAME_NOT_COVERED' })
   })
+  const own = new Set(hostnames.map(normName))
+  const names = leafNames(leaf)
+  const suffixes = opts.hostSuffixes ?? []
+  const outside =
+    names === null ||
+    names.length === 0 ||
+    names.some(
+      (n) =>
+        !own.has(n) || (suffixes.length > 0 && !underSuffix(n.replace(/^\*\./, 'x.'), suffixes))
+    )
+  if (outside) fields.push({ field: 'edge_tls.cert', code: 'TLS_NAME_OUTSIDE_STACK' })
   if (fields.length > 0) return { ok: false, fields }
   return { ok: true, tls: { cert, key } }
 }

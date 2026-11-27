@@ -111,6 +111,7 @@ export type FieldCode =
   | 'TLS_BAD'
   | 'TLS_KEY_MISMATCH'
   | 'TLS_NAME_NOT_COVERED'
+  | 'TLS_NAME_OUTSIDE_STACK'
   | 'TLS_NOT_FOR_SHARED'
   | 'TLS_NEEDS_TRAEFIK'
   | 'TLS_NOT_CONFIGURED'
@@ -701,7 +702,9 @@ export function validateStackSpec(body: unknown, cfg: SpecConfig): SpecResult {
     else {
       // Names are checked against the certificate only once every one passed (indices match).
       const namesOk = Array.isArray(body.hostnames) && hostnames.length === body.hostnames.length
-      const c = checkEdgeTls(body.edge_tls, namesOk ? hostnames : [])
+      const c = checkEdgeTls(body.edge_tls, namesOk ? hostnames : [], {
+        hostSuffixes: cfg.hostSuffixes
+      })
       if (c.ok) edgeTls = c.tls
       else for (const f of c.fields) bad(f.field, f.code)
     }
