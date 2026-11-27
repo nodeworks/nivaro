@@ -907,6 +907,10 @@ export const PROVIDER_CODE_COPY: Record<string, { title: string; hint?: string }
     title: 'That environment belongs to another app',
     hint: 'An app’s resource feeds that app’s environments only.'
   },
+  EDGE_TLS_BINDING_ONLY: {
+    title: 'Only an ACME certificate of this environment can fill that setting',
+    hint: 'Bind the fullchain and private key outputs of this environment’s ACME certificate.'
+  },
   BINDING_TAKEN: {
     title: 'Another resource already fills that setting',
     hint: 'Remove that binding first, or pick another setting.'

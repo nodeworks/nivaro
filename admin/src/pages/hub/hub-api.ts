@@ -1123,6 +1123,34 @@ Object.assign(BLOCKER_COPY, {
     title: 'The Hub agent is too old for this',
     hint: 'Update the agent (nodeworks/nivaro-hub-agent) to the version the message names.'
   },
+  EDGE_TLS_NEEDS_TRAEFIK: {
+    title: 'A bound certificate needs Traefik in front of the stack',
+    hint: 'Publish the stack through Traefik on this driver, or remove the certificate binding.'
+  },
+  EDGE_TLS_NOT_CONFIGURED: {
+    title: 'The Hub agent has no Traefik certificate folder',
+    hint: 'Set the agent’s Traefik certificate folder (see the Hub agent README, edge TLS), then apply again.'
+  },
+  EDGE_TLS_INVALID: {
+    title: 'The bound certificate could not be read',
+    hint: 'Renew or re-issue the certificate on its ACME resource, then apply again.'
+  },
+  EDGE_TLS_KEY_MISMATCH: {
+    title: 'The certificate and its private key do not belong together',
+    hint: 'Re-issue the certificate on its ACME resource, then apply again.'
+  },
+  EDGE_TLS_NAME_NOT_COVERED: {
+    title: 'The certificate does not cover every name of this environment',
+    hint: 'Order the certificate for exactly the environment’s names, then apply again.'
+  },
+  EDGE_TLS_NAME_OUTSIDE_STACK: {
+    title: 'The certificate names a host outside this environment',
+    hint: 'A certificate may name only this environment’s own hosts (no other names, wildcards or IP addresses). Order one for exactly its names.'
+  },
+  EDGE_TLS_BINDING_ONLY: {
+    title: 'The edge certificate is set by its ACME binding only',
+    hint: 'Bind an ACME certificate of this environment to the stack instead of typing a value.'
+  },
   UPLOADS_FOLDER_NEEDS_NFS: {
     title: 'An uploads folder needs an agent with an NFS export',
     hint: 'Set an NFS device in HUB_AGENT_VOLUME_OPTS_FILE on the agent, or clear the uploads folder.'
@@ -1258,7 +1286,16 @@ export const AGENT_FIELD_COPY: Record<string, string> = {
   NO_NFS_EXPORT: 'A per-stack files folder needs an NFS share set up on the agent first.',
   RUN_AS_BAD: 'The process user setting is not one the agent accepts.',
   ROLE_NEEDS_TRAEFIK_V3:
-    'A separate realtime role needs Traefik v3: set the agent to Traefik v3 (HUB_AGENT_TRAEFIK_VERSION=3), or run without a separate realtime role.'
+    'A separate realtime role needs Traefik v3: set the agent to Traefik v3 (HUB_AGENT_TRAEFIK_VERSION=3), or run without a separate realtime role.',
+  TLS_BAD: 'The bound certificate or its key could not be read.',
+  TLS_KEY_MISMATCH: 'The certificate and its private key do not belong together.',
+  TLS_NAME_NOT_COVERED: 'The certificate does not cover one of the stack’s names.',
+  TLS_NAME_OUTSIDE_STACK:
+    'The certificate names a host outside this stack (another name, a wildcard or an IP address): order one for exactly the stack’s names.',
+  TLS_NOT_FOR_SHARED: 'A bound certificate is for a dedicated stack, not a shared deployment.',
+  TLS_NEEDS_TRAEFIK: 'A bound certificate needs the stack published through Traefik.',
+  TLS_NOT_CONFIGURED:
+    'The agent has no Traefik certificate folder set, so it cannot hand the certificate to Traefik.'
 }
 
 /** A Hub deploy row's kind in words (history): `move` = "Moved", `shared` = "Shared upgrade". */
