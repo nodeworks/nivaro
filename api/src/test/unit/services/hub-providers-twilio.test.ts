@@ -920,6 +920,20 @@ describe('twilio adapter: apply', () => {
     )
     expect(renamed.data?.$adminOnly).toBe(true)
     expect((renamed.data as any)?.$blocker?.code).toBe('SUBACCOUNT_MISMATCH')
+    // The connection's own account written as a prefix is still the main account.
+    const ownPrefixed: Observed = {
+      ...mainKey,
+      externalId: `${AC}/${SK}`,
+      fields: { name: 'k', subaccount: AC }
+    }
+    const [own] = twilioAdapter.plan(ctx, null, ownPrefixed)
+    expect(own.data?.$adminOnly).toBe(true)
+    const [ownCreate] = twilioAdapter.plan(
+      ctx,
+      desired(T_KEY, { name: 'k', subaccount: { resourceId: 3 } }, null, { subaccount: AC }),
+      null
+    )
+    expect(ownCreate.data?.$adminOnly).toBe(true)
     // A key inside the named subaccount stays an owner change.
     const subKey: Observed = {
       ...mainKey,

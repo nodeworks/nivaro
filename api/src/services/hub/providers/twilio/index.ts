@@ -1199,13 +1199,22 @@ function planAny(
   if (type === T_KEY) {
     // Which account the key lives in is judged on the provider's own answer once the key exists;
     // the desired ref decides only for a create (security review: never trust the request alone).
-    const observedAccount = observed ? parseKeyId(observed.externalId).account : null
+    // The connection's own account is the main account, however the id is written (`SK…` or
+    // `<own AC>/SK…`): only a DIFFERENT account counts as a subaccount (security review).
+    const own = accountOf(ctx)
+    const notOwn = (a: string | null) => (a && a !== own ? a : null)
+    const observedAccount = observed ? notOwn(parseKeyId(observed.externalId).account) : null
     const wantAccount = desired
       ? typeof desired.refs.subaccount === 'string' && desired.refs.subaccount
-        ? desired.refs.subaccount
+        ? notOwn(desired.refs.subaccount)
         : null
       : null
-    const sub = observed ? !!observedAccount : !!desired?.fields.subaccount
+    // A create names a subaccount by ref; a ref that resolves to the connection's own account is the
+    // main account. An unresolved ref (made in the same change) is checked again at apply.
+    const sub = observed
+      ? !!observedAccount
+      : !!desired?.fields.subaccount &&
+        (desired.refs.subaccount == null || desired.refs.subaccount === '' || wantAccount !== null)
     const moved = !!(observed && desired && wantAccount !== observedAccount)
     const ops =
       desired && observed && desired.fields[ROTATE_OUTPUTS_FIELD] === true
