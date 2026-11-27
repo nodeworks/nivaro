@@ -1,0 +1,14 @@
+{
+  "id": "price_TESTprice0001",
+  "object": "price",
+  "active": true,
+  "livemode": false,
+  "currency": "usd",
+  "unit_amount": 1500,
+  "product": "prod_TESTproduct0001",
+  "nickname": "Monthly",
+  "lookup_key": "demo_monthly",
+  "tax_behavior": "unspecified",
+  "recurring": { "interval": "month", "interval_count": 1 },
+  "metadata": { "nivaro-hub:resource": "8" }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "bpc_TESTportal0001",
+  "object": "billing_portal.configuration",
+  "is_active": true,
+  "livemode": false,
+  "default_return_url": "https://app.example.com/account",
+  "business_profile": {
+    "headline": "Manage billing",
+    "privacy_policy_url": "https://example.com/privacy",
+    "terms_of_service_url": null
+  },
+  "features": {
+    "invoice_history": { "enabled": true },
+    "payment_method_update": { "enabled": true },
+    "customer_update": { "enabled": true, "allowed_updates": ["phone", "email"] },
+    "subscription_cancel": { "enabled": false }
+  },
+  "metadata": { "nivaro-hub:resource": "10" }
+}

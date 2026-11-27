@@ -1,0 +1,11 @@
+{
+  "id": "we_TESTendpoint0001",
+  "object": "webhook_endpoint",
+  "livemode": false,
+  "url": "https://hooks.example.com/stripe",
+  "enabled_events": ["invoice.paid", "checkout.session.completed"],
+  "description": "Demo hook",
+  "status": "enabled",
+  "secret": "whsec_test-secret-signing-0001",
+  "metadata": { "nivaro-hub:resource": "9" }
+}
