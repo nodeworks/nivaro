@@ -110,3 +110,39 @@ export const Q_BUILDS = `query HubBuilds($appId: String!, $offset: Int!, $limit:
 export const M_TRIGGER_BUILD = `mutation HubTriggerBuild($appId: ID!, $platform: AppPlatform!, $profile: String!, $gitRef: String) {
   build { triggerBuildFromGit(appId: $appId, platform: $platform, buildProfile: $profile, gitRef: $gitRef) { id status platform buildProfile } }
 }`
+
+// ── Android push credentials (FCM V1 service-account key) ──
+// Everything below is UNVERIFIED against a live account: names follow eas-cli's generated
+// documents for GoogleServiceAccountKey / AndroidAppCredentials. A correction touches only here.
+
+const CRED_FIELDS =
+  'id applicationIdentifier googleServiceAccountKeyForFcmV1 { id clientEmail privateKeyIdentifier projectIdentifier }'
+
+/**
+ * UNVERIFIED: the app's Android credentials rows and the FCM V1 key each has linked
+ * (`App.androidAppCredentials`, `AndroidAppCredentials.googleServiceAccountKeyForFcmV1`). Only
+ * identifiers come back, never key material.
+ */
+export const Q_ANDROID_CREDENTIALS = `query HubAndroidCredentials($appId: String!) {
+  app { byId(appId: $appId) { id androidAppCredentials { ${CRED_FIELDS} } } }
+}`
+
+/** UNVERIFIED: uploads a service-account key JSON to the account (GoogleServiceAccountKeyInput.jsonKey). */
+export const M_CREATE_SA_KEY = `mutation HubCreateServiceAccountKey($accountId: ID!, $input: GoogleServiceAccountKeyInput!) {
+  googleServiceAccountKey { createGoogleServiceAccountKey(accountId: $accountId, googleServiceAccountKeyInput: $input) { id clientEmail privateKeyIdentifier projectIdentifier } }
+}`
+
+/** UNVERIFIED: removes an uploaded key from the account. */
+export const M_DELETE_SA_KEY = `mutation HubDeleteServiceAccountKey($id: ID!) {
+  googleServiceAccountKey { deleteGoogleServiceAccountKey(id: $id) { id } }
+}`
+
+/** UNVERIFIED: a credentials row for one Android application identifier of an app. */
+export const M_CREATE_ANDROID_CREDENTIALS = `mutation HubCreateAndroidCredentials($appId: ID!, $applicationIdentifier: String!) {
+  androidAppCredentials { createAndroidAppCredentials(appId: $appId, applicationIdentifier: $applicationIdentifier, androidAppCredentialsInput: {}) { ${CRED_FIELDS} } }
+}`
+
+/** UNVERIFIED: links an uploaded key as the row's FCM V1 push key. */
+export const M_SET_FCM_V1 = `mutation HubSetFcmV1Key($id: ID!, $keyId: ID!) {
+  androidAppCredentials { setGoogleServiceAccountKeyForFcmV1(id: $id, googleServiceAccountKeyId: $keyId) { ${CRED_FIELDS} } }
+}`

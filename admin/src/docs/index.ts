@@ -391,6 +391,7 @@ import { hubProvidersCloudflareDocs } from './sections/hub-providers-cloudflare.
 import { hubProvidersCloudflareRegistrarDocs } from './sections/hub-providers-cloudflare-registrar.js'
 import { hubProvidersCostsFeedDocs } from './sections/hub-providers-costs-feed.js'
 import { hubProvidersEntraDocs } from './sections/hub-providers-entra.js'
+import { hubProvidersExpoPushDocs } from './sections/hub-providers-expo-push.js'
 import { hubProvidersFirebaseDocs } from './sections/hub-providers-firebase.js'
 import { hubProvidersGitlabDocs } from './sections/hub-providers-gitlab.js'
 import { hubProvidersJiraDocs } from './sections/hub-providers-jira.js'
@@ -1312,6 +1313,7 @@ export const navSections: NavGroup[] = [
       hubProvidersJiraDocs,
       hubProvidersAnthropicDocs,
       hubProvidersAcmeDocs,
+      hubProvidersExpoPushDocs,
       hubProvidersCostsFeedDocs,
       hubProvidersWave3Docs,
       hubProvidersHooksDocs,
