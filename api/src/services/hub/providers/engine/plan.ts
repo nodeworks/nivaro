@@ -921,10 +921,19 @@ export async function computePlan(
           field: `${i + 1}.${r.field}`,
           message: 'must point at a managed resource of the right type on this connection'
         })
-      else if (target.scope === 'app' && (scope !== 'app' || target.app_id !== access.app?.id))
+      // An app resource may point only at its own environment's resources, an app-level one
+      // (no environment) of the same app, or a shared one — never across environments, so a
+      // staging change can never read, attach or change production through a ref (the
+      // production owner gate is judged for the change's own environment only).
+      else if (
+        target.scope === 'app' &&
+        (scope !== 'app' ||
+          target.app_id !== access.app?.id ||
+          (target.environment_id != null && target.environment_id !== (access.env?.id ?? null)))
+      )
         problems.push({
           field: `${i + 1}.${r.field}`,
-          message: "must point at this app's resources or a shared one"
+          message: "must point at this environment's resources, an app-level one, or a shared one"
         })
       else if (deletedRows.has(target.id))
         problems.push({

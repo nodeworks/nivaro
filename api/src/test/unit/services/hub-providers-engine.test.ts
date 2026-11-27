@@ -1001,6 +1001,47 @@ describe('gates', () => {
     ).rejects.toMatchObject({ code: 'DELEGATED_NO_WRITE' })
   })
 
+  it('refs stay inside the environment: never across to production', async () => {
+    await db('nivaro_hub_apps').where({ id: appId }).update({ owners_deploy_production: false })
+    const prodBox = await createBox('prod-db', {}, prodEnv)
+    const ref = (resourceId: number, actor: HubActor) =>
+      engine.planResourceChange(
+        appReq([
+          { action: 'create', type: 'fake.box', fields: { name: 'stg', parent: { resourceId } } }
+        ]),
+        actor
+      )
+    // An owner's dev change pointing at a production resource: refused before any provider call.
+    provider.observes = 0
+    await expect(ref(prodBox.id, OWNER)).rejects.toMatchObject({
+      code: 'INVALID_FIELDS',
+      message: expect.stringContaining(
+        "must point at this environment's resources, an app-level one, or a shared one"
+      )
+    })
+    // Cross-environment refs are refused for admins too (none are needed: shared and app-level
+    // resources cover what environments share).
+    await expect(ref(prodBox.id, ADMIN)).rejects.toMatchObject({ code: 'INVALID_FIELDS' })
+    expect(provider.observes).toBe(0)
+    // An app-level resource (no environment) of the same app is allowed.
+    const { out } = await applied({
+      connectionId: connId,
+      scope: 'app',
+      appId,
+      ops: [{ action: 'create', type: 'fake.box', fields: { name: 'app-wide' } }]
+    })
+    expect(out.status).toBe('applied')
+    const appWide = (await store.listResources({ type: 'fake.box' })).find(
+      (r) => r.name === 'app-wide'
+    )
+    expect(appWide?.environment_id).toBeNull()
+    const ok = await ref(appWide?.id as number, OWNER)
+    expect(ok.blockers).toEqual([])
+    expect(
+      (await engine.startResourceChange(ok.changeId, { planHash: ok.planHash }, OWNER)).status
+    ).toBe('applied')
+  })
+
   it('SHARED_IN_USE refuses delete of referenced shared resource', async () => {
     const shared = { connectionId: connId, scope: 'shared' as const }
     const n = await engine.planResourceChange(
