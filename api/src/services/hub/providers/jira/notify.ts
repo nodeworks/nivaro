@@ -240,11 +240,17 @@ export async function ruleHealth(ctx: ProviderContext, externalId: string): Prom
 
 /** Plain text inside a Jira wiki-markup field: a {noformat} block cannot be broken out of. */
 function plainBlock(s: string): string {
-  return `{noformat}\n${s.replace(/\{noformat[^}]*\}/gi, '').slice(0, 20000)}\n{noformat}`
+  // Every brace becomes a full-width lookalike: no tag can be formed, nested or not.
+  const safe = s.slice(0, 20000).replace(/\{/g, '\uFF5B').replace(/\}/g, '\uFF5D')
+  return `{noformat}\n${safe}\n{noformat}`
 }
 
 function bodyText(msg: OutboundMessage, link: string | null, lead?: string): string {
-  const parts = [lead, msg.body ? plainBlock(msg.body) : null, `Severity: ${msg.severity}`]
+  const parts = [
+    lead ? plainBlock(lead) : null,
+    msg.body ? plainBlock(msg.body) : null,
+    `Severity: ${msg.severity}`
+  ]
   if (link) parts.push(`Open in the Hub: ${link}`)
   return parts.filter(Boolean).join('\n\n')
 }

@@ -228,12 +228,46 @@ function needDataCenter(ctx: ProviderContext): void {
     )
 }
 
-export async function readWebhook(ctx: ProviderContext, id: string): Promise<Observed | null> {
+/** The filter the Hub writes: limited to the allowed projects, the person's JQL wrapped inside. */
+export function limitedJql(ctx: ProviderContext, userJql: string | null): string | null {
+  const keys = [...projectKeysOf(ctx.config)].sort()
+  if (!keys.length) return userJql
+  if (keys.some((k) => !PROJECT_KEY_RE.test(k)))
+    throw new ProviderError('INVALID_FIELDS', 'A project key of this connection is not valid.')
+  const base = `project in (${keys.map((k) => `"${k}"`).join(', ')})`
+  return userJql ? `${base} AND (${userJql})` : base
+}
+
+/** True when a stored webhook filter is limited to exactly the connection's projects. */
+export function filterIsLimited(ctx: ProviderContext, jql: unknown): boolean {
+  if (!projectKeysOf(ctx.config).length) return true
+  const base = limitedJql(ctx, null) as string
+  const s = typeof jql === 'string' ? jql : ''
+  return s === base || s.startsWith(`${base} AND (`)
+}
+
+async function readWebhookRaw(ctx: ProviderContext, id: string): Promise<Observed | null> {
   if (modeOf(ctx.config) !== 'datacenter_pat') return null
   const sid = idSeg(id, 'webhook id')
   const r = await jiraCall(ctx, 'GET', `/webhook/${sid}`, { allow: [404], root: 'webhooks' })
   if (r.status === 404 || !r.body) return null
   return webhookObserved(r.body, sid)
+}
+
+/** A webhook outside the connection's projects reads as gone (observe, adopt, list). */
+export async function readWebhook(ctx: ProviderContext, id: string): Promise<Observed | null> {
+  const w = await readWebhookRaw(ctx, id)
+  return w && filterIsLimited(ctx, w.fields.jql) ? w : null
+}
+
+async function ownWebhook(ctx: ProviderContext, id: string): Promise<Observed | null> {
+  const w = await readWebhookRaw(ctx, id)
+  if (w && !filterIsLimited(ctx, w.fields.jql))
+    throw new ProviderError(
+      'PROJECT_MISMATCH',
+      'This webhook is not limited to the projects of this connection. Nothing was changed.'
+    )
+  return w
 }
 
 // ── Observe / list / findExisting ──
@@ -261,7 +295,8 @@ export async function listResources(
     const items: Observed[] = []
     for (const w of Array.isArray(r.body) ? r.body : []) {
       const id = webhookIdOf(w)
-      if (id) items.push(webhookObserved(w, id))
+      const o = id ? webhookObserved(w, id) : null
+      if (o && filterIsLimited(ctx, o.fields.jql)) items.push(o)
     }
     return { items, cursor: null }
   }
@@ -478,12 +513,8 @@ function webhookFields(ctx: ProviderContext | null, desired: DesiredResource) {
   const events = strs(desired.fields.events)
     .map((e) => e.trim())
     .filter(Boolean)
-  const jql = text(desired.fields.jql)
-  if (ctx && projectKeysOf(ctx.config).length && !jql)
-    throw new ProviderError(
-      'INVALID_FIELDS',
-      'This connection is limited to some projects: give the webhook a JQL filter so it cannot send other projects’ issues.'
-    )
+  const userJql = text(desired.fields.jql)
+  const jql = ctx ? limitedJql(ctx, userJql) : userJql
   return {
     name: String(desired.fields.name ?? '').trim(),
     url: url as string,
@@ -779,7 +810,7 @@ async function updateWebhook(
 ): Promise<OpResult> {
   needDataCenter(ctx)
   const id = idSeg(op.externalId, 'webhook id')
-  const seen = await readWebhook(ctx, id)
+  const seen = await ownWebhook(ctx, id)
   if (!seen) throw new ProviderError('NOT_FOUND', 'The webhook is gone at Jira.', { status: 404 })
   const changed = asObj(desired.fields.secret).changed === true
   const { body, plain } = webhookBody(ctx, desired, changed)
@@ -794,7 +825,7 @@ async function updateWebhook(
 async function deleteWebhook(ctx: ProviderContext, externalId: string | null): Promise<OpResult> {
   const id = idSeg(externalId, 'webhook id')
   if (modeOf(ctx.config) !== 'datacenter_pat') return ok(id, null)
-  const seen = await readWebhook(ctx, id)
+  const seen = await ownWebhook(ctx, id)
   if (!seen) return ok(id, null)
   await jiraCall(ctx, 'DELETE', `/webhook/${id}`, { allow: [404], root: 'webhooks' })
   return ok(id, null)

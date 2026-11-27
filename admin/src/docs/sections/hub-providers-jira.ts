@@ -38,7 +38,7 @@ export const hubProvidersJiraDocs: DocSection = {
         [
           '`jira.webhook`',
           'Jira’s numeric id',
-          'Data Center only (the admin webhook API); on Jira Cloud the plan stops with `WEBHOOK_DC_ONLY`. Name, https address (no login or query string), events, an optional JQL filter, enabled, and a sealed secret sent to Jira. When the connection is limited to some projects a JQL filter is required. Create, change and delete do not touch your issues.'
+          'Data Center only (the admin webhook API); on Jira Cloud the plan stops with `WEBHOOK_DC_ONLY`. Name, https address (no login or query string), events, an optional JQL filter, enabled, and a sealed secret sent to Jira. When the connection is limited to some projects the Hub builds the filter itself (`project in (...) AND (<your JQL>)`), so your JQL can never widen it; a webhook whose filter is not limited that way reads as gone and is never changed or deleted (`PROJECT_MISMATCH`). Create, change and delete do not touch your issues.'
         ],
         [
           '`jira.issue_link_rule`',

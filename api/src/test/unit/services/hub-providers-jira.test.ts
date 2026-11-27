@@ -447,7 +447,7 @@ describe('jira adapter: plan', () => {
     )
   })
 
-  it('webhook: planning on a Cloud connection is refused, and a limited connection needs a JQL', () => {
+  it('webhook: planning on a Cloud connection is refused, and a limited connection gets a Hub-built filter', () => {
     const d = desired('jira.webhook', {
       name: 'hub events',
       url: 'https://hub.example.test/hooks/jira'
@@ -456,9 +456,10 @@ describe('jira adapter: plan', () => {
       expect.objectContaining({ code: 'WEBHOOK_DC_ONLY' })
     )
     const dc = harness([], 'datacenter_pat', { project_keys: ['WEB'] })
-    expect(() => jiraAdapter.plan(dc.ctx, d, null)).toThrowError(
-      expect.objectContaining({ code: 'INVALID_FIELDS' })
-    )
+    expect(jiraAdapter.plan(dc.ctx, d, null)[0]?.changes).toContainEqual({
+      field: 'jql',
+      to: 'project in ("WEB")'
+    })
     const open = harness([], 'datacenter_pat')
     expect(jiraAdapter.plan(open.ctx, d, null)[0]?.kind).toBe('create')
     expect(() =>
@@ -1165,5 +1166,122 @@ describe('jira adapter: health', () => {
     expect((await jiraAdapter.health?.(gone.ctx, 'jira.issue_link_rule', RULE_ID))?.status).toBe(
       'down'
     )
+  })
+})
+
+describe('jira adapter: injection and project limits', () => {
+  it('a nested {noformat} cannot rebuild the tag: braces in the body are neutralised', async () => {
+    const h = harness([
+      { method: 'GET', path: /^\/search\/jql$/, body: fx('search-empty') },
+      { method: 'POST', path: /^\/issue$/, body: fx('issue-created') }
+    ])
+    await jiraAdapter.notify?.(h.ctx, row(), { ...MSG, body: 'a {no{noformat}format} b {code}' })
+    const d = (writes(h.calls)[0] as Call).body.fields.description as string
+    expect(d.match(/\{noformat\}/g)).toHaveLength(2)
+    expect(d).not.toContain('{code}')
+    expect(d).toContain('\uFF5B')
+  })
+
+  it('a title with {code} or [link|x] is inside the safe block, in the summary and in comments', async () => {
+    const title = 'Down {code}x{code} [link|http://evil.example.test] *b*'
+    const h = harness([
+      { method: 'GET', path: /^\/search\/jql$/, body: fx('search-hit') },
+      { method: 'POST', path: /^\/issue\/WEB-41\/comment$/, body: {} },
+      { method: 'GET', path: /^\/issue\/WEB-41\/transitions$/, body: fx('transitions-none') }
+    ])
+    await jiraAdapter.notify?.(h.ctx, row(), { ...MSG, title, action: 'resolve' })
+    const c = (writes(h.calls)[0] as Call).body.body as string
+    expect(c).not.toContain('{code}')
+    const outside = c
+      .split('{noformat}')
+      .filter((_, i) => i % 2 === 0)
+      .join('')
+    expect(outside).not.toMatch(/[[\]|*{}]/)
+    expect(c).toContain('[link|http://evil.example.test]')
+  })
+
+  it('webhook JQL on a limited connection is wrapped, never trusted to limit itself', async () => {
+    const d = desired('jira.webhook', {
+      name: 'hub events',
+      url: 'https://hub.example.test/hooks/jira',
+      jql: 'project = OTHER'
+    })
+    const h = harness(
+      [
+        { method: 'GET', path: /^\/@webhooks\/webhook$/, body: [] },
+        { method: 'POST', path: /^\/@webhooks\/webhook$/, body: fx('webhook-3') },
+        { method: 'GET', path: /^\/@webhooks\/webhook\/3$/, body: fx('webhook-3') }
+      ],
+      'datacenter_pat',
+      { project_keys: ['web', 'ABC'] }
+    )
+    await jiraAdapter.apply(
+      h.ctx,
+      {
+        kind: 'create',
+        type: 'jira.webhook',
+        resourceId: 7,
+        externalId: null,
+        reason: '',
+        changes: [],
+        preconditions: {},
+        risk: []
+      },
+      d
+    )
+    expect((writes(h.calls)[0] as Call).body.filters['issue-related-events-section']).toBe(
+      'project in ("ABC", "WEB") AND (project = OTHER)'
+    )
+  })
+
+  it('a webhook not limited to the connection’s projects is refused on update and delete, and invisible to adopt', async () => {
+    const foreign = fx('webhook-3') // filter: project = WEB, not the Hub-built limit
+    const routes: Route[] = [{ method: 'GET', path: /^\/@webhooks\/webhook\/3$/, body: foreign }]
+    const cfg = { project_keys: ['WEB'] }
+    const d = desired(
+      'jira.webhook',
+      { name: 'hub events', url: 'https://hub.example.test/hooks/jira' },
+      {},
+      '3'
+    )
+    for (const kind of ['update', 'delete'] as const) {
+      const h = harness(routes, 'datacenter_pat', cfg)
+      await expect(
+        jiraAdapter.apply(
+          h.ctx,
+          {
+            kind,
+            type: 'jira.webhook',
+            resourceId: 7,
+            externalId: '3',
+            reason: '',
+            changes: [],
+            preconditions: {},
+            risk: []
+          },
+          kind === 'delete' ? null : d
+        )
+      ).rejects.toMatchObject({ code: 'PROJECT_MISMATCH' })
+      expect(writes(h.calls)).toHaveLength(0)
+    }
+    const a = harness(routes, 'datacenter_pat', cfg)
+    expect(await jiraAdapter.observe(a.ctx, 'jira.webhook', '3')).toBeNull()
+    const listed = harness(
+      [{ method: 'GET', path: /^\/@webhooks\/webhook$/, body: [foreign] }],
+      'datacenter_pat',
+      cfg
+    )
+    expect((await jiraAdapter.list(listed.ctx, 'jira.webhook', null)).items).toEqual([])
+    // Limited the way the Hub writes it: visible.
+    const own = {
+      ...foreign,
+      filters: { 'issue-related-events-section': 'project in ("WEB") AND (type = Bug)' }
+    }
+    const ok = harness(
+      [{ method: 'GET', path: /^\/@webhooks\/webhook\/3$/, body: own }],
+      'datacenter_pat',
+      cfg
+    )
+    expect((await jiraAdapter.observe(ok.ctx, 'jira.webhook', '3'))?.externalId).toBe('3')
   })
 })
