@@ -386,12 +386,9 @@ import {
   hubProvidersRedisCloudDocs,
   hubProvidersUpstashDocs
 } from './sections/hub-providers-redis.js'
-<<<<<<< HEAD
 import { hubProvidersTwilioDocs } from './sections/hub-providers-twilio.js'
-=======
 import { hubProvidersSendgridDocs } from './sections/hub-providers-sendgrid.js'
 import { hubProvidersSlackDocs } from './sections/hub-providers-slack.js'
->>>>>>> hub-providers/integration
 import { hubReleasesDocs } from './sections/hub-releases.js'
 import { hubScaleDocs } from './sections/hub-scale.js'
 import { hubSecurityDocs } from './sections/hub-security.js'
@@ -1267,13 +1264,10 @@ export const navSections: NavGroup[] = [
       hubProvidersDockerhubDocs,
       hubProvidersNeonDocs,
       hubProvidersEntraDocs,
-<<<<<<< HEAD
       hubProvidersTwilioDocs,
-=======
       hubProvidersSlackDocs,
       hubProvidersPagerdutyDocs,
       hubProvidersSendgridDocs,
->>>>>>> hub-providers/integration
       hubProvidersHooksDocs,
       hubProvidersApiDocs
     ]
