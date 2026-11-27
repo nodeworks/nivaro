@@ -1,35 +1,35 @@
-import { allowedHubTabs, HUB_PATHS, hubForPath, hubTabPath } from '@/lib/hubs'
+import {
+  APPS_HUB,
+  allowedHubTabs,
+  type HubDef,
+  type HubTabDef,
+  type HubTabGroup,
+  hubForPath,
+  hubTabGroup,
+  hubTabPath
+} from '@/lib/hubs'
 
 /**
- * The standalone Hub's top-bar sections, as config. A section shows only when
- *  - its route exists in this build (another Hub area not shipped yet — Fleet, Deploys, Moves,
- *    People — is hidden, never a dead link), and
- *  - this person may open it, exactly as the old sidebar decided: a Hub tab needs the Apps entry
- *    in the person's permitted nav AND the tab allowed by their role's ui_permissions
- *    (allowedHubTabs); any other page needs its own permitted nav entry.
- * Everything else a standalone Hub keeps (HUB_ONLY_NAV: Users, Roles, Health, Jobs…) goes under
- * "System" in the bar.
+ * The standalone Hub's top-bar sections. They ARE the Apps hub's groups (lib/hubs.ts): one map
+ * of the Hub for the top bar, the strip under it, the Find box and the docs, so a page has one
+ * home whichever way a person looks for it.
+ *
+ * A section shows only when this person may open at least one of its pages, exactly as the old
+ * sidebar decided: the Apps entry in their permitted nav AND the tab allowed by their role's
+ * ui_permissions (allowedHubTabs). It links to the first page they may open. Everything else a
+ * standalone Hub keeps (HUB_ONLY_NAV: Users, Roles, Health, Jobs, Settings…) goes under "System".
  */
 export interface HubSection {
+  /** The group key (lib/hubs.ts); stable. */
+  key: string
+  /** Short name, as the bar shows it ("Domains"). */
   label: string
+  /** Full name ("Domains, DNS and certificates"): the tip, and the phone menu. */
+  title: string
+  /** The first page of the section this person may open. */
   to: string
-}
-
-export const HUB_SECTIONS: HubSection[] = [
-  { label: 'Fleet', to: '/hub/fleet' },
-  { label: 'Apps', to: '/hub' },
-  { label: 'Deploys', to: '/hub/deploys' },
-  { label: 'Shared', to: '/hub/shared' },
-  { label: 'Moves', to: '/hub/moves' },
-  { label: 'People', to: '/hub/people' },
-  { label: 'Settings', to: '/settings' }
-]
-
-/** Routes outside the hub registry this build is known to answer. */
-const PLAIN_ROUTES = new Set(['/settings'])
-
-export function routeExists(to: string, hubPaths: ReadonlySet<string> = HUB_PATHS): boolean {
-  return hubPaths.has(to) || PLAIN_ROUTES.has(to)
+  /** Every page of the section this person may open, in strip order. */
+  pages: Array<{ label: string; to: string; hint?: string }>
 }
 
 export interface SectionAccess {
@@ -51,31 +51,35 @@ export function sectionAllowed(to: string, access: SectionAccess): boolean {
   return access.permitted.has(to)
 }
 
-/** The sections this build shows this person, in order. */
-export function visibleSections(
-  access: SectionAccess | null,
-  hubPaths: ReadonlySet<string> = HUB_PATHS,
-  sections: HubSection[] = HUB_SECTIONS
-): HubSection[] {
-  return sections.filter(
-    (s) => routeExists(s.to, hubPaths) && (!access || sectionAllowed(s.to, access))
-  )
+function sectionOf(hub: HubDef, group: HubTabGroup, tabs: HubTabDef[]): HubSection | null {
+  const pages = group.tabs
+    .map((p) => tabs.find((t) => t.path === p))
+    .filter((t): t is HubTabDef => !!t)
+    .map((t) => ({ label: t.label, to: hubTabPath(hub, t), hint: t.hint }))
+  if (pages.length === 0) return null
+  return {
+    key: group.key,
+    label: group.label,
+    title: group.title ?? group.label,
+    to: pages[0].to,
+    pages
+  }
 }
 
-/**
- * The section `path` is in: an exact section, else the section whose path it extends; any other
- * page of the Apps hub (Drivers, Templates, Capacity…) lights Apps.
- */
+/** The sections this person sees, in order (no `access` = everything, as an administrator). */
+export function visibleSections(
+  access: SectionAccess | null,
+  hub: HubDef = APPS_HUB
+): HubSection[] {
+  if (access && !access.permitted.has(hub.base)) return []
+  const tabs = access ? allowedHubTabs(hub, access.disabled as Set<string>) : hub.tabs
+  return (hub.groups ?? []).map((g) => sectionOf(hub, g, tabs)).filter((s): s is HubSection => !!s)
+}
+
+/** The section `path` is in: the group of the Hub page it shows, else none (a System page). */
 export function activeSection(sections: HubSection[], path: string): HubSection | null {
-  const p = path.length > 1 ? path.replace(/\/+$/, '') : path
-  let best: HubSection | null = null
-  for (const s of sections) {
-    if (s.to === '/hub') continue
-    if (p === s.to || p.startsWith(`${s.to}/`)) {
-      if (!best || s.to.length > best.to.length) best = s
-    }
-  }
-  if (best) return best
-  const apps = sections.find((s) => s.to === '/hub')
-  return apps && (p === '/hub' || p.startsWith('/hub/')) ? apps : null
+  const match = hubForPath(path)
+  if (!match?.hub.groups) return null
+  const group = hubTabGroup(match.hub, match.tab.path)
+  return sections.find((s) => s.key === group?.key) ?? null
 }

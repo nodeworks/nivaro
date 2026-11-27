@@ -54,22 +54,27 @@ export type HubTabDef = {
    * title and hint stay.
    */
   hint?: string
+  /** Words people search this page by (command palette, the Hub's Find): "dns", "postgres". */
+  keywords?: string
   /**
-   * The standalone Hub look's top bar links this tab too (Fleet, Shared, People): there the tab is
-   * left out of the strip, so the top bar is the one place to reach it. Inert everywhere else.
+   * Path segments of pages merged into this one. Each redirects here (query and hash kept). Not
+   * a permission key: the tab keeps its own.
    */
-  topBar?: boolean
+  aliases?: string[]
 }
 
 /**
  * A named group of a hub's tabs. A hub with groups shows two strips: the groups, then the open
- * group's tabs. Only the Apps hub has them (36 tabs in one strip did not read); every other hub
- * keeps its one strip.
+ * group's tabs. Only the Apps hub has them (40 tabs in one strip did not read); every other hub
+ * keeps its one strip. The standalone Hub look shows the groups in its top bar instead.
  */
 export type HubTabGroup = {
   /** DOM id part; stable. */
   key: string
+  /** The short name navigation shows ("Domains"). */
   label: string
+  /** The full name, where there is room ("Domains, DNS and certificates"); default = label. */
+  title?: string
   /** Tab paths in this group, in strip order. Every tab is in exactly one group. */
   tabs: string[]
 }
@@ -89,7 +94,14 @@ export type HubDef = {
   feature?: string
 }
 
-/** Nivaro Hub (HUB=on): the apps this Hub runs, their environments and deploys. */
+/**
+ * Nivaro Hub (HUB=on): everything the Hub looks after, in homes named for what things ARE
+ * (docs/superpowers/specs/2026-11-27-hub-navigation-design.md). The homes share one vocabulary
+ * with the provider groups (api services/hub/providers/categories.ts): an outside account or
+ * resource shows in the home of its kind, beside the Hub's own things of that kind, never in a
+ * provider silo. Paths never changed when pages moved home, so every old link and every role's
+ * ui_permissions key still holds; a page that was merged away keeps its path as an `alias`.
+ */
 export const APPS_HUB: HubDef = {
   base: '/hub',
   title: 'Apps',
@@ -97,205 +109,307 @@ export const APPS_HUB: HubDef = {
   icon: AppWindow,
   feature: 'hub',
   tabs: [
+    // ── Apps ──
     {
       path: '',
       label: 'Apps',
-      hint: 'The apps this Hub looks after: their environments, whether they are up and what was deployed.'
+      hint: 'Every app with its environments: status, deploys, owners and what it uses outside the Hub.',
+      keywords: 'applications environments staging production promote rollback create adopt owners'
     },
+    {
+      path: 'usage',
+      label: 'Usage',
+      hint: 'How many people use each app: counts only, under a privacy floor.',
+      keywords: 'people active users screens adoption'
+    },
+    {
+      path: 'dependencies',
+      label: 'Dependencies',
+      hint: 'What each app depends on, and what a change would touch.',
+      keywords: 'hosts impact outbound calls partners'
+    },
+    {
+      path: 'services',
+      label: 'App services',
+      hint: 'Payments, AI, calls and other outside services your apps use.',
+      keywords: 'stripe payments anthropic openai ai livekit video calls third party'
+    },
+    {
+      path: 'templates',
+      label: 'Templates',
+      hint: 'App Blueprints a new app can start from.',
+      keywords: 'blueprints starter new app'
+    },
+    {
+      path: 'targets',
+      label: 'New app defaults',
+      hint: 'Where a new app goes: the GitLab group or GitHub account, template and hostnames it gets.',
+      keywords: 'targets create app repository group hostnames gitlab github'
+    },
+    {
+      path: 'lifecycle',
+      label: 'Clone & retire',
+      hint: 'Copy an app’s structure into a new app, or retire an app step by step.',
+      keywords: 'lifecycle copy duplicate archive decommission delete app'
+    },
+    // ── Code and deploys ──
     {
       path: 'releases',
       label: 'Releases',
-      hint: 'Release trains, scheduled promotions, freezes and automatic rollbacks.'
+      hint: 'Release trains, scheduled promotions, freezes and automatic rollbacks.',
+      keywords: 'deploy promote schedule train freeze rollback release notes version'
     },
     {
       path: 'changes',
-      label: 'Changes',
-      hint: 'Every planned change on one calendar, deploy windows and checklists.'
+      label: 'Change calendar',
+      hint: 'Every planned change on one calendar, deploy windows and checklists.',
+      keywords: 'changes calendar maintenance deploy windows checklist ics'
     },
     {
       path: 'smoke',
       label: 'Smoke checks',
-      hint: 'Checks that run after every deploy, per environment.'
+      hint: 'Checks that run after every deploy, per environment.',
+      keywords: 'post-deploy tests verify checks after deploy'
     },
     {
       path: 'extensions',
       label: 'Extensions',
-      hint: 'Which extension version each environment runs.'
+      hint: 'Which extension version each environment runs.',
+      keywords: 'extension versions pins plugins'
     },
     {
       path: 'config',
-      label: 'Config',
-      hint: 'Move configuration from one environment of an app to another, with undo.'
+      label: 'Config promotion',
+      hint: 'Move configuration from one environment of an app to another, with undo.',
+      keywords: 'configuration promote layouts flows roles settings copy between environments'
+    },
+    {
+      path: 'code',
+      label: 'Code & pipelines',
+      hint: 'Repositories, pipelines, image registries and mobile builds, with the accounts they live in.',
+      keywords:
+        'github gitlab vercel expo eas docker hub registry ecr repository repo ci pipeline actions build jira source'
+    },
+    // ── Hosting and servers ──
+    {
+      path: 'hosts',
+      label: 'Hosts & regions',
+      hint: 'Docker hosts grouped in regions, and what runs on each.',
+      keywords: 'servers docker swarm region placement map machines'
+    },
+    {
+      path: 'drivers',
+      label: 'Deploy locations',
+      hint: 'Where apps are deployed: a Docker host the Hub agent runs, or a GitLab project.',
+      keywords: 'drivers agent docker host gitlab project deploy server'
     },
     {
       path: 'shared',
       label: 'Shared deployments',
       hint: 'One process serving many apps, each with its own database, files and key.',
-      topBar: true
+      keywords: 'shared deployment multi-app tenants upgrade'
     },
     {
       path: 'capacity',
       label: 'Capacity',
-      hint: 'How busy each shared deployment and app is, and which apps should move.'
+      hint: 'How busy each shared deployment and app is, and which apps should move.',
+      keywords: 'load limits rebalance move advisor busy'
     },
     {
       path: 'scale',
       label: 'Scaling',
-      hint: 'Replicas and limits per role, and the rules that scale them.'
-    },
-    {
-      path: 'hosts',
-      label: 'Hosts',
-      hint: 'Docker hosts grouped in regions, and what runs on each.'
-    },
-    {
-      path: 'drivers',
-      label: 'Drivers',
-      hint: 'Where apps are deployed: a GitLab project or a Docker host the Hub agent runs.'
-    },
-    {
-      path: 'connections',
-      label: 'Connections',
-      hint: 'Accounts at outside providers (GitHub, AWS, Vercel…) the Hub may change things in.'
-    },
-    {
-      path: 'shared-infra',
-      label: 'Shared infra',
-      hint: 'Networks, zones and settings that belong to a connection, not to one app.'
-    },
-    {
-      path: 'databases',
-      label: 'Databases',
-      hint: 'The servers new apps get a database on, and every database the Hub knows.'
-    },
-    {
-      path: 'data',
-      label: 'Backups & data',
-      hint: 'Backups, restore drills and refreshes, per environment.'
+      hint: 'Replicas and limits per role, and the rules that scale them.',
+      keywords: 'replicas cpu memory autoscale autoscaling scale out'
     },
     {
       path: 'storage',
       label: 'Storage',
-      hint: 'How full each driver and environment is.'
+      hint: 'How full each host’s volumes and each environment’s files are.',
+      keywords: 'disk volumes files space full nfs uploads'
     },
     {
-      path: 'fleet',
-      label: 'Fleet',
-      hint: 'Every environment at a glance: version, health and uptime.',
-      topBar: true
+      path: 'cloud',
+      label: 'Cloud accounts',
+      hint: 'AWS, Azure and other hosting accounts: their networks, servers, buckets and load balancers.',
+      keywords:
+        'aws azure portainer amazon ec2 vpc subnet s3 bucket load balancer security group network cloud r2 tunnel'
+    },
+    // ── Databases ──
+    {
+      path: 'databases',
+      label: 'Databases',
+      hint: 'Every database and the servers they are on, the Hub’s own and at providers like Neon, RDS and Azure SQL.',
+      keywords:
+        'database sql server postgres postgresql mysql mariadb sqlite neon rds azure sql redis upstash cache connection string'
     },
     {
-      path: 'health',
-      label: 'Health',
-      hint: 'A 0–100 score per environment, and what lowers it.'
+      path: 'data',
+      label: 'Backups & refresh',
+      hint: 'Backups, restore drills and refreshes, per environment.',
+      keywords: 'backup restore drill refresh copy production to staging rehearsal data'
     },
+    // ── Domains, DNS and certificates ──
     {
-      path: 'usage',
-      label: 'Usage',
-      hint: 'How many people use each app: counts only, under a privacy floor.'
+      path: 'domains',
+      label: 'Domains & certificates',
+      hint: 'Every name your apps answer on: who registers it, where its DNS lives and when its certificate expires.',
+      keywords:
+        'dns domain domains certificate certificates tls ssl https expiry renew registrar zone record cloudflare route 53 route53 namecheap acme letsencrypt let’s encrypt hostname cname'
     },
+    // ── Messaging and alerts ──
     {
-      path: 'dependencies',
-      label: 'Dependencies',
-      hint: 'What each app depends on, and what a change would touch.'
-    },
-    {
-      path: 'issues',
-      label: 'Issues',
-      hint: 'Crashes and server errors from every app, grouped by signature.'
-    },
-    {
-      path: 'incidents',
-      label: 'Incidents',
-      hint: 'Open incidents: freeze, banner, timeline and post-mortem.'
+      path: 'messaging',
+      label: 'Channels & routes',
+      hint: 'Where the Hub sends word: Slack, Teams, email, SMS and paging, and which events go where.',
+      keywords:
+        'slack teams pagerduty sendgrid mailgun twilio firebase push email mail sms notify routes notifications alerts channel webhook ses sns'
     },
     {
       path: 'on-call',
       label: 'On-call',
-      hint: 'Who is paged first for each app, and the escalation after.'
+      hint: 'Who is paged first for each app, and the escalation after.',
+      keywords: 'rota pager paging escalation override on call'
+    },
+    // ── Monitoring and security ──
+    {
+      path: 'fleet',
+      label: 'Fleet',
+      hint: 'Every environment at a glance: version, health and uptime.',
+      keywords: 'overview all environments versions uptime slo drift behind status'
+    },
+    {
+      path: 'health',
+      label: 'Health',
+      hint: 'A 0–100 score per environment, and what lowers it.',
+      keywords: 'health score readiness'
+    },
+    {
+      path: 'issues',
+      label: 'Issues',
+      hint: 'Crashes and server errors from every app, grouped by signature.',
+      keywords: 'errors crashes bugs exceptions 500'
+    },
+    {
+      path: 'incidents',
+      label: 'Incidents',
+      hint: 'Open incidents: freeze, banner, timeline and post-mortem.',
+      keywords: 'incident outage post-mortem postmortem banner'
     },
     {
       path: 'status',
       label: 'Status pages',
-      hint: 'Public or internal status pages for your apps.'
-    },
-    {
-      path: 'people',
-      label: 'People',
-      hint: 'Who can reach which app, and offboarding.',
-      topBar: true
-    },
-    {
-      path: 'signin',
-      label: 'Sign-in',
-      hint: 'The Hub as the sign-in for its apps: keys, clients and who signed in where.'
-    },
-    {
-      path: 'access',
-      label: 'Access',
-      hint: 'Temporary admin access (break-glass) and access reviews of every app.'
+      hint: 'Public or internal status pages for your apps.',
+      keywords: 'status page public uptime page'
     },
     {
       path: 'security',
       label: 'Security',
-      hint: 'Certificates and names, image vulnerabilities and the compliance pack.'
-    },
-    {
-      path: 'secrets',
-      label: 'Secrets',
-      hint: 'Tokens and keys the Hub holds, and when each is due to rotate.'
-    },
-    { path: 'audit', label: 'Audit', hint: 'Every change made through the Hub, by whom and when.' },
-    {
-      path: 'targets',
-      label: 'Targets',
-      hint: 'Where a new app goes: the GitLab group or GitHub account, template and hostnames it gets.'
-    },
-    {
-      path: 'templates',
-      label: 'Templates',
-      hint: 'App Blueprints a new app can start from.'
-    },
-    {
-      path: 'lifecycle',
-      label: 'Clone & retire',
-      hint: 'Copy an app’s structure into a new app, or retire an app step by step.'
-    },
-    {
-      path: 'costs',
-      label: 'Costs',
-      hint: 'What your apps cost now, the month so far and the forecast against budget; chargeback per department and owner.'
+      hint: 'Image and code vulnerabilities, error tracking and the compliance pack.',
+      keywords: 'vulnerabilities cve scan snyk sentry compliance evidence image scan'
     },
     {
       path: 'ask',
       label: 'Ask the Hub',
-      hint: 'Questions about your apps, answered from Hub data (read-only).'
+      hint: 'Questions about your apps, answered from Hub data (read-only).',
+      keywords: 'ai question assistant'
+    },
+    // ── Costs ──
+    {
+      path: 'costs',
+      label: 'Costs',
+      hint: 'What your apps cost now, the month so far and the forecast against budget; provider spend and chargeback.',
+      keywords: 'cost spend budget budgets chargeback bill billing forecast department price'
+    },
+    // ── People and access ──
+    {
+      path: 'people',
+      label: 'People',
+      hint: 'Who can reach which app, and offboarding.',
+      keywords: 'users directory offboard owners who has access leaver'
+    },
+    {
+      path: 'signin',
+      label: 'Sign-in',
+      hint: 'How people sign in to your apps: the Hub’s own sign-in, and Entra or Auth0 applications.',
+      keywords:
+        'sso oidc openid login identity entra azure ad auth0 app registration client secret keys single sign-on'
+    },
+    {
+      path: 'access',
+      label: 'Access reviews',
+      hint: 'Temporary admin access (break-glass) and access reviews of every app.',
+      keywords: 'break-glass break glass temporary admin review evidence'
+    },
+    {
+      path: 'secrets',
+      label: 'Secrets',
+      hint: 'Tokens and keys the Hub holds, and when each is due to rotate.',
+      keywords: 'tokens keys rotate rotation credentials'
+    },
+    {
+      path: 'connections',
+      label: 'Outside accounts',
+      hint: 'Every provider account the Hub holds, in one list, with what each shares between apps.',
+      keywords:
+        'connections providers accounts credentials shared infrastructure shared infra adopt unmanaged all connections',
+      aliases: ['shared-infra']
+    },
+    {
+      path: 'audit',
+      label: 'Audit log',
+      hint: 'Every change made through the Hub, by whom and when.',
+      keywords: 'audit history who changed csv'
     }
   ],
   groups: [
-    { key: 'apps', label: 'Apps', tabs: [''] },
     {
-      key: 'deploy',
-      label: 'Deploy',
-      tabs: ['releases', 'changes', 'smoke', 'extensions', 'config']
+      key: 'apps',
+      label: 'Apps',
+      tabs: ['', 'usage', 'dependencies', 'services', 'templates', 'targets', 'lifecycle']
     },
     {
-      key: 'run',
-      label: 'Run',
-      tabs: ['shared', 'capacity', 'scale', 'hosts', 'drivers', 'connections', 'shared-infra']
-    },
-    { key: 'data', label: 'Data', tabs: ['databases', 'data', 'storage'] },
-    {
-      key: 'watch',
-      label: 'Watch',
-      tabs: ['fleet', 'health', 'usage', 'dependencies', 'issues', 'incidents', 'on-call', 'status']
+      key: 'deploys',
+      label: 'Deploys',
+      title: 'Code and deploys',
+      tabs: ['releases', 'changes', 'smoke', 'extensions', 'config', 'code']
     },
     {
-      key: 'people',
-      label: 'People & access',
-      tabs: ['people', 'signin', 'access', 'security', 'secrets', 'audit']
+      key: 'hosting',
+      label: 'Hosting',
+      title: 'Hosting and servers',
+      tabs: ['hosts', 'drivers', 'shared', 'capacity', 'scale', 'storage', 'cloud']
     },
-    { key: 'build', label: 'Build', tabs: ['targets', 'templates', 'lifecycle', 'costs', 'ask'] }
+    {
+      key: 'databases',
+      label: 'Databases',
+      title: 'Databases and caches',
+      tabs: ['databases', 'data']
+    },
+    {
+      key: 'domains',
+      label: 'Domains',
+      title: 'Domains, DNS and certificates',
+      tabs: ['domains']
+    },
+    {
+      key: 'messaging',
+      label: 'Messaging',
+      title: 'Messaging and alerts',
+      tabs: ['messaging', 'on-call']
+    },
+    {
+      key: 'monitoring',
+      label: 'Monitoring',
+      title: 'Monitoring and security',
+      tabs: ['fleet', 'health', 'issues', 'incidents', 'status', 'security', 'ask']
+    },
+    { key: 'costs', label: 'Costs', tabs: ['costs'] },
+    {
+      key: 'access',
+      label: 'Access',
+      title: 'People and access',
+      tabs: ['people', 'signin', 'access', 'secrets', 'connections', 'audit']
+    }
   ]
 }
 
@@ -647,6 +761,24 @@ export const hubTabPath = (hub: HubDef, tab: HubTabDef) =>
 export const hubTabGroup = (hub: HubDef, path: string): HubTabGroup | null =>
   hub.groups?.find((g) => g.tabs.includes(path)) ?? null
 
+/**
+ * A hub's pages as search entries: found by label, by their group's full name and by the words
+ * people use for what the page holds (`keywords`), never only by the page's own name.
+ */
+export function hubSearchPages(
+  hub: HubDef
+): Array<{ label: string; path: string; keywords: string }> {
+  return hub.tabs.map((t) => {
+    const group = hubTabGroup(hub, t.path)
+    const home = group ? (group.title ?? group.label) : hub.title
+    return {
+      label: home === t.label ? t.label : `${t.label} · ${home}`,
+      path: hubTabPath(hub, t),
+      keywords: [t.keywords, t.hint].filter(Boolean).join(' ')
+    }
+  })
+}
+
 /** The hub and tab a pathname shows, or null when it is not a hub tab. */
 export function hubForPath(pathname: string): { hub: HubDef; tab: HubTabDef } | null {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
@@ -663,9 +795,15 @@ export const HUB_PATHS = new Set(HUBS.flatMap((hub) => hub.tabs.map((t) => hubTa
 
 /** Old standalone paths App.tsx redirects onto their tab. */
 export const HUB_REDIRECTS = HUBS.flatMap((hub) =>
-  hub.tabs.flatMap((tab) =>
-    tab.legacy && !HUB_PATHS.has(tab.legacy) ? [{ from: tab.legacy, to: hubTabPath(hub, tab) }] : []
-  )
+  hub.tabs.flatMap((tab) => [
+    ...(tab.legacy && !HUB_PATHS.has(tab.legacy)
+      ? [{ from: tab.legacy, to: hubTabPath(hub, tab) }]
+      : []),
+    ...(tab.aliases ?? [])
+      .map((a) => `${hub.base}/${a}`)
+      .filter((from) => !HUB_PATHS.has(from))
+      .map((from) => ({ from, to: hubTabPath(hub, tab) }))
+  ])
 )
 
 /** The key ui_permissions use for a tab: its old path, or its own path. */

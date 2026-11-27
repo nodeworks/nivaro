@@ -1,5 +1,14 @@
 import { UserAvatar } from '@nivaro/shared'
-import { ChevronDown, LogOut, Menu, ScrollText, UserRound, X } from 'lucide-react'
+import {
+  ChevronDown,
+  LayoutGrid,
+  LogOut,
+  Menu,
+  ScrollText,
+  Search,
+  UserRound,
+  X
+} from 'lucide-react'
 import {
   type KeyboardEvent,
   type ReactNode,
@@ -22,6 +31,9 @@ import { activeSection, type HubSection, visibleSections } from './hub-sections'
 
 const NARROW = '(max-width: 639px)'
 
+/** Open the command palette (components/command-palette.tsx listens). */
+const openFind = () => window.dispatchEvent(new CustomEvent('nivaro:focus-search'))
+
 function useNarrow(): boolean {
   return useSyncExternalStore(
     (cb) => {
@@ -38,11 +50,14 @@ type TopBarItem = NavItem & { key?: string }
 
 /**
  * The standalone Hub's chrome: a top bar with the Hub sections in place of Nivaro's icon rail and
- * panel (rendered by AppLayout only in Hub mode). Keeps everything the rail carried: team chat,
+ * panel (rendered by AppLayout only in Hub mode). The sections are the Apps hub's groups
+ * (hub-sections.ts), so the bar, the strip under it and Find all show one map. "All pages" opens
+ * that whole map at once; Find (also Ctrl/Cmd+K) searches it by meaning ("dns", "postgres"). Keeps everything the rail carried: team chat,
  * the notification bell, refresh, watch list, instance switch, theme, the account menu (with
  * do-not-disturb and browser chaos), and every other page the Hub keeps (under "System").
- * Sections and System follow the person's role exactly as the sidebar did. Below md the sections
- * fold into a menu; on a phone the smaller tools move into that menu too.
+ * Sections and System follow the person's role exactly as the sidebar did. Below lg the sections
+ * fold into a menu that lists every page under its section; on a phone the smaller tools move
+ * into that menu too.
  */
 export function HubTopBar({
   items,
@@ -72,7 +87,7 @@ export function HubTopBar({
   const permitted = useMemo(() => new Set(items.map((i) => i.key ?? i.to)), [items])
   const sections = useMemo(() => visibleSections({ permitted, disabled }), [permitted, disabled])
   const current = activeSection(sections, pathname)
-  const system = useMemo(() => systemItems(items, sections), [items, sections])
+  const system = useMemo(() => systemItems(items), [items])
   const [menuOpen, setMenuOpen] = useState(false)
   const navRef = useRef<HTMLDivElement>(null)
 
@@ -112,12 +127,13 @@ export function HubTopBar({
           aria-label={menuOpen ? 'Close menu' : 'Open menu'}
           aria-expanded={menuOpen}
           aria-controls='hub-topbar-menu'
-          className='-ml-1 flex h-10 w-10 items-center justify-center rounded-md text-[var(--hub-chrome-text)] hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan md:hidden'
+          className='-ml-1 flex h-10 w-10 items-center justify-center rounded-md text-[var(--hub-chrome-text)] hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan lg:hidden'
         >
           {menuOpen ? <X className='h-5 w-5' /> : <Menu className='h-5 w-5' />}
         </button>
         <Link
           to={sections[0]?.to ?? '/'}
+          data-hub-home=''
           className='mr-2 flex shrink-0 items-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
           aria-label='Nivaro Hub'
         >
@@ -126,14 +142,19 @@ export function HubTopBar({
 
         <nav
           aria-label='Hub sections'
-          className='hidden h-full min-w-0 flex-1 md:flex'
+          className='hidden h-full min-w-0 flex-1 lg:flex'
           ref={navRef}
           onKeyDown={onNavKey}
         >
           <ul className='m-0 flex h-full min-w-0 list-none items-stretch gap-0.5 overflow-x-auto p-0 [scrollbar-width:none]'>
+            {sections.length > 1 && (
+              <li className='flex'>
+                <AllPagesMenu sections={sections} system={system} pathname={pathname} />
+              </li>
+            )}
             {sections.map((s) => (
-              <li key={s.to} className='flex'>
-                <SectionLink section={s} active={current === s} />
+              <li key={s.key} className='flex'>
+                <SectionLink section={s} active={current?.key === s.key} />
               </li>
             ))}
             {system.length > 0 && (
@@ -143,9 +164,19 @@ export function HubTopBar({
             )}
           </ul>
         </nav>
-        <div className='flex-1 md:hidden' />
+        <div className='flex-1 lg:hidden' />
 
         <div className='flex shrink-0 items-center gap-0.5'>
+          <button
+            type='button'
+            onClick={openFind}
+            data-tip='Find a page, an app or a setting (Ctrl/Cmd+K)'
+            aria-label='Find'
+            className='flex h-8 items-center gap-1.5 rounded-md px-2 text-[12px] text-[var(--hub-chrome-text)] hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+          >
+            <Search className='h-4 w-4' aria-hidden />
+            <span className='hidden xl:inline'>Find</span>
+          </button>
           {chat}
           {!narrow && tools}
           <NotificationBell collapsed compact placement='below' />
@@ -157,7 +188,7 @@ export function HubTopBar({
       {menuOpen && (
         <div
           id='hub-topbar-menu'
-          className='absolute inset-x-0 top-full max-h-[calc(100dvh-3rem)] overflow-y-auto border-b border-[var(--hub-chrome-line)] bg-[var(--hub-chrome)] px-2 pb-3 pt-1 shadow-[0_12px_24px_-12px_rgb(0_0_0/0.5)] md:hidden'
+          className='absolute inset-x-0 top-full max-h-[calc(100dvh-3rem)] overflow-y-auto border-b border-[var(--hub-chrome-line)] bg-[var(--hub-chrome)] px-2 pb-3 pt-1 shadow-[0_12px_24px_-12px_rgb(0_0_0/0.5)] lg:hidden'
         >
           {narrow && (
             <div className='mb-1 flex items-center gap-0.5 border-b border-[var(--hub-chrome-line)] px-1 pb-2'>
@@ -166,13 +197,20 @@ export function HubTopBar({
             </div>
           )}
           <nav aria-label='Hub sections'>
-            <ul className='m-0 list-none p-0'>
-              {sections.map((s) => (
-                <li key={s.to}>
-                  <MenuLink to={s.to} label={s.label} active={current === s} />
-                </li>
-              ))}
-            </ul>
+            {sections.map((s) => (
+              <section key={s.key} aria-label={s.title}>
+                <p className='mb-1 mt-3 px-3 text-[11px] font-medium text-[var(--hub-chrome-muted)]'>
+                  {s.title}
+                </p>
+                <ul className='m-0 list-none p-0'>
+                  {s.pages.map((pg) => (
+                    <li key={pg.to}>
+                      <MenuLink to={pg.to} label={pg.label} active={pathname === pg.to} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))}
             {system.length > 0 && (
               <>
                 <p className='mb-1 mt-3 px-3 text-[11px] font-medium text-[var(--hub-chrome-muted)]'>
@@ -199,13 +237,12 @@ export function HubTopBar({
   )
 }
 
-/** Pages the Hub keeps that are not a section of their own, each once, in nav order. */
-export function systemItems(items: NavItem[], sections: HubSection[]): NavItem[] {
-  const taken = new Set(sections.map((s) => s.to))
+/** Pages the Hub keeps that are not Hub pages (Users, Roles, Settings…), each once, in nav order. */
+export function systemItems(items: NavItem[]): NavItem[] {
   const seen = new Set<string>()
   const out: NavItem[] = []
   for (const it of items) {
-    if (taken.has(it.to) || seen.has(it.to) || it.to.startsWith('/hub')) continue
+    if (seen.has(it.to) || it.to === '/hub' || it.to.startsWith('/hub/')) continue
     seen.add(it.to)
     out.push(it)
   }
@@ -230,11 +267,91 @@ function SectionLink({ section, active }: { section: HubSection; active: boolean
     <Link
       to={section.to}
       data-hub-section=''
-      aria-current={active ? 'page' : undefined}
+      data-tip={section.title === section.label ? undefined : section.title}
+      aria-current={active ? 'true' : undefined}
       className={tabClass(active)}
     >
       {section.label}
     </Link>
+  )
+}
+
+/**
+ * The whole Hub on one sheet: every section with its pages, then System. For the first weeks,
+ * when nobody knows yet which section a page lives in.
+ */
+function AllPagesMenu({
+  sections,
+  system,
+  pathname
+}: {
+  sections: HubSection[]
+  system: NavItem[]
+  pathname: string
+}) {
+  const [open, setOpen] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pathname is the trigger
+  useEffect(() => setOpen(false), [pathname])
+  const link = (to: string, label: string) => {
+    const on = pathname === to
+    return (
+      <Link
+        to={to}
+        aria-current={on ? 'page' : undefined}
+        className={cn(
+          'block rounded-md px-2 py-1 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+          on ? 'bg-accent font-medium text-accent-foreground' : 'hover:bg-muted'
+        )}
+      >
+        {label}
+      </Link>
+    )
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type='button'
+          data-hub-section=''
+          aria-label='All pages'
+          data-tip='All pages'
+          className={cn(tabClass(false), 'px-2')}
+        >
+          <LayoutGrid className='h-4 w-4' aria-hidden />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        align='start'
+        sideOffset={6}
+        className='max-h-[calc(100dvh-5rem)] w-[min(960px,calc(100vw-2rem))] overflow-y-auto p-4'
+      >
+        <nav
+          aria-label='All Hub pages'
+          className='grid grid-cols-[repeat(auto-fill,minmax(168px,1fr))] gap-x-4 gap-y-5'
+        >
+          {sections.map((s) => (
+            <section key={s.key} aria-label={s.title}>
+              <h3 className='m-0 mb-1 px-2 text-[12px] font-semibold text-foreground'>{s.title}</h3>
+              <ul className='m-0 list-none p-0'>
+                {s.pages.map((pg) => (
+                  <li key={pg.to}>{link(pg.to, pg.label)}</li>
+                ))}
+              </ul>
+            </section>
+          ))}
+          {system.length > 0 && (
+            <section aria-label='System'>
+              <h3 className='m-0 mb-1 px-2 text-[12px] font-semibold text-foreground'>System</h3>
+              <ul className='m-0 list-none p-0'>
+                {system.map((it) => (
+                  <li key={it.to}>{link(it.to, it.label)}</li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </nav>
+      </PopoverContent>
+    </Popover>
   )
 }
 

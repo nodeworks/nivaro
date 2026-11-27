@@ -11,7 +11,7 @@ import { HubEnvTag, HubStatusDot, ProductionGuard } from './HubBits'
 import { envAbbrev, groupByApp, healthOf } from './HubFleetStrip'
 import { HubRunTimeline, type RunStep } from './HubRunTimeline'
 import { systemItems } from './HubTopBar'
-import { activeSection, routeExists, sectionAllowed, visibleSections } from './hub-sections'
+import { activeSection, sectionAllowed, visibleSections } from './hub-sections'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 let host: HTMLDivElement
@@ -131,38 +131,79 @@ describe('top bar sections and fleet strip', () => {
     disabled: new Set<string>()
   }
 
-  it('hides a section whose route this build does not have', () => {
-    const paths = new Set(['/hub', '/hub/shared'])
-    expect(visibleSections(admin, paths).map((s) => s.label)).toEqual([
+  it('shows the Apps hub groups as the sections, each opening on its first page', () => {
+    const sections = visibleSections(admin)
+    expect(sections.map((s) => s.label)).toEqual([
       'Apps',
-      'Shared',
-      'Settings'
+      'Deploys',
+      'Hosting',
+      'Databases',
+      'Domains',
+      'Messaging',
+      'Monitoring',
+      'Costs',
+      'Access'
     ])
-    expect(routeExists('/hub/fleet', paths)).toBe(false)
-    expect(routeExists('/settings', paths)).toBe(true)
+    expect(sections.find((s) => s.key === 'domains')).toMatchObject({
+      title: 'Domains, DNS and certificates',
+      to: '/hub/domains'
+    })
+    expect(sections.find((s) => s.key === 'hosting')?.pages.map((p) => p.label)).toEqual([
+      'Hosts & regions',
+      'Deploy locations',
+      'Shared deployments',
+      'Capacity',
+      'Scaling',
+      'Storage',
+      'Cloud accounts'
+    ])
   })
 
   it('follows the role like the sidebar did: a non-admin owner sees only what they may open', () => {
-    const paths = new Set(['/hub', '/hub/shared'])
-    // No Settings entry in their nav, and their role's ui_permissions hide the Shared tab.
-    const owner = { permitted: new Set(['/', '/hub']), disabled: new Set(['/hub/shared']) }
-    expect(visibleSections(owner, paths).map((s) => s.label)).toEqual(['Apps'])
+    // Their role's ui_permissions hide every Hosting page but Storage, and all of Access.
+    const owner = {
+      permitted: new Set(['/', '/hub']),
+      disabled: new Set([
+        '/hub/hosts',
+        '/hub/drivers',
+        '/hub/shared',
+        '/hub/capacity',
+        '/hub/scale',
+        '/hub/cloud',
+        '/hub/people',
+        '/hub/signin',
+        '/hub/access',
+        '/hub/secrets',
+        '/hub/connections',
+        '/hub/audit'
+      ])
+    }
+    const sections = visibleSections(owner)
+    expect(sections.some((s) => s.key === 'access')).toBe(false)
+    // A section links to the first page they may open, and lists only those.
+    expect(sections.find((s) => s.key === 'hosting')).toMatchObject({
+      to: '/hub/storage',
+      pages: [{ label: 'Storage', to: '/hub/storage' }]
+    })
     expect(sectionAllowed('/settings', owner)).toBe(false)
     expect(sectionAllowed('/hub/shared', owner)).toBe(false)
-    // Without the Apps entry in their nav, no Hub tab shows at all.
+    expect(sectionAllowed('/hub/storage', owner)).toBe(true)
+    // Without the Apps entry in their nav, no Hub section shows at all.
     const none = { permitted: new Set(['/']), disabled: new Set<string>() }
-    expect(visibleSections(none, paths)).toEqual([])
+    expect(visibleSections(none)).toEqual([])
   })
 
-  it('Apps lights up on its own tabs, Shared on its own', () => {
-    const sections = visibleSections(admin, new Set(['/hub', '/hub/shared']))
+  it('lights the section a page lives in, and none on a System page', () => {
+    const sections = visibleSections(admin)
     expect(activeSection(sections, '/hub')?.label).toBe('Apps')
-    expect(activeSection(sections, '/hub/drivers')?.label).toBe('Apps')
-    expect(activeSection(sections, '/hub/shared')?.label).toBe('Shared')
+    expect(activeSection(sections, '/hub/drivers')?.label).toBe('Hosting')
+    expect(activeSection(sections, '/hub/shared')?.label).toBe('Hosting')
+    expect(activeSection(sections, '/hub/domains')?.label).toBe('Domains')
+    expect(activeSection(sections, '/hub/connections')?.label).toBe('Access')
     expect(activeSection(sections, '/users')).toBeNull()
   })
 
-  it('System lists the other pages once, never a Hub page or a section', () => {
+  it('System lists the other pages once, never a Hub page', () => {
     const Icon = () => null
     const items = [
       { icon: Icon, label: 'Overview', to: '/' },
@@ -171,8 +212,7 @@ describe('top bar sections and fleet strip', () => {
       { icon: Icon, label: 'Settings', to: '/settings' },
       { icon: Icon, label: 'Users', to: '/users' }
     ]
-    const sections = visibleSections(admin, new Set(['/hub']))
-    expect(systemItems(items, sections).map((i) => i.to)).toEqual(['/', '/users'])
+    expect(systemItems(items).map((i) => i.to)).toEqual(['/', '/users', '/settings'])
   })
 
   it('groups the strip by app and maps state to health', () => {

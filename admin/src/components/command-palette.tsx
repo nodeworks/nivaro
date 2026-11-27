@@ -51,10 +51,14 @@ import {
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { HUB_ONLY_NAV } from '@/layouts/nav-config'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { showContrastAudit } from '@/lib/contrast-audit'
+import { useHubProductFlag } from '@/lib/hub-product'
+import { APPS_HUB, hubSearchPages } from '@/lib/hubs'
 import { recordHref, useRecentViews } from '@/lib/recent-views'
+import { useServerFeatures } from '@/lib/useServerFeatures'
 import { formatNumber, formatRelative, titleCase } from '@/lib/utils'
 import {
   refreshAfterCommand,
@@ -498,12 +502,45 @@ export function CommandPalette() {
   const { saved, available: savedAvailable } = useSavedSearches(open)
   const saveSearch = useSaveSearch()
 
+  // Nivaro Hub (feature `hub`): every Hub page by what it is for ("dns", "postgres", "slack"),
+  // and every app by name. On a standalone Hub they lead the list; elsewhere they follow it.
+  const hubOn = useServerFeatures().has('hub')
+  const hubLook = useHubProductFlag()
+  const { data: hubApps } = useQuery({
+    queryKey: ['command-palette-hub-apps'],
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: number; name: string; key: string }> }>('/hub/apps')
+        .then((r) => r.data.data ?? [])
+        .catch(() => []),
+    enabled: open && hubOn,
+    staleTime: 60_000
+  })
+  const hubPages = useMemo(
+    () =>
+      hubOn
+        ? [
+            ...hubSearchPages(APPS_HUB),
+            ...(hubApps ?? []).map((a) => ({
+              label: `${a.name} (app)`,
+              path: `/hub?app=${a.id}`,
+              keywords: `app ${a.key}`
+            }))
+          ]
+        : [],
+    [hubOn, hubApps]
+  )
+
   const q = query.trim()
   const live = debouncedQuery.length >= 2
-  const allPages = [
-    ...PAGES,
-    ...extPalette.map((e) => ({ label: e.label, path: e.path, keywords: e.extension }))
-  ]
+  const extPages = extPalette.map((e) => ({ label: e.label, path: e.path, keywords: e.extension }))
+  const allPages = hubLook
+    ? [
+        ...hubPages,
+        ...PAGES.filter((pg) => HUB_ONLY_NAV.has(`/${pg.path.split('/')[1] ?? ''}`)),
+        ...extPages
+      ]
+    : [...PAGES, ...extPages, ...hubPages]
   const pageMatches = q
     ? allPages.filter((p) => matchesQuery(p, q)).slice(0, 8)
     : allPages.slice(0, 8)

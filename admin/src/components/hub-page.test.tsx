@@ -105,8 +105,8 @@ describe('HubPage with tab groups (Apps hub)', () => {
     renderApps('/hub/smoke')
     const [groups, tabs] = screen.getAllByRole('tablist')
     expect(groups).toHaveAccessibleName('Apps sections')
-    expect(tabs).toHaveAccessibleName('Deploy views')
-    expect(screen.getByRole('tab', { name: 'Deploy' })).toHaveAttribute('aria-selected', 'true')
+    expect(tabs).toHaveAccessibleName('Code and deploys pages')
+    expect(screen.getByRole('tab', { name: 'Deploys' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByRole('tab', { name: 'Smoke checks' })).toHaveAttribute(
       'aria-selected',
       'true'
@@ -117,7 +117,7 @@ describe('HubPage with tab groups (Apps hub)', () => {
 
   it('opens a group on its first tab, and a tab of the group by path', () => {
     renderApps('/hub/smoke')
-    fireEvent.click(screen.getByRole('tab', { name: 'Watch' }))
+    fireEvent.click(screen.getByRole('tab', { name: 'Monitoring' }))
     expect(screen.getByTestId('where').textContent).toBe('/hub/fleet')
     expect(screen.getByText('fleet body')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('tab', { name: 'Health' }))
@@ -125,30 +125,36 @@ describe('HubPage with tab groups (Apps hub)', () => {
   })
 
   it('shows no second strip for a group of one, and names the panel by the group', () => {
-    renderApps('/hub')
+    renderApps('/hub/domains')
     expect(screen.getAllByRole('tablist')).toHaveLength(1)
-    expect(screen.getByRole('tab', { name: 'Apps' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'hub-group-hub-apps')
+    expect(screen.getByRole('tab', { name: 'Domains' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'hub-group-hub-domains')
   })
 
   describe('in the standalone Hub look', () => {
     beforeEach(() => document.documentElement.setAttribute('data-product', 'hub'))
     afterEach(() => document.documentElement.removeAttribute('data-product'))
 
-    it('leaves the tabs its top bar links out of the strip, and lands past them', () => {
+    it('leaves the groups to the top bar: one strip, the open group\u2019s pages', () => {
       renderApps('/hub/health')
-      expect(screen.queryByRole('tab', { name: 'Fleet' })).toBeNull()
-      fireEvent.click(screen.getByRole('tab', { name: 'Run' }))
-      // Shared deployments is in the top bar: Run opens on Capacity.
-      expect(screen.getByTestId('where').textContent).toBe('/hub/capacity')
-      fireEvent.click(screen.getByRole('tab', { name: 'People & access' }))
-      expect(screen.getByTestId('where').textContent).toBe('/hub/signin')
+      const strips = screen.getAllByRole('tablist')
+      expect(strips).toHaveLength(1)
+      expect(strips[0]).toHaveAccessibleName('Monitoring and security pages')
+      expect(screen.queryByRole('tab', { name: 'Monitoring' })).toBeNull()
+      // Every page of the group is in the strip, the one the bar opens on included.
+      expect(screen.getByRole('tab', { name: 'Fleet' })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 1, name: 'Health' })).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('tab', { name: 'Issues' }))
+      expect(screen.getByTestId('where').textContent).toBe('/hub/issues')
     })
 
-    it('names the panel by its group on a top-bar tab', () => {
-      renderApps('/hub/fleet')
-      expect(screen.getByRole('tab', { name: 'Watch' })).toHaveAttribute('aria-selected', 'true')
-      expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'hub-group-hub-watch')
+    it('shows no strip for a group of one, and names the panel by the page heading', () => {
+      renderApps('/hub/domains')
+      expect(screen.queryByRole('tablist')).toBeNull()
+      expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'hub-heading-hub')
+      expect(
+        screen.getByRole('heading', { level: 1, name: 'Domains & certificates' })
+      ).toBeInTheDocument()
     })
   })
 })

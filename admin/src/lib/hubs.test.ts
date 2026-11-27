@@ -9,6 +9,7 @@ import {
   HUB_REDIRECTS,
   HUBS,
   hubForPath,
+  hubSearchPages,
   hubTabGroup,
   isPathDisabled
 } from './hubs'
@@ -22,51 +23,103 @@ describe('hub registry', () => {
     expect(hubForPath('/activity/42')).toBeNull()
   })
 
-  it('groups the Apps hub tabs into seven sections, every tab in exactly one', () => {
-    // 36 tabs in one strip did not read (design pass 2): the strip shows the groups, then the
-    // open group's tabs. The tab list itself follows the group order.
+  it('groups the Apps hub pages into homes named for what they hold, every page in exactly one', () => {
+    // The homes share their names with the provider groups (api providers/categories.ts), so an
+    // outside account or resource shows beside the Hub's own things of the same kind.
     expect(APPS_HUB.groups?.map((g) => [g.label, g.tabs])).toEqual([
-      ['Apps', ['']],
-      ['Deploy', ['releases', 'changes', 'smoke', 'extensions', 'config']],
-      ['Run', ['shared', 'capacity', 'scale', 'hosts', 'drivers', 'connections', 'shared-infra']],
-      ['Data', ['databases', 'data', 'storage']],
-      [
-        'Watch',
-        ['fleet', 'health', 'usage', 'dependencies', 'issues', 'incidents', 'on-call', 'status']
-      ],
-      ['People & access', ['people', 'signin', 'access', 'security', 'secrets', 'audit']],
-      ['Build', ['targets', 'templates', 'lifecycle', 'costs', 'ask']]
+      ['Apps', ['', 'usage', 'dependencies', 'services', 'templates', 'targets', 'lifecycle']],
+      ['Deploys', ['releases', 'changes', 'smoke', 'extensions', 'config', 'code']],
+      ['Hosting', ['hosts', 'drivers', 'shared', 'capacity', 'scale', 'storage', 'cloud']],
+      ['Databases', ['databases', 'data']],
+      ['Domains', ['domains']],
+      ['Messaging', ['messaging', 'on-call']],
+      ['Monitoring', ['fleet', 'health', 'issues', 'incidents', 'status', 'security', 'ask']],
+      ['Costs', ['costs']],
+      ['Access', ['people', 'signin', 'access', 'secrets', 'connections', 'audit']]
     ])
     const grouped = APPS_HUB.groups?.flatMap((g) => g.tabs) ?? []
     expect(grouped).toEqual(APPS_HUB.tabs.map((t) => t.path))
     expect(new Set(grouped).size).toBe(grouped.length)
-    expect(hubTabGroup(APPS_HUB, 'smoke')?.label).toBe('Deploy')
+    // No home holds more than seven pages: one strip always reads.
+    expect(Math.max(...(APPS_HUB.groups ?? []).map((g) => g.tabs.length))).toBeLessThanOrEqual(7)
+    expect(hubTabGroup(APPS_HUB, 'smoke')?.label).toBe('Deploys')
+    expect(hubTabGroup(APPS_HUB, 'domains')?.title).toBe('Domains, DNS and certificates')
     expect(hubTabGroup(APPS_HUB, 'nope')).toBeNull()
-    // The tabs the standalone Hub's top bar also links.
-    expect(APPS_HUB.tabs.filter((t) => t.topBar).map((t) => t.path)).toEqual([
-      'shared',
-      'fleet',
-      'people'
-    ])
     // Every other hub keeps its one strip.
     expect(HUBS.filter((h) => h.groups).map((h) => h.base)).toEqual(['/hub'])
-    expect(hubForPath('/hub/access')?.tab.label).toBe('Access')
-    expect(hubForPath('/hub/security')?.tab.label).toBe('Security')
-    expect(hubForPath('/hub/signin')?.tab.label).toBe('Sign-in')
-    expect(hubForPath('/hub/releases')?.tab.label).toBe('Releases')
-    expect(hubForPath('/hub/config')?.tab.label).toBe('Config')
-    expect(hubForPath('/hub/secrets')?.tab.label).toBe('Secrets')
-    expect(hubForPath('/hub/fleet')?.tab.label).toBe('Fleet')
-    expect(hubForPath('/hub/audit')?.tab.label).toBe('Audit')
-    expect(hubForPath('/hub/health')?.tab.label).toBe('Health')
-    expect(hubForPath('/hub/ask')?.tab.label).toBe('Ask the Hub')
-    expect(hubForPath('/hub/on-call')?.tab.label).toBe('On-call')
-    expect(hubForPath('/hub/people')?.tab.label).toBe('People')
-    expect(hubForPath('/hub/targets')?.tab.label).toBe('Targets')
-    expect(hubForPath('/hub/shared')?.tab.label).toBe('Shared deployments')
-    expect(hubForPath('/hub/capacity')?.tab.label).toBe('Capacity')
-    expect(hubForPath('/hub/scale')?.tab.label).toBe('Scaling')
-    expect(hubForPath('/hub/data')?.tab.label).toBe('Backups & data')
+    // Every page is described and searchable by more than its own name.
+    for (const t of APPS_HUB.tabs) {
+      expect(t.hint, t.path).toBeTruthy()
+      expect(t.keywords, t.path).toBeTruthy()
+    }
+  })
+
+  it('never moved a Hub page off its path: old links and ui_permissions keys still hold', () => {
+    // Every path the Hub answered on before the 2026-11-27 navigation redesign.
+    const before = [
+      '',
+      'releases',
+      'changes',
+      'smoke',
+      'extensions',
+      'config',
+      'shared',
+      'capacity',
+      'scale',
+      'hosts',
+      'drivers',
+      'connections',
+      'databases',
+      'data',
+      'storage',
+      'fleet',
+      'health',
+      'usage',
+      'dependencies',
+      'issues',
+      'incidents',
+      'on-call',
+      'status',
+      'people',
+      'signin',
+      'access',
+      'security',
+      'secrets',
+      'audit',
+      'targets',
+      'templates',
+      'lifecycle',
+      'costs',
+      'ask'
+    ]
+    for (const p of before) {
+      const path = p ? `/hub/${p}` : '/hub'
+      expect(hubForPath(path)?.hub, path).toBe(APPS_HUB)
+      // Its own path is its permission key: a role that hid it still hides it.
+      expect(isPathDisabled(path, new Set([path])), path).toBe(true)
+    }
+    // Shared infra merged into Outside accounts: the old path redirects there.
+    const map = Object.fromEntries(HUB_REDIRECTS.map((r) => [r.from, r.to]))
+    expect(map['/hub/shared-infra']).toBe('/hub/connections')
+    expect(HUB_PATHS.has('/hub/shared-infra')).toBe(false)
+  })
+
+  it('finds Hub pages by what they hold, not only by their name', () => {
+    const pages = hubSearchPages(APPS_HUB)
+    const find = (q: string) =>
+      pages.filter((p) => `${p.label} ${p.keywords}`.toLowerCase().includes(q)).map((p) => p.path)
+    expect(find('dns')).toContain('/hub/domains')
+    expect(find('certificate')).toContain('/hub/domains')
+    expect(find('postgres')).toContain('/hub/databases')
+    expect(find('slack')).toContain('/hub/messaging')
+    expect(find('github')).toContain('/hub/code')
+    expect(find('auth0')).toContain('/hub/signin')
+    expect(find('sentry')).toContain('/hub/security')
+    expect(find('budget')).toContain('/hub/costs')
+    expect(find('aws')).toContain('/hub/cloud')
+    expect(pages.find((p) => p.path === '/hub/domains')?.label).toBe(
+      'Domains & certificates · Domains, DNS and certificates'
+    )
   })
 
   it('has unique tab paths across every hub', () => {

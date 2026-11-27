@@ -37,16 +37,19 @@ export function HubPage({
     [hub.base]
   )
   const tabLabel = match?.hub === hub ? match.tab.label : null
+  // The home the tab is in: its group's full name ("Domains, DNS and certificates"), else the hub.
+  const openGroup = match?.hub === hub && hub.groups ? hubTabGroup(hub, match.tab.path) : null
+  const home = openGroup ? (openGroup.title ?? openGroup.label) : hub.title
 
   // Name the tab in the browser tab and history ("Tuning · Database — <app>").
   useEffect(() => {
     if (!tabLabel) return
     const app = document.title.split(' — ').pop() ?? document.title
-    document.title = `${tabLabel} · ${hub.title} — ${app}`
+    document.title = `${tabLabel === home ? tabLabel : `${tabLabel} · ${home}`} — ${app}`
     return () => {
       document.title = app
     }
-  }, [tabLabel, hub.title])
+  }, [tabLabel, home])
 
   if (!match || match.hub !== hub) return <Navigate to={hub.base} replace />
 
@@ -55,15 +58,20 @@ export function HubPage({
   // its own hint, and every regular install, keeps the hub's title and hint.
   const tabHeader = hubLook && !!active.hint
   const title = tabHeader ? active.label : hub.title
-  const hint = tabHeader ? active.hint : hub.hint
+  // Outside the Hub look the hub keeps its title, and the open tab still says what it is for.
+  const hint = active.hint ?? hub.hint
   const panelId = `hub-panel${hub.base.replace(/\//g, '-')}`
   // With groups the open tab is named by the second strip, or by its group when that strip does
-  // not show it (a group of one, or a tab the Hub look leaves to its top bar).
+  // not show it (a group of one). In the Hub look the top bar names the group, so a group of one
+  // has no strip at all and the panel is named by the page heading.
   const group = hub.groups ? hubTabGroup(hub, active.path) : null
-  const labelledBy =
-    group && !groupStripTabs(hub, group, hubLook).includes(active)
-      ? groupDomId(hub, group.key)
-      : tabDomId(active.path)
+  const inStrip = !group || groupStripTabs(hub, group).includes(active)
+  const headingId = `hub-heading${hub.base.replace(/\//g, '-')}`
+  const labelledBy = inStrip
+    ? tabDomId(active.path)
+    : hubLook
+      ? headingId
+      : groupDomId(hub, (group as HubTabGroup).key)
   const Body = components[active.path]
   const Icon = hub.icon
 
@@ -76,7 +84,10 @@ export function HubPage({
             <Icon className='h-4.5 w-4.5 text-nvr-navy dark:text-nvr-cyan' aria-hidden />
           </div>
           <div className='min-w-0'>
-            <h1 className='m-0 truncate text-base font-semibold text-slate-900 dark:text-foreground'>
+            <h1
+              id={headingId}
+              className='m-0 truncate text-base font-semibold text-slate-900 dark:text-foreground'
+            >
               {title}
             </h1>
             <p
@@ -123,17 +134,18 @@ export function HubPage({
 const groupDomId = (hub: HubDef, key: string) => `hub-group${hub.base.replace(/\//g, '-')}-${key}`
 
 /** A group's tabs as its strip shows them: one tab alone shows no strip (empty list). */
-function groupStripTabs(hub: HubDef, group: HubTabGroup, hubLook: boolean): HubTabDef[] {
+function groupStripTabs(hub: HubDef, group: HubTabGroup): HubTabDef[] {
   const tabs = group.tabs
     .map((p) => hub.tabs.find((t) => t.path === p))
-    .filter((t): t is HubTabDef => !!t && !(hubLook && t.topBar))
+    .filter((t): t is HubTabDef => !!t)
   return tabs.length > 1 ? tabs : []
 }
 
 /**
  * A hub with groups (only the Apps hub): the groups in one strip, the open group's tabs in a
  * quieter strip under it. Choosing a group opens its first tab. A group of one tab shows no
- * second strip. In the standalone Hub look a tab its top bar also links (`topBar`) is left out.
+ * second strip. In the standalone Hub look the top bar already shows the groups, so only the
+ * open group's tabs show here: one level in the bar, one level on the page, never three.
  */
 function GroupedTabStrips({
   hub,
@@ -149,15 +161,32 @@ function GroupedTabStrips({
   const navigate = useNavigate()
   const groups = hub.groups ?? []
   const open = hubTabGroup(hub, active.path) ?? groups[0]
-  const openTabs = groupStripTabs(hub, open, hubLook)
+  const openTabs = groupStripTabs(hub, open)
   const groupId = useCallback((key: string) => groupDomId(hub, key), [hub])
   const tabDomId = useCallback(
     (path: string) => `hub-tab${hub.base.replace(/\//g, '-')}-${path || 'index'}`,
     [hub.base]
   )
-  /** The tab a group opens on: its first one this look shows. */
-  const landing = (g: HubTabGroup) =>
-    g.tabs.map((p) => hub.tabs.find((t) => t.path === p)).find((t) => t && !(hubLook && t.topBar))
+  /** The tab a group opens on: its first one. */
+  const landing = (g: HubTabGroup) => hub.tabs.find((t) => t.path === g.tabs[0])
+  const pick = (path: string) => {
+    const tab = hub.tabs.find((t) => t.path === path)
+    if (tab) navigate(hubTabPath(hub, tab))
+  }
+  if (hubLook)
+    return openTabs.length > 0 ? (
+      <ScrollTabStrip
+        className='mt-1.5'
+        tabs={openTabs.map((t) => ({ id: t.path, label: t.label }))}
+        active={active.path}
+        onSelect={pick}
+        ariaLabel={`${open.title ?? open.label} pages`}
+        tabDomId={tabDomId}
+        panelId={panelId}
+      />
+    ) : (
+      <div className='h-3' />
+    )
   return (
     <>
       <ScrollTabStrip
@@ -179,11 +208,8 @@ function GroupedTabStrips({
             variant='sub'
             tabs={openTabs.map((t) => ({ id: t.path, label: t.label }))}
             active={active.path}
-            onSelect={(path) => {
-              const tab = hub.tabs.find((t) => t.path === path)
-              if (tab) navigate(hubTabPath(hub, tab))
-            }}
-            ariaLabel={`${open.label} views`}
+            onSelect={pick}
+            ariaLabel={`${open.title ?? open.label} pages`}
             tabDomId={tabDomId}
             panelId={panelId}
           />
