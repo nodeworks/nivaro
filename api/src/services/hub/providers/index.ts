@@ -10,6 +10,7 @@ import { gitlabAdapter } from './gitlab/index.js'
 import { neonAdapter } from './neon/index.js'
 import { openaiAdapter } from './openai/index.js'
 import { pagerdutyAdapter } from './pagerduty/index.js'
+import { portainerAdapter } from './portainer/index.js'
 import { redisCloudAdapter } from './redis-cloud/index.js'
 import { getProvider, registerProvider } from './registry.js'
 import { sendgridAdapter } from './sendgrid/index.js'
@@ -49,6 +50,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   openaiAdapter,
   gitlabAdapter,
   pagerdutyAdapter,
+  portainerAdapter,
   vercelAdapter
 ]
 

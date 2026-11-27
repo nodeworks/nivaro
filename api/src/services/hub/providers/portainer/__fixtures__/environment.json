@@ -1,0 +1,24 @@
+{
+  "Id": 3,
+  "Name": "test-docker-host",
+  "Type": 4,
+  "URL": "https://portainer.test.example:9443",
+  "PublicURL": "docker1.test.example",
+  "GroupId": 1,
+  "Status": 1,
+  "EdgeKey": "test-secret-edge-key-0001",
+  "EdgeCheckinInterval": 5,
+  "TeamAccessPolicies": {
+    "7": { "RoleId": 4 },
+    "9": { "RoleId": 3 }
+  },
+  "UserAccessPolicies": {},
+  "Snapshots": [
+    {
+      "RunningContainerCount": 12,
+      "StoppedContainerCount": 1,
+      "UnhealthyContainerCount": 0,
+      "StackCount": 4
+    }
+  ]
+}
