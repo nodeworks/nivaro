@@ -1,6 +1,7 @@
 import { auth0Provider } from './auth0/index.js'
 import { awsProvider } from './aws/adapter.js'
 import { dockerhubAdapter } from './dockerhub/index.js'
+import { entraAdapter } from './entra/index.js'
 import { expoAdapter } from './expo/index.js'
 import { githubAdapter } from './github/index.js'
 import { neonAdapter } from './neon/index.js'
@@ -23,6 +24,7 @@ export const CORE_PROVIDERS: ProviderAdapter[] = [
   auth0Provider,
   awsProvider,
   dockerhubAdapter,
+  entraAdapter,
   expoAdapter,
   githubAdapter,
   sentryAdapter,

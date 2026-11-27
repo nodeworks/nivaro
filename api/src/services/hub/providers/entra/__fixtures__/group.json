@@ -1,0 +1,9 @@
+{
+  "id": "99999999-9999-4999-8999-999999999999",
+  "displayName": "Storefront admins",
+  "description": "People who administer the storefront",
+  "securityEnabled": true,
+  "mailEnabled": false,
+  "groupTypes": [],
+  "membershipRule": null
+}

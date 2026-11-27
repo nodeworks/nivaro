@@ -1,0 +1,19 @@
+{
+  "notFound": {
+    "error": {
+      "code": "Request_ResourceNotFound",
+      "message": "Resource does not exist or one of its queried reference-property objects are not present."
+    }
+  },
+  "forbidden": {
+    "error": {
+      "code": "Authorization_RequestDenied",
+      "message": "Insufficient privileges to complete the operation."
+    }
+  },
+  "throttled": { "error": { "code": "TooManyRequests", "message": "Too many requests." } },
+  "badClient": {
+    "error": "invalid_client",
+    "error_description": "AADSTS7000215: Invalid client secret provided. Trace ID: 00000000-0000-0000-0000-000000000000"
+  }
+}

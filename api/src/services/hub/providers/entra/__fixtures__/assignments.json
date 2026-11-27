@@ -1,0 +1,20 @@
+{
+  "value": [
+    {
+      "id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "appRoleId": "33333333-3333-4333-8333-333333333333",
+      "principalId": "99999999-9999-4999-8999-999999999999",
+      "principalType": "Group",
+      "principalDisplayName": "Storefront admins",
+      "resourceId": "88888888-8888-4888-8888-888888888888"
+    },
+    {
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "appRoleId": "00000000-0000-0000-0000-000000000000",
+      "principalId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "principalType": "User",
+      "principalDisplayName": "Test Person",
+      "resourceId": "88888888-8888-4888-8888-888888888888"
+    }
+  ]
+}
