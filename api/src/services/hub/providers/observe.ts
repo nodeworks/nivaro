@@ -5,6 +5,7 @@ import { hubModeEnabled } from '../mode.js'
 import { makeProviderContext } from './context.js'
 import { type HubActor, healResourceChanges, ResourceChangeError } from './engine/contract.js'
 import { ensureCoreProviders } from './index.js'
+import { hubNotify } from './notify-hook.js'
 import { findType, getProvider } from './registry.js'
 import {
   APP_CONNECTIONS,
@@ -311,12 +312,26 @@ async function observeRow(
   const now = new Date()
   if (seen === null) {
     await updateResource(row.id, { observed: null, drift: true, observed_at: now })
+    if (!row.drift)
+      hubNotify('drift.found', {
+        appId: row.app_id,
+        envId: row.environment_id,
+        detail: `${row.name ?? row.type} is gone at the provider`,
+        link: row.app_id ? `/hub?app=${row.app_id}` : '/hub/connections'
+      })
     return { resourceId: row.id, outcome: 'gone', drift: true, fields: [] }
   }
   const stored = scrubObserved(t.type, seen)
   const fields = driftFields(t.type, row.desired, stored, resolve)
   const drift = fields.length > 0
   await updateResource(row.id, { observed: stored, drift, observed_at: now })
+  if (drift && !row.drift)
+    hubNotify('drift.found', {
+      appId: row.app_id,
+      envId: row.environment_id,
+      detail: `${row.name ?? row.type}: ${fields.slice(0, 5).join(', ')}`,
+      link: row.app_id ? `/hub?app=${row.app_id}` : '/hub/connections'
+    })
   return { resourceId: row.id, outcome: 'ok', drift, fields }
 }
 

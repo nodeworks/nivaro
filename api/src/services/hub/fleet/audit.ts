@@ -164,7 +164,9 @@ const TABLE_NAMES: Record<string, string> = {
   nivaro_hub_deploys: 'Deploy',
   nivaro_hub_resources: 'Resource',
   nivaro_hub_resource_changes: 'Resource change',
-  nivaro_hub_connections: 'Provider connection'
+  nivaro_hub_connections: 'Provider connection',
+  nivaro_hub_resource_bindings: 'Resource binding',
+  nivaro_hub_notify_routes: 'Notify route'
 }
 
 const VERB: Record<string, string> = { create: 'added', update: 'changed', delete: 'deleted' }
@@ -195,7 +197,11 @@ export function categoryOf(
   )
     return 'keys'
   if (action.startsWith('hub-shared-upgrade') || action === 'hub-shared-observed') return 'upgrade'
-  if (action.startsWith('hub-resource') || collection === 'nivaro_hub_resource_changes')
+  if (
+    action.startsWith('hub-resource') ||
+    action.startsWith('hub-notify-route') ||
+    collection === 'nivaro_hub_resource_changes'
+  )
     return 'resources'
   if (action.startsWith('hub-create') || action === 'hub-name-ready') return 'creation'
   if (action.startsWith('hub-signin') || collection === 'nivaro_hub_oidc_clients') return 'signin'

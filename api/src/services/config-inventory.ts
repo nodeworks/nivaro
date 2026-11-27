@@ -335,6 +335,9 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_hub_app_connections', //     allowed connections per app, managed resources, changes
   'nivaro_hub_resources',
   'nivaro_hub_resource_changes',
+  'nivaro_hub_resource_outputs', //    Hub providers (584): sealed outputs, bindings, notify routes
+  'nivaro_hub_resource_bindings',
+  'nivaro_hub_notify_routes',
   'nivaro_hub_regions', //             Hub placement (580): regions, host membership, cost
   'nivaro_hub_region_drivers', //      centres, peer Hubs (sealed key)
   'nivaro_hub_app_cost_centers',

@@ -450,6 +450,10 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       'nivaro_hub_app_connections',
       'nivaro_hub_resources',
       'nivaro_hub_resource_changes',
+      // Hub providers, Wave 2 (584): sealed resource outputs, their bindings, notify routes
+      'nivaro_hub_resource_outputs',
+      'nivaro_hub_resource_bindings',
+      'nivaro_hub_notify_routes',
       // Hub placement (580): regions + host membership, cost centres, peer Hubs (sealed key)
       'nivaro_hub_regions',
       'nivaro_hub_region_drivers',
@@ -540,6 +544,7 @@ export const CORE_KEEPS: readonly EnvKeepEntry[] = [
       ...(table === 'nivaro_hub_targets' ? { secret_columns: ['secret'] } : {}),
       ...(table === 'nivaro_hub_status_pages' ? { secret_columns: ['token_hash'] } : {}),
       ...(table === 'nivaro_hub_connections' ? { secret_columns: ['secret'] } : {}),
+      ...(table === 'nivaro_hub_resource_outputs' ? { secret_columns: ['value'] } : {}),
       ...(table === 'nivaro_hub_shared_deployments'
         ? { secret_columns: ['token', 'prev_token', 'secrets'] }
         : {})

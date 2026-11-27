@@ -211,5 +211,44 @@ export const PROVIDER_ROUTES: HubRoute[] = [
     'write',
     'Decline an owner’s pending change',
     { body: { reason: s('Why (shown to the owner)', { required: true }) } }
-  )
+  ),
+  // Task 13 (Wave 2 framework): outputs, bindings and notify routes (routes/hub-provider-outputs.ts).
+  r('GET', '/resources/:id/bindings', 'owner', 'read', 'A resource’s outputs and where they go', {
+    notes:
+      'Outputs answer the key, a fingerprint and when it changed — never a value. A once-only output whose copy is gone is `lost` (rotate it).'
+  }),
+  r('PUT', '/resources/:id/bindings', 'owner', 'write', 'Bind a resource’s outputs to settings', {
+    sensitive: true,
+    notes:
+      'Replaces the list, then pushes the stored values in the background. A stack target only saves the stack settings (the stack then needs Apply now); an app setting goes through the hub link and must be on its allow-list (SETTING_NOT_ALLOWED). A secret output never binds to a plain setting (SECRET_TO_PLAIN).',
+    body: {
+      bindings: list(
+        'object',
+        'Each {output_key, environment_id, target stack_setting|stack_secret|app_setting, target_key}'
+      )
+    }
+  }),
+  r('GET', '/notify-routes', 'owner', 'read', 'Notify routes (admins: all; owners: their apps’)'),
+  r('POST', '/notify-routes', 'owner', 'write', 'Send Hub events through a resource', {
+    body: {
+      name: s('A label'),
+      scope: s('hub (every app, admins) or app', { required: true, enum: ['hub', 'app'] }),
+      app_id: n('The app (scope app)'),
+      events: list('string', 'Event names (deploy.failed, incident.opened …)'),
+      resource_id: n('The sending resource (Slack channel, Teams webhook …)', { required: true }),
+      enabled: { type: 'boolean', description: 'Default true' }
+    }
+  }),
+  r('PATCH', '/notify-routes/:id', 'owner', 'write', 'Change a notify route', {
+    body: {
+      name: s('A label'),
+      events: list('string', 'Event names'),
+      resource_id: n('The sending resource'),
+      enabled: { type: 'boolean', description: 'On or off' }
+    }
+  }),
+  r('DELETE', '/notify-routes/:id', 'owner', 'write', 'Delete a notify route'),
+  r('POST', '/notify-routes/:id/test', 'owner', 'write', 'Send one test message through a route', {
+    notes: 'Waits for the provider (at most 10 s) and answers ok or the scrubbed error.'
+  })
 ]

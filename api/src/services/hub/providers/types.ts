@@ -12,6 +12,8 @@
  *  - Failures are thrown as `ProviderError` (code + message + retryable), never a bare Error.
  */
 
+import type { HubResourceRow } from './store.js'
+
 // ── Small enums ──
 
 /** What a planned operation risks. The engine maps each to a gate (see the spec). */
@@ -209,6 +211,16 @@ export interface ResourceTypeSpec {
   risk(op: PlannedOp, desired: DesiredResource | null): RiskFlag[]
   /** `monthly` = the resource bills while it exists above a small free/cheap class. */
   costClass?(desired: DesiredResource): 'none' | 'monthly'
+  /**
+   * Task 13: values the provider hands out for this resource (a DSN, an API key, a URL) that the
+   * Hub seals and pushes into bound settings. Never part of `fields`, `Observed` or a plan.
+   */
+  outputs?: OutputSpec[]
+  /**
+   * Task 13: resources of this type send messages (a Slack channel, a Teams webhook): notify
+   * routes may name them, and `adapter.notify` is called with them. Other types never send.
+   */
+  sends?: boolean
 }
 
 // ── Values that travel between the engine and adapters ──
@@ -332,6 +344,12 @@ export interface OpResult {
   answer?: Record<string, unknown>
   error?: OpError
   snapshot?: SnapshotRef
+  /**
+   * Task 13: output values this op produced, by OutputSpec key (undeclared keys are dropped). The
+   * engine seals each at once and strips them from the result: they never reach `observed`, the
+   * step, the audit row or a log.
+   */
+  outputs?: Record<string, string>
 }
 
 export interface ListPage {
@@ -384,6 +402,59 @@ export interface ProviderAdapter {
     type: string,
     desired: DesiredResource
   ): Promise<Observed | null>
+  /**
+   * Task 13: reads the outputs the provider shows again (a connection URL). The engine asks only
+   * for keys that are NOT `onceOnly`, and drops any `onceOnly` key an answer carries anyway.
+   */
+  readOutputs?(
+    ctx: ProviderContext,
+    type: string,
+    externalId: string
+  ): Promise<Record<string, string>>
+  /**
+   * Task 13: sends one message through this resource (a Slack channel, a Teams webhook, a
+   * PagerDuty service, a SendGrid sender). One call = one message; throws ProviderError (429 →
+   * retryable). The Hub calls it in the background, at most 10 s per send.
+   */
+  notify?(ctx: ProviderContext, resource: HubResourceRow, msg: OutboundMessage): Promise<OpResult>
+}
+
+// ── Outputs + notify (Task 13, Wave 2 framework) ──
+
+export interface OutputSpec {
+  /** `/^[a-z][a-z0-9_]{0,63}$/`, e.g. 'dsn', 'api_key', 'url'. */
+  key: string
+  label: string
+  /** Bound only to secret targets (a stack secret, an app credential), never a plain setting. */
+  secret: boolean
+  /**
+   * The provider shows it at create only (Stripe webhook secret, OpenAI service-account key,
+   * SendGrid key, GitLab deploy token): when the sealed copy is lost it can only be rotated,
+   * never re-read.
+   */
+  onceOnly?: boolean
+}
+
+/**
+ * The trigger field a type with `onceOnly` outputs declares to offer a rotation (kind 'boolean',
+ * `trigger: true`): an update with `{rotate_outputs: true}` plans the adapter's rotate op, whose
+ * result carries the new outputs. The engine clears it after the op like every trigger.
+ */
+export const ROTATE_OUTPUTS_FIELD = 'rotate_outputs'
+
+export type NotifySeverity = 'info' | 'warning' | 'critical'
+
+export interface OutboundMessage {
+  kind: 'text' | 'card'
+  title: string
+  body: string
+  /** An absolute link back into the Hub. */
+  link?: string
+  severity: NotifySeverity
+  /** Same key = the same item at the provider (PagerDuty incident, Jira issue). */
+  dedupKey?: string
+  /** With `dedupKey`: open a new item, update it or resolve it (default open). */
+  action?: 'open' | 'update' | 'resolve'
 }
 
 // ── Errors ──

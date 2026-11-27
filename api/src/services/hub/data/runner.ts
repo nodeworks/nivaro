@@ -1,4 +1,5 @@
 import { getApp } from '../../io-holder.js'
+import { hubNotify } from '../providers/notify-hook.js'
 import { errText } from './env-db.js'
 import { DATA_LOCK_RENEW_MS, type DataLock, defaultDataLock } from './lock.js'
 import {
@@ -160,6 +161,16 @@ async function execute(runId: number, initial: DataStep[], b: Begin, held: Map<n
       { data_run: runId, code: (err as { code?: unknown })?.code ?? null },
       'hub data run failed'
     )
+    void readRun(runId)
+      .then((r) => {
+        if (r && /backup/.test(r.kind))
+          hubNotify('backup.failed', {
+            envId: r.environment_id,
+            detail: r.kind.replace('_', ' '),
+            link: '/hub/data'
+          })
+      })
+      .catch(() => undefined)
   } finally {
     clearInterval(timer)
     if (b.cleanup) await b.cleanup(ctx, failed).catch(() => undefined)

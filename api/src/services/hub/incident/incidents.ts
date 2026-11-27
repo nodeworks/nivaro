@@ -2,6 +2,7 @@ import { insertReturningId } from '../../../db/dialect/ef.js'
 import { db } from '../../../db/index.js'
 import { plainBannerText } from '../../hub-link/status-banner.js'
 import { deliverHubNotice } from '../notify-events.js'
+import { hubNotify } from '../providers/notify-hook.js'
 import { FREEZES } from '../releases/freeze.js'
 import { type BannerCallDeps, type BannerState, pushBanner } from './banner.js'
 import { closeIncidentPages, openPage, type PageDeps, pagedUserIds, readPage } from './paging.js'
@@ -219,6 +220,14 @@ export async function openIncident(
   let inc = (await readIncident(id)) as Incident
   if (inc.banner_text) inc = await showBanner(inc, userId, deps)
   if (input.page) await pageFor(inc, deps)
+  hubNotify('incident.opened', {
+    appId: input.app_id,
+    envId: input.environment_id,
+    detail: input.title,
+    link: `/hub/incidents?incident=${id}`,
+    dedupKey: `incident:${id}`,
+    action: 'open'
+  })
   return (await readIncident(id)) as Incident
 }
 
@@ -420,6 +429,14 @@ export async function resolveIncident(
   await addEvent(id, 'resolved', note?.trim() ? note.trim().slice(0, 2000) : null, userId, now)
   await freezeOff(inc, userId, 'Deploy freeze lifted (incident resolved)', now)
   await closeIncidentPages(id, now)
+  hubNotify('incident.resolved', {
+    appId: inc.app_id,
+    envId: inc.environment_id,
+    detail: inc.title,
+    link: `/hub/incidents?incident=${id}`,
+    dedupKey: `incident:${id}`,
+    action: 'resolve'
+  })
   let after = (await readIncident(id)) as Incident
   if (Object.keys(after.banner_state).length) after = await hideBanner(after, userId, deps)
   // The people who were paged hear that it is over (not urgent).
