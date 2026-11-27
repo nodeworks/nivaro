@@ -187,7 +187,7 @@ async function makeConnection(name = 'Main', secrets: Record<string, string> = {
   const res = await inject('POST', '/connections', {
     provider: 'demo',
     name,
-    config: { org: 'acme' },
+    config: { org: 'zz-conn-org-7f3' },
     secrets
   })
   expect(res.statusCode).toBe(201)
@@ -277,7 +277,7 @@ describe('provider types', () => {
     ])
     expect(demo.types[0]).toMatchObject({ key: 'demo.thing', scope: 'app', reversible: true })
     expect(JSON.stringify(data)).not.toContain(SECRET)
-    expect(JSON.stringify(data)).not.toContain('acme')
+    expect(JSON.stringify(data)).not.toContain('zz-conn-org-7f3')
   })
 })
 
@@ -286,7 +286,7 @@ describe('connections', () => {
     const created = await inject('POST', '/connections', {
       provider: 'demo',
       name: 'Main',
-      config: { org: 'acme' },
+      config: { org: 'zz-conn-org-7f3' },
       secrets: { token: SECRET }
     })
     expect(created.statusCode).toBe(201)
@@ -389,7 +389,7 @@ describe('connections', () => {
       const ctx = makeProviderContext({
         adapter,
         connectionId: c.id,
-        config: { org: 'acme' },
+        config: { org: 'zz-conn-org-7f3' },
         secrets: await store.openConnectionSecrets({ id: c.id })
       })
       ctx.tokens.set('t', 'test-token-0001', new Date(Date.now() + 3_600_000))
@@ -399,7 +399,7 @@ describe('connections', () => {
       const ctx = makeProviderContext({
         adapter,
         connectionId: c.id,
-        config: { org: 'acme' },
+        config: { org: 'zz-conn-org-7f3' },
         secrets: await store.openConnectionSecrets({ id: c.id })
       })
       return ctx.tokens.get('t')
@@ -436,7 +436,7 @@ describe('connections', () => {
       makeProviderContext({
         adapter,
         connectionId: d.id,
-        config: { org: 'acme' },
+        config: { org: 'zz-conn-org-7f3' },
         secrets: { token: SECRET }
       })
     dctx().tokens.set('t', 'test-token-0002', new Date(Date.now() + 3_600_000))
