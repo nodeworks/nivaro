@@ -1,10 +1,87 @@
 {
-  "generated_at": "2026-11-27T11:04:10.438Z",
+  "generated_at": "2026-11-27T18:12:04.192Z",
   "releases": [
+    {
+      "version": "0.3.219",
+      "tag": "v0.3.219",
+      "date": "2026-11-27T13:11:44-05:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "an app owner is offered only pages an owner can use",
+              "hash": "bec1f2135"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "Releases, Incidents, On-call and Costs open on one app",
+              "hash": "b2cdfede8"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "navigation by what things are, one map everywhere",
+              "hash": "9b476395b"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "outside accounts and resources live in the home of their kind",
+              "hash": "c970920f0"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "one vocabulary for provider groups and Hub homes",
+              "hash": "e517a6d61"
+            },
+            {
+              "section": "Added",
+              "scope": "hub",
+              "text": "group the provider picker by what providers do",
+              "hash": "8b7d2ec25"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync docs for the Hub navigation redesign",
+              "hash": "fd32ae4a8"
+            },
+            {
+              "section": "Documentation",
+              "scope": "hub",
+              "text": "the new Hub map and where outside providers live",
+              "hash": "cbef3e71b"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "hub",
+              "text": "correct the page count in the hub registry note",
+              "hash": "bd33d77b7"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.3.218",
       "tag": "v0.3.218",
-      "date": "2026-11-27T06:03:48-05:00",
+      "date": "2026-11-27T06:04:10-05:00",
       "sections": [
         {
           "label": "Added",
